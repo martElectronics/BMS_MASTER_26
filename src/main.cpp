@@ -136,12 +136,26 @@ static bool          prechargeOk      = false;
 static unsigned long tPrechargeStart  = 0;
 
 // ============================================================================
+//  TELEMETRÍA CAN (resumen IDs 10-14; ver docs/Mapa_CAN.txt)
+//  El CAN_BUS se construye en setup() (su ctor hace HAL FDCAN init y
+//  debe correr tras el SystemClock del core → NO como global static).
+// ============================================================================
+static CAN_BUS*      gCan             = nullptr;
+static uint16_t      canNumCommFails  = 0;   ///< nº lecturas BQ con COMM_ERROR
+static uint16_t      canNumCrcFails   = 0;   ///< nº lecturas BQ con CRC_ERROR
+static uint16_t      canNumTriesReset = 0;   ///< nº reInit() por comms
+static unsigned long faultEpisodeStart= 0;   ///< ms inicio episodio fallo (0=sin)
+static uint16_t      canLastFailMs    = 0;   ///< duración (ms) episodio actual/último
+static uint16_t      canMaxFailMs     = 0;   ///< máx duración de episodio vista
+
+// ============================================================================
 //  PROTOTIPOS
 // ============================================================================
 void updateVio();
 void sampleAndEvaluate();
 void updateBmsOk();
 void updatePrecharge();
+void updateCanTx();
 void handleSerial();
 void printStatus();
 
@@ -190,6 +204,22 @@ void setup()
         }
     }
     Serial.println(F("[OK] BQ79606 listo."));
+
+    // ── CAN: FDCAN1 PA11/PA12, 500 kbps, perfil BMS (nodeID=3). El ctor
+    //    hace el init de FDCAN (HAL) → debe correr AQUI, no en global. ──
+    static CAN_BUS canBus(HardwareType::Transciever, 500, 3);
+    gCan = &canBus;
+    if (gCan->SetupState() != 0) {
+        Serial.println(F("[CAN] FDCAN init FALLO."));
+    } else {
+        gCan->setPacketTimer(10, 800);   // periodos de docs/Mapa_CAN.txt
+        gCan->setPacketTimer(11, 799);
+        gCan->setPacketTimer(12, 799);
+        gCan->setPacketTimer(13, 798);
+        gCan->setPacketTimer(14, 200);
+        Serial.println(F("[CAN] FDCAN listo (500k, IDs 10-14)."));
+    }
+
     Serial.println(F("Cmd: v t a s b x q f c i r"));
 }
 
@@ -205,6 +235,7 @@ void loop()
     sampleAndEvaluate();  // V/T en cadencia + debounce de fallos
     updateBmsOk();         // BMS_OK no-latching (auto-rearma)
     updatePrecharge();
+    updateCanTx();         // telemetría CAN IDs 10-14 (throttled por timer)
     handleSerial();
 
     static unsigned long tPrint = 0;
@@ -235,6 +266,8 @@ void sampleAndEvaluate()
     if ((now - tV) >= SAMPLE_V_MS && bms.isVoltageReadingReliable()) {
         tV = now;
         lastResV = bms.readVoltages();
+        if      (lastResV == BQResult::COMM_ERROR) canNumCommFails++;
+        else if (lastResV == BQResult::CRC_ERROR)  canNumCrcFails++;
         if (lastResV == BQResult::OK) {
             fV.cond = (bms.getMinVoltage() < CELL_UV_V) ||
                       (bms.getMaxVoltage() > CELL_OV_V);
@@ -245,6 +278,8 @@ void sampleAndEvaluate()
     if ((now - tT) >= SAMPLE_T_MS) {
         tT = now;
         lastResT = bms.readTemperatures();
+        if      (lastResT == BQResult::COMM_ERROR) canNumCommFails++;
+        else if (lastResT == BQResult::CRC_ERROR)  canNumCrcFails++;
         if (lastResT == BQResult::OK) {
             fT.cond   = (bms.getMinTemp() < CELL_UT_C) ||
                         (bms.getMaxTemp() > CELL_OT_C);
@@ -260,6 +295,7 @@ void sampleAndEvaluate()
             commLost  = true;
             tCommLost = now;
             bms.reInit();              // intento de recuperación
+            canNumTriesReset++;
         }
         fComm.cond = ((now - tCommLost) >= FAULT_COMM_MS);
     } else {
@@ -286,6 +322,16 @@ void updateBmsOk()
     // El balanceo NO debe correr con un fallo activo: el driver de seguridad
     // es prioritario sobre el balanceo (gap-analysis).
     if (bmsFault && bal.isEnabled()) bal.disable();
+
+    // Telemetría: duración del episodio de fallo (IDs 13/14).
+    if (bmsFault) {
+        if (faultEpisodeStart == 0) faultEpisodeStart = now;
+        unsigned long dur = now - faultEpisodeStart;
+        canLastFailMs = (dur > 65535UL) ? 65535 : (uint16_t)dur;
+        if (canLastFailMs > canMaxFailMs) canMaxFailMs = canLastFailMs;
+    } else {
+        faultEpisodeStart = 0;   // canLastFailMs se mantiene (último episodio)
+    }
 
     // Auto-rearma: cuando todo se despeja, BMS_OK vuelve a HIGH. El latch HW
     // mantiene el SDC abierto hasta el reset manual humano (EV6.1.6).
@@ -320,6 +366,64 @@ void updatePrecharge()
         prechargeOk      = false;
         digitalWrite(PIN_PRE_FAIL, LOW);
     }
+}
+
+// ============================================================================
+//  TELEMETRÍA CAN — resumen IDs 10-14 (docs/Mapa_CAN.txt)
+//  setPacket() encola; send() emite solo los que su setPacketTimer venció.
+//  Patrón validado en el BMS antiguo (setPacket+send cada loop, throttle
+//  por timer). Bits del ID 10 = fallo CONFIRMADO actual (no-latching;
+//  el latch del SDC es HW). Detalle por módulo (386-392) y SOC: TODO.
+// ============================================================================
+void updateCanTx()
+{
+    if (!gCan) return;
+
+    // ── ID 10 (0xA) — estado general (1 byte de flags) ──────────────────────
+    bool condNow = fV.cond || fT.cond || fNtc.cond || fComm.cond || !hall.isOK();
+    uint8_t st = 0;
+    if (bmsFault)                                  st |= (1 << 0); // B0 StsFail
+    // B1, B2: reservados (0)
+    if (condNow)                                   st |= (1 << 3); // B3 failCondition
+    if (fComm.confirmed(millis(), FAULT_COMM_MS))  st |= (1 << 4); // B4 COMM
+    if (fV.confirmed(millis(), FAULT_V_MS))        st |= (1 << 5); // B5 VOLT
+    if (!hall.isOK())                              st |= (1 << 6); // B6 AMP
+    if (bms.isOK())                                st |= (1 << 7); // B7 AUTOADDR_OK
+    gCan->setPacket((uint32_t)10, &st, 1);
+
+    // ── ID 11 (0xB) — MaxT(ºC), MaxV(mV), MinV(mV), MinT(ºC) UINT16×4 ───────
+    // T puede ser negativa: se envía el patrón int16 en el slot u16.
+    uint16_t d11[4] = {
+        (uint16_t)(int16_t)lroundf(bms.getMaxTemp()),
+        (uint16_t)lroundf(bms.getMaxVoltage() * 1000.0f),
+        (uint16_t)lroundf(bms.getMinVoltage() * 1000.0f),
+        (uint16_t)(int16_t)lroundf(bms.getMinTemp())
+    };
+    gCan->setPacket((uint32_t)11, d11, 4);
+
+    // ── ID 12 (0xC) — GEN_STATUS_VOLT, GEN_STATUS_TEMP UINT16×2 ────────────
+    // ⚠ PROVISIONAL: la tabla oficial de códigos NO está definida.
+    //   Asumido VOLT: 0=OK 1=UV 2=OV ; TEMP: 0=OK 1=UT 2=OT 3=NTC_open.
+    //   Confirmar con el equipo y ajustar.
+    uint16_t gsV = (bms.getMinVoltage() < CELL_UV_V) ? 1 :
+                   (bms.getMaxVoltage() > CELL_OV_V) ? 2 : 0;
+    uint16_t gsT = bms.hasOpenNtc()                  ? 3 :
+                   (bms.getMinTemp()    < CELL_UT_C) ? 1 :
+                   (bms.getMaxTemp()    > CELL_OT_C) ? 2 : 0;
+    uint16_t d12[2] = { gsV, gsT };
+    gCan->setPacket((uint32_t)12, d12, 2);
+
+    // ── ID 13 (0xD) — maxTotalFailTime(ms), numTriesResetComm UINT16×2 ─────
+    uint16_t d13[2] = { canMaxFailMs, canNumTriesReset };
+    gCan->setPacket((uint32_t)13, d13, 2);
+
+    // ── ID 14 (0xE) — lastFailTime(ms), numCommFails, numCrcFails,
+    //                  numTriesReset  UINT16×4 ─────────────────────────────
+    uint16_t d14[4] = { canLastFailMs, canNumCommFails,
+                        canNumCrcFails, canNumTriesReset };
+    gCan->setPacket((uint32_t)14, d14, 4);
+
+    gCan->send();   // emite solo los vencidos según setPacketTimer
 }
 
 // ============================================================================
