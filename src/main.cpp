@@ -46,6 +46,7 @@
 #define SOC_PACK_CAPACITY_AH   (4.0f * 1)
 #include "SocEstimator.h"
 #include "FanController.h"      // ventiladores: curva Tmax + feed-forward I
+#include <IWatchdog.h>          // watchdog HW independiente (STM32 IWDG/LSI)
 
 // ============================================================================
 //  PINES — STM32G474RE (NUCLEO-G474RE)
@@ -125,6 +126,12 @@ static constexpr int NUM_MODULES = TOTALBOARDS / 2;
 
 #define PRECHARGE_TIMEOUT_MS  5000UL
 
+// Watchdog HW independiente: si el loop() se cuelga y no se refresca,
+// el IWDG resetea el MCU → BMS_OK cae (fail-safe). 8 s: por encima
+// del peor caso normal incl. reInit() (que bloquea — ver §9.4 del doc;
+// bajar este valor exige hacer reInit no bloqueante).
+#define WDG_TIMEOUT_US        8000000UL
+
 // ============================================================================
 //  ESTADO DE FALLOS — debounce NO-latching (auto-rearma; el latch es HW)
 // ============================================================================
@@ -179,6 +186,10 @@ void setup()
 {
     Serial.begin(115200);
     delay(500);
+
+    // Si el último reset lo causó el watchdog, dejar traza (diagnóstico).
+    if (IWatchdog.isReset(true))
+        Serial.println(F("[WDG] *** Reset previo causado por el WATCHDOG ***"));
 
     // Estado seguro inicial: BMS_OK lo pone el driver (LOW hasta init OK).
     pinMode(PIN_MC_OK,   OUTPUT); digitalWrite(PIN_MC_OK,   HIGH); // micro vivo
@@ -248,6 +259,11 @@ void setup()
     }
 
     Serial.println(F("Cmd: v t a s b x q f c i r"));
+
+    // Arrancar el watchdog AL FINAL (tras el init/calibración acotados).
+    // Una vez iniciado NO se puede parar (es independiente por HW).
+    IWatchdog.begin(WDG_TIMEOUT_US);
+    Serial.printf("[WDG] IWDG armado (%lu ms)\n", WDG_TIMEOUT_US / 1000);
 }
 
 // ============================================================================
@@ -270,6 +286,11 @@ void loop()
 
     static unsigned long tPrint = 0;
     if (millis() - tPrint >= PRINT_MS) { tPrint = millis(); printStatus(); }
+
+    // Refrescar el watchdog SOLO si la iteración completa terminó: si el
+    // loop se cuelga en cualquier punto, el IWDG no se refresca → reset
+    // → BMS_OK LOW (fail-safe). No mover esto al principio del loop.
+    IWatchdog.reload();
 }
 
 // ============================================================================
