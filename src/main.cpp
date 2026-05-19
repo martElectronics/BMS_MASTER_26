@@ -45,6 +45,7 @@
 // ⚠ [AJUSTAR] Np a la topología real del pack. Debe ir ANTES del include.
 #define SOC_PACK_CAPACITY_AH   (4.0f * 1)
 #include "SocEstimator.h"
+#include "FanController.h"      // ventiladores: curva Tmax + feed-forward I
 
 // ============================================================================
 //  PINES — STM32G474RE (NUCLEO-G474RE)
@@ -68,7 +69,10 @@
 #define PIN_AMP_30A     PA_1   ///< Canal alta resolución (±30A)
 #define PIN_AMP_350A    PA_0   ///< Canal baja resolución (±350A)
 
-// Pendiente (sin lib aún): CAN PA12/PA11, PWM ventiladores PB4
+// PWM ventiladores (2/3 hilos vía driver, baja frecuencia)
+#define PIN_PWM         PB_4
+
+// Pendiente (sin lib aún): CAN PA12/PA11
 
 // ============================================================================
 //  OBJETOS
@@ -91,6 +95,8 @@ BalancingManager bal(bms, BAL_CFG);
 HallSensor hall(PIN_AMP_30A, PIN_AMP_350A);
 
 SocEstimator soc;   // SOC: coulomb counting + OCV (ver SocEstimator.h)
+
+FanController fan(PIN_PWM);   // ventiladores (ver FanController.h)
 
 // NUM_MODULES derivado del driver: 2 boards por módulo. Se auto-adapta a
 // TOTALBOARDS (20 banco / 24 pack completo).
@@ -191,6 +197,7 @@ void setup()
                   HALL_I_MAX_DISCHARGE, fabsf(HALL_I_MAX_CHARGE));
 
     hall.begin();   // autocalibración (~1 s, vehículo en reposo)
+    fan.begin();    // PWM ventiladores a 0 %
 
     Serial.println(F("Iniciando BQ79606..."));
     bool initOk = bms.begin();
@@ -255,6 +262,7 @@ void loop()
     sampleAndEvaluate();  // V/T en cadencia + debounce de fallos
     soc.update(hall.getCurrent(), bms.getMinVoltage(),
                bms.isVoltageReadingReliable());   // coulomb + OCV
+    fan.update(bms.getMaxTemp(), hall.getCurrent());  // curva + feed-forward
     updateBmsOk();         // BMS_OK no-latching (auto-rearma)
     updatePrecharge();
     updateCanTx();         // telemetría CAN IDs 10-14 (throttled por timer)
@@ -653,6 +661,7 @@ void printStatus()
                   hall.isOK() ? "OK" : "FALLO");
     Serial.printf("SOC: %u%% (%.1f)  [aprox: tabla OCV generica]\n",
                   soc.soc(), soc.socF());
+    Serial.printf("FAN: %u%% (%s)\n", fan.duty(), fan.isOn() ? "ON" : "off");
     Serial.printf("Fallos: V=%d T=%d NTC=%d COMM=%d HALL=%d\n",
                   fV.confirmed(millis(), FAULT_V_MS),
                   fT.confirmed(millis(), FAULT_T_MS),
