@@ -39,6 +39,7 @@
 #include <Arduino.h>
 #include "BalancingManager.h"   // arrastra BQ79606.h
 #include "HallSensor.h"
+#include "MART_CAN.h"           // CAN (FDCAN1 PA11/PA12). Protocolo: TODO (mapa CAN)
 
 // ============================================================================
 //  PINES — STM32G474RE (NUCLEO-G474RE)
