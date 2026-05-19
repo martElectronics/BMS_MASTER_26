@@ -4,8 +4,11 @@
  *
  * Reúne los componentes VALIDADOS EN HW (banco 20 ICs, 2026-05-19):
  *   · Driver BQ79606 (cadena daisy-chain UART)
- *   · BalancingManager (máquina de estados de balanceo)
  *   · HallSensor (amperímetro DHAB S/118, doble rango)
+ *
+ * El BALANCEO no forma parte de este firmware: se hace off-car con una
+ * herramienta aparte (no se balancea en el coche). Vive validado en el
+ * repo BQ_CLASS, no aquí. Por eso V siempre es fiable en este master.
  *
  * ── ARQUITECTURA DE SEGURIDAD (Formula Student EV5.8 / EV6) ──────────────────
  *   · El latch que abre el SDC es HARDWARE no programable (EV6.1.6). Por
@@ -26,9 +29,8 @@
  *   Este main deriva NUM_MODULES de TOTALBOARDS → se auto-adapta.
  *
  * ── COMANDOS SERIE ──────────────────────────────────────────────────────────
- *   v=voltajes  t=temps  a=amperimetro  s=status  b=toggle balanceo
- *   x=parar balanceo  q=diag balanceo  f=fallos  c=limpiar fallos BQ
- *   i=re-init BQ  r=restart MCU
+ *   v=voltajes  t=temps  a=amperimetro  s=status  f=fallos
+ *   c=limpiar fallos BQ  i=re-init BQ  r=restart MCU
  *
  * ── PENDIENTE ───────────────────────────────────────────────────────────────
  *   · CAN (lib propia) y PWM ventiladores: marcados TODO, sin lib aún.
@@ -37,7 +39,7 @@
  */
 
 #include <Arduino.h>
-#include "BalancingManager.h"   // arrastra BQ79606.h
+#include "BQ79606.h"            // driver de la cadena BQ
 #include "HallSensor.h"
 #include "MART_CAN.h"           // CAN (FDCAN1 PA11/PA12). Protocolo: TODO (mapa CAN)
 
@@ -89,9 +91,6 @@ static const BQConfig bqCfg = {
     .baudrate     = 125000
 };
 BQ79606 bms(bqCfg);
-
-static const BalConfig BAL_CFG;        // defaults = validados en HW
-BalancingManager bal(bms, BAL_CFG);
 
 HallSensor hall(PIN_AMP_30A, PIN_AMP_350A);
 
@@ -258,7 +257,7 @@ void setup()
         Serial.println(F("[CAN] FDCAN listo (500k, IDs 10-14)."));
     }
 
-    Serial.println(F("Cmd: v t a s b x q f c i r"));
+    Serial.println(F("Cmd: v t a s f c i r"));
 
     // Arrancar el watchdog AL FINAL (tras el init/calibración acotados).
     // Una vez iniciado NO se puede parar (es independiente por HW).
@@ -273,7 +272,6 @@ void loop()
 {
     updateVio();          // OE_TXS según VIO_3V3
     hall.update();        // amperímetro cada ciclo (máxima resolución)
-    bal.tick();           // máquina de estados de balanceo (no-op si IDLE)
 
     sampleAndEvaluate();  // V/T en cadencia + debounce de fallos
     soc.update(hall.getCurrent(), bms.getMinVoltage(),
@@ -311,9 +309,9 @@ void sampleAndEvaluate()
     static bool commLost = false;
     unsigned long now = millis();
 
-    // ── Voltaje: cada 500 ms. Solo si la lectura es fiable (durante el
-    //    balanceo HW el voltaje sagea → BalancingManager usa su snapshot
-    //    OCV; aquí no evaluamos V para no falsear). ──────────────────────────
+    // ── Voltaje: cada 500 ms (EV5.8). isVoltageReadingReliable() es
+    //    siempre true en este firmware (no balancea); se mantiene como
+    //    guarda defensiva. ────────────────────────────────────────────────
     if ((now - tV) >= SAMPLE_V_MS && bms.isVoltageReadingReliable()) {
         tV = now;
         lastResV = bms.readVoltages();
@@ -369,16 +367,6 @@ void updateBmsOk()
     bool faultHall = !hall.isOK();      // HallSensor ya debounced 500 ms
 
     bmsFault = faultV || faultT || faultNtc || faultComm || faultHall;
-
-    // Balanceo subordinado a seguridad Y a estado del SDC. Durante el
-    // balanceo HW la V REAL de celda no se vigila (solo el snapshot OCV,
-    // potencialmente rancio); por eso solo se balancea con el coche
-    // PARADO (SDC abierto). Con el TS energizado (SDC cerrado =
-    // conduciendo o cargando) o con fallo → parar. [ARQUITECTURA.md §9.2]
-    // ⚠ Balancear durante CARGA exigiría una señal "cargador presente"
-    //   (no definida en HW) → de momento NO se balancea con SDC cerrado.
-    if (bal.isEnabled() && (bmsFault || digitalRead(PIN_SDC_3V3) == HIGH))
-        bal.disable();
 
     // Telemetría: duración del episodio de fallo (IDs 13/14).
     if (bmsFault) {
@@ -603,40 +591,6 @@ void handleSerial()
         printStatus();
         break;
 
-    case 'b':   // toggle balanceo (bloqueado si fallo o SDC cerrado)
-        if (bal.isEnabled()) {
-            bal.disable();
-            Serial.println(F("BAL: desactivado."));
-        } else if (bmsFault) {
-            Serial.println(F("BAL: NO (fallo BMS activo)."));
-        } else if (digitalRead(PIN_SDC_3V3) == HIGH) {
-            Serial.println(F("BAL: NO (SDC cerrado / TS activo). Solo parado."));
-        } else {
-            bal.enable();
-        }
-        break;
-
-    case 'x':
-        bal.disable();
-        Serial.println(F("BAL: parado."));
-        break;
-
-    case 'q':
-        Serial.print(F("BAL estado="));
-        switch (bal.getState()) {
-            case BalState::IDLE:      Serial.print(F("IDLE"));      break;
-            case BalState::SETTLING:  Serial.print(F("SETTLING"));  break;
-            case BalState::MEASURING: Serial.print(F("MEASURING")); break;
-            case BalState::RUNNING:   Serial.print(F("RUNNING"));   break;
-        }
-        Serial.printf("  causa=%s", BalancingManager::reasonStr(bal.getLastReason()));
-        if (bal.getTripBoard() >= 0) {
-            Serial.printf("  B%d", bal.getTripBoard());
-            if (bal.getTripCell() >= 0) Serial.printf(" C%d", bal.getTripCell() + 1);
-        }
-        Serial.printf("  HW=%s\n", bms.isBalHwRunning() ? "ON" : "off");
-        break;
-
     case 'f': {
         for (int b = 0; b < TOTALBOARDS; b++) {
             BQFaultStatus fs;
@@ -680,9 +634,8 @@ void printStatus()
     Serial.printf("BMS_OK:   %s%s\n",
                   bmsFault ? "LOW (FALLO)" : "HIGH (OK)",
                   bmsFault ? "" : "  [latch SDC es HW]");
-    Serial.printf("V: min=%.3f max=%.3f d=%.1fmV%s\n",
-                  bms.getMinVoltage(), bms.getMaxVoltage(), bms.getVoltageDelta(),
-                  bms.isVoltageReadingReliable() ? "" : " [!OCV bal]");
+    Serial.printf("V: min=%.3f max=%.3f d=%.1fmV\n",
+                  bms.getMinVoltage(), bms.getMaxVoltage(), bms.getVoltageDelta());
     Serial.printf("T: min=%.1f max=%.1f  NTCopen=%d\n",
                   bms.getMinTemp(), bms.getMaxTemp(), bms.getOpenNtcCount());
     Serial.printf("I: %.2f A (%s)  Hall=%s\n",

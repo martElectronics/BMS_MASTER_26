@@ -12,8 +12,9 @@
 ## 1. Propósito
 
 Monitorizar el acumulador de tracción (TS) y gobernar la señal `BMS_OK`
-del Shutdown Circuit (SDC), además de balanceo de celdas, medida de
-corriente, estimación de SOC, refrigeración y telemetría CAN.
+del Shutdown Circuit (SDC): medida de corriente, estimación de SOC,
+refrigeración y telemetría CAN. **El balanceo NO forma parte de este
+firmware** — se hace off-car con una herramienta aparte.
 
 El acumulador: cadena daisy-chain de BQ79606A-Q1 (N ICs), agrupados en
 módulos de 2 boards (par: 6 celdas + 6 NTC; impar: 5 celdas + 3 NTC).
@@ -71,8 +72,9 @@ Un fallo solo baja `BMS_OK` si **persiste**:
 Implementado con `struct FaultTimer` (timestamp por condición). Un error
 que se corrige antes de su ventana **no** dispara `BMS_OK`.
 
-El balanceo está **subordinado** a `BMS_OK`: cualquier fallo confirmado
-hace `bal.disable()` (la seguridad del driver es prioritaria).
+El balanceo no forma parte de este firmware (se hace off-car); este
+master nunca activa los FETs → la V siempre es fiable (sin ventana
+ciega de tensión).
 
 ---
 
@@ -81,7 +83,6 @@ hace `bal.disable()` (la seguridad del driver es prioritaria).
 ```
 src/main.cpp            Orquestación (setup/loop) + lógica BMS_OK + CAN
 lib/BQ79606/            Driver de la cadena BQ (VALIDADO HW, banco 20 ICs)
-lib/BalancingManager/   Máquina de estados de balanceo (VALIDADO HW)
 lib/HallSensor/          Amperímetro DHAB S/118 (portado + corregido)
 lib/SocEstimator/        SOC: coulomb counting + OCV (header-only)
 lib/FanController/       Ventiladores: curva Tmax + feed-forward (header-only)
@@ -97,8 +98,7 @@ mantiene la cadena de fallo / `BMS_OK`.
 ```
 updateVio()           OE_TXS = VIO_3V3
 hall.update()         lee amperímetro (cada ciclo, máx resolución)
-bal.tick()            máquina de balanceo (no-op si IDLE)
-sampleAndEvaluate()   V@500ms (si fiable) + T@1000ms + NTC + comms → fija
+sampleAndEvaluate()   V@500ms + T@1000ms + NTC + comms → fija
                       las condiciones de fallo (FaultTimer.cond)
 soc.update()          coulomb counting + re-snap OCV en reposo
 fan.update()          curva sobre Tmax + feed-forward por I
@@ -110,9 +110,8 @@ handleSerial()        comandos de diagnóstico
 printStatus() @2s     volcado por serie
 ```
 
-Importante: durante el balanceo HW la tensión "sagea"; por eso
-`sampleAndEvaluate()` solo evalúa V si `bms.isVoltageReadingReliable()`
-(el BalancingManager usa su snapshot OCV). **Ver la limitación §9.2.**
+Nota: `isVoltageReadingReliable()` es siempre true en este firmware
+(no hay balanceo) — se mantiene como guarda defensiva.
 
 ---
 
@@ -124,10 +123,10 @@ control de balanceo HW. API usada: `begin/reInit`, `readVoltages/
 readTemperatures`, `getMin/MaxVoltage/Temp`, `hasOpenNtc`, `setBmsOk`,
 `isVoltageReadingReliable`, `getFaultStatus`, etc.
 
-### 6.2 BalancingManager — validado HW
-SM `IDLE→SETTLING→MEASURING→RUNNING`. Timer proporcional al delta,
-guardias T/V/NTC, política unificada de fallo de comms, validación de
-`BalConfig` (static_assert + runtime fail-safe). Subordinado a `BMS_OK`.
+### 6.2 Balanceo — FUERA DE ALCANCE
+El balanceo de celdas NO forma parte de este firmware: se hace
+off-car con una herramienta aparte. La implementación validada en HW
+vive en el repo BQ_CLASS (rama `refactor-opt-stm32`), no aquí.
 
 ### 6.3 HallSensor — DHAB S/118 doble rango
 Coulomb-source y watchdog (desconexión incl. 1 canal, congelado por
@@ -188,21 +187,15 @@ ser el nº exacto de ICs**: 20 banco / 24 pack), `SOC_PACK_CAPACITY_AH`,
 ## 9. Limitaciones y trabajo pendiente (LEER)
 
 ### 9.1 Nada validado en HW
-Las libs BQ79606 y BalancingManager sí (banco 20 ICs). El `main` nuevo
+La lib BQ79606 sí (banco 20 ICs). El `main` nuevo
 (BMS_OK, precarga, integración), HallSensor, SOC, fans y CAN: **solo
 compilan**. No es producción hasta validar en banco.
 
-### 9.2 V real durante el balanceo — MITIGADO (con caveat)
-Mientras el balanceo HW está activo, V no es fiable y la OV/UV de
-celda real no se evalúa (solo el snapshot OCV del BalancingManager).
-**Mitigación implementada (#2):** el balanceo solo se permite con el
-**SDC abierto** (coche PARADO); con el TS energizado (SDC cerrado =
-conduciendo o cargando) o con fallo → `bal.disable()`. Así la ventana
-ciega de V solo existe con el coche parado y en reposo (bajo riesgo;
-el latch HW + las guardias del BalancingManager siguen de backstop).
-**Caveat:** esto también impide balancear durante CARGA (cuando es
-deseable). Habilitarlo exigiría una señal "cargador presente" (no
-definida en HW) para distinguir carga de conducción → trabajo futuro.
+### 9.2 V real durante el balanceo — N/A (resuelto por diseño)
+Este firmware **no balancea** (el balanceo se hace off-car con otra
+herramienta). Por tanto los FETs de balanceo nunca se activan desde
+aquí y la tensión de celda es **siempre fiable**: la OV/UV se evalúa
+de forma continua sin ventana ciega. El riesgo original desaparece.
 
 ### 9.3 Sin watchdog independiente (RIESGO ALTO)
 Si el `loop()` se cuelga, `BMS_OK` mantiene su último estado (HIGH si
@@ -242,6 +235,5 @@ Ocupación actual: RAM ~4 % / Flash ~14 % de un STM32G474RE.
 
 ## 11. Comandos serie (diagnóstico)
 
-`v` voltajes · `t` temps · `a` amperímetro · `s` status · `b` toggle
-balanceo · `x` parar balanceo · `q` diag balanceo · `f` fallos BQ ·
-`c` limpiar fallos BQ · `i` re-init BQ · `r` reset MCU.
+`v` voltajes · `t` temps · `a` amperímetro · `s` status · `f` fallos
+BQ · `c` limpiar fallos BQ · `i` re-init BQ · `r` reset MCU.
