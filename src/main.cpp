@@ -231,6 +231,12 @@ void setup()
         gCan->setPacketTimer(13, 798);
         gCan->setPacketTimer(14, 200);
         gCan->setPacketTimer(392, 553);   // SOC
+        gCan->setPacketTimer(386, 557);   // detalle/módulo (paginado)
+        gCan->setPacketTimer(387, 556);
+        gCan->setPacketTimer(388, 556);
+        gCan->setPacketTimer(389, 555);
+        gCan->setPacketTimer(390, 554);
+        gCan->setPacketTimer(391, 554);
         Serial.println(F("[CAN] FDCAN listo (500k, IDs 10-14)."));
     }
 
@@ -385,6 +391,28 @@ void updatePrecharge()
 }
 
 // ============================================================================
+//  Helpers de mapeo módulo → celdas/NTC del driver
+//  Módulo m = 2 boards: par (2m) 6 celdas + 6 NTC; impar (2m+1) 5 celdas
+//  + 3 NTC.  V1..V6 = par 0..5 ; V7..V11 = impar 0..4 ; T1..T6 = par
+//  NTC 0..5 ; T7..T9 = impar NTC 0..2.
+//  ⚠ El mapeo Vn↔celda física y la def. de VTotal deben confirmarse
+//    contra el cableado real / lo que espera el dashboard (el diseño
+//    antiguo tenía una inconsistencia en V10/V11/celda dummy).
+// ============================================================================
+static float modCellV(int m, int n)   // n = 1..11
+{
+    int ev = 2 * m, od = 2 * m + 1;
+    return (n <= 6) ? bms.getVoltage(ev, n - 1) : bms.getVoltage(od, n - 7);
+}
+static float modCellT(int m, int k)   // k = 1..9
+{
+    int ev = 2 * m, od = 2 * m + 1;
+    return (k <= 6) ? bms.getTemperature(ev, k - 1) : bms.getTemperature(od, k - 7);
+}
+static uint16_t mv16(float v) { return (v > 0.0f) ? (uint16_t)lroundf(v * 1000.0f) : 0; }
+static uint8_t  t8(float t)   { return (uint8_t)(int8_t)lroundf(t); }
+
+// ============================================================================
 //  TELEMETRÍA CAN — resumen IDs 10-14 (docs/Mapa_CAN.txt)
 //  setPacket() encola; send() emite solo los que su setPacketTimer venció.
 //  Patrón validado en el BMS antiguo (setPacket+send cada loop, throttle
@@ -442,6 +470,53 @@ void updateCanTx()
     // ── ID 392 (0x188) — SOC (UINT8, %) ────────────────────────────────────
     uint8_t socv = soc.soc();
     gCan->setPacket((uint32_t)392, &socv, 1);
+
+    // ── Detalle por módulo 386-391 (paginado: 1 módulo por ronda) ───────────
+    // El receptor identifica el módulo por el 1er campo (IDmodule) del
+    // payload. Status por módulo = encoding PROVISIONAL (igual que ID12).
+    static uint8_t       cMod  = 0;
+    static unsigned long tcMod = 0;
+    if (millis() - tcMod >= 556) {
+        tcMod = millis();
+        cMod  = (cMod + 1) % (uint8_t)NUM_MODULES;
+    }
+    {
+        const uint16_t m = cMod;
+        uint16_t vtot = 0;
+        for (int n = 1; n <= 11; n++) vtot += mv16(modCellV(m, n));
+
+        uint16_t d386[4] = { m, mv16(modCellV(m,1)), mv16(modCellV(m,2)), mv16(modCellV(m,3)) };
+        uint16_t d387[4] = { m, mv16(modCellV(m,4)), mv16(modCellV(m,5)), mv16(modCellV(m,6)) };
+        uint16_t d388[4] = { m, mv16(modCellV(m,7)), mv16(modCellV(m,8)), mv16(modCellV(m,9)) };
+        uint16_t d389[4] = { m, mv16(modCellV(m,10)), mv16(modCellV(m,11)), vtot };
+        gCan->setPacket((uint32_t)386, d386, 4);
+        gCan->setPacket((uint32_t)387, d387, 4);
+        gCan->setPacket((uint32_t)388, d388, 4);
+        gCan->setPacket((uint32_t)389, d389, 4);
+
+        float tmx = -300.0f, tmn = 300.0f;
+        for (int k = 1; k <= 9; k++) {
+            float t = modCellT(m, k);
+            if (t > tmx) tmx = t;
+            if (t < tmn) tmn = t;
+        }
+        bool uv = false, ov = false;
+        for (int n = 1; n <= 11; n++) {
+            float v = modCellV(m, n);
+            if (v > CELL_OV_V)               ov = true;
+            else if (v > 0.0f && v < CELL_UV_V) uv = true;
+        }
+        uint8_t stV = ov ? 2 : (uv ? 1 : 0);
+        uint8_t stT = (tmn < CELL_UT_C) ? 1 : (tmx > CELL_OT_C ? 2 : 0);
+
+        uint8_t d390[8] = { (uint8_t)m, t8(modCellT(m,1)), t8(modCellT(m,2)),
+                            t8(modCellT(m,3)), t8(modCellT(m,4)), t8(modCellT(m,5)),
+                            t8(modCellT(m,6)), t8(modCellT(m,7)) };
+        uint8_t d391[8] = { (uint8_t)m, t8(modCellT(m,8)), t8(modCellT(m,9)),
+                            t8(tmx), t8(tmn), stV, stT, 0 };
+        gCan->setPacket((uint32_t)390, d390, 8);
+        gCan->setPacket((uint32_t)391, d391, 8);
+    }
 
     gCan->send();   // emite solo los vencidos según setPacketTimer
 }
