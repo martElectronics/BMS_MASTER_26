@@ -77,8 +77,12 @@ public:
      * @param packCurrentA  Corriente de pack (Hall), para feed-forward.
      * @return duty aplicado (%).
      */
-    uint8_t update(float tmax, float packCurrentA)
+    uint8_t update(float tmax, float packCurrentA, bool failSafe = false)
     {
+        // Fail-safe: si la T no es fiable/fresca (lo decide el caller),
+        // refrigerar al máximo en vez de fiarse de una Tmax rancia.
+        if (failSafe) { _on = true; _dutyPct = 100; _apply(100); return 100; }
+
         // Histéresis ON/OFF sobre Tmax
         if (_on) { if (tmax <  FAN_T_OFF) _on = false; }
         else     { if (tmax >= FAN_T_ON)  _on = true;  }

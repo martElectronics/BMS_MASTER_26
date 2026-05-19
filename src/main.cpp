@@ -160,6 +160,7 @@ static unsigned long tPrechargeStart  = 0;
 //  debe correr tras el SystemClock del core → NO como global static).
 // ============================================================================
 static CAN_BUS*      gCan             = nullptr;
+static bool          gCanOk           = false; ///< FDCAN inicializó OK (gate TX)
 static uint16_t      canNumCommFails  = 0;   ///< nº lecturas BQ con COMM_ERROR
 static uint16_t      canNumCrcFails   = 0;   ///< nº lecturas BQ con CRC_ERROR
 static uint16_t      canNumTriesReset = 0;   ///< nº reInit() por comms
@@ -239,8 +240,9 @@ void setup()
     //    hace el init de FDCAN (HAL) → debe correr AQUI, no en global. ──
     static CAN_BUS canBus(HardwareType::Transciever, 500, 3);
     gCan = &canBus;
-    if (gCan->SetupState() != 0) {
-        Serial.println(F("[CAN] FDCAN init FALLO."));
+    gCanOk = (gCan->SetupState() == 0);
+    if (!gCanOk) {
+        Serial.println(F("[CAN] FDCAN init FALLO — TX CAN deshabilitada."));
     } else {
         gCan->setPacketTimer(10, 800);   // periodos de docs/Mapa_CAN.txt
         gCan->setPacketTimer(11, 799);
@@ -276,7 +278,10 @@ void loop()
     sampleAndEvaluate();  // V/T en cadencia + debounce de fallos
     soc.update(hall.getCurrent(), bms.getMinVoltage(),
                bms.isVoltageReadingReliable());   // coulomb + OCV
-    fan.update(bms.getMaxTemp(), hall.getCurrent());  // curva + feed-forward
+    // Fail-safe de refrigeración: T no fresca/fiable (lectura T fallida,
+    // comms o NTC abierto) → ventiladores 100 % (no fiarse de Tmax rancia).
+    bool fanFS = (lastResT != BQResult::OK) || fComm.cond || fNtc.cond;
+    fan.update(bms.getMaxTemp(), hall.getCurrent(), fanFS);  // curva + FF
     updateBmsOk();         // BMS_OK no-latching (auto-rearma)
     updatePrecharge();
     updateCanTx();         // telemetría CAN IDs 10-14 (throttled por timer)
@@ -444,7 +449,12 @@ static uint8_t  t8(float t)   { return (uint8_t)(int8_t)lroundf(t); }
 // ============================================================================
 void updateCanTx()
 {
-    if (!gCan) return;
+    if (!gCan || !gCanOk) return;
+
+    // Recuperación de bus-off (cableado / baud / sin otros nodos). Barato
+    // si el bus está sano (solo chequea FDCAN_PSR_BO); solo actúa si BO.
+    static unsigned long tCanChk = 0;
+    if (millis() - tCanChk >= 1000) { tCanChk = millis(); gCan->rebootBusFromError(); }
 
     // ── ID 10 (0xA) — estado general (1 byte de flags) ──────────────────────
     bool condNow = fV.cond || fT.cond || fNtc.cond || fComm.cond || !hall.isOK();

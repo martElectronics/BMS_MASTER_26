@@ -197,27 +197,32 @@ herramienta). Por tanto los FETs de balanceo nunca se activan desde
 aquí y la tensión de celda es **siempre fiable**: la OV/UV se evalúa
 de forma continua sin ventana ciega. El riesgo original desaparece.
 
-### 9.3 Sin watchdog independiente (RIESGO ALTO)
-Si el `loop()` se cuelga, `BMS_OK` mantiene su último estado (HIGH si
-estaba OK) → SDC cerrado con un BMS muerto. Un BMS de producción
-**necesita un IWDG hardware**: si no se refresca, resetea el MCU y
-`BMS_OK` cae (fail-safe). **Falta. Recomendado P0.**
+### 9.3 Watchdog independiente — RESUELTO (#1)
+IWDG hardware (LSI), 8 s. `IWatchdog.begin()` al final de `setup()`
+(tras init/calib acotados; una vez armado no se puede parar) y
+`IWatchdog.reload()` al final de cada `loop()` completo. Un cuelgue
+en cualquier punto → no se refresca → reset → `BMS_OK` cae
+(fail-safe). Traza si el reset previo fue del WDG.
 
-### 9.4 Bloqueos en init / reInit
+### 9.4 Bloqueos en init / reInit (PENDIENTE)
 `bms.begin()` fallido espera 'i' por serie (cuelga el resto). `reInit()`
 en pérdida de comms bloquea el loop (sin CAN/fans/eval mientras dura).
-Recomendado: init no bloqueante con reintento periódico.
+Por eso el IWDG es de 8 s (debe cubrir el peor `reInit()`); hacerlo
+no bloqueante permitiría bajar el IWDG → detección de cuelgue más
+rápida. Toca el driver BQ79606 (validado) → exigiría re-validación.
 
-### 9.5 CAN: sin recuperación de bus-off, TX no gated por CAN-OK
-Un bus-off (cableado, baud, sin otros nodos) deja el CAN muerto sin
-recuperación. `updateCanTx` no comprueba que el FDCAN inicializó OK.
+### 9.5 CAN bus-off / gate TX — RESUELTO (#4)
+`updateCanTx()` se inhibe si el FDCAN no inicializó OK (`gCanOk`).
+Cada 1 s llama a `rebootBusFromError()` (barato si el bus está sano:
+solo chequea `FDCAN_PSR_BO`; solo recupera si bus-off).
 
 ### 9.6 Otros
-- Datos a confirmar: umbrales UV/OV/UT/OT (datasheet), `Np`,
-  caracterización OCV-SOC, baud FDCAN (asume reloj kernel 24 MHz),
-  semántica oficial ID 12/13, mapeo Vn↔celda.
+- Fans fail-safe — RESUELTO (#5): T no fiable (lectura T fallida /
+  comms / NTC abierto) → ventiladores 100 %.
+- Datos a confirmar (banco/equipo): umbrales UV/OV/UT/OT (datasheet),
+  `Np`, caracterización OCV-SOC, baud FDCAN (asume reloj kernel
+  24 MHz), semántica oficial ID 12/13, mapeo Vn↔celda.
 - `TOTALBOARDS` 20→24 para el pack completo (+ re-validar).
-- Fans no fuerzan 100 % ante T rancia / fallo térmico (mejora fail-safe).
 
 ---
 
