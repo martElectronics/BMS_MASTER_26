@@ -204,12 +204,19 @@ IWDG hardware (LSI), 8 s. `IWatchdog.begin()` al final de `setup()`
 en cualquier punto → no se refresca → reset → `BMS_OK` cae
 (fail-safe). Traza si el reset previo fue del WDG.
 
-### 9.4 Bloqueos en init / reInit (PENDIENTE)
-`bms.begin()` fallido espera 'i' por serie (cuelga el resto). `reInit()`
-en pérdida de comms bloquea el loop (sin CAN/fans/eval mientras dura).
-Por eso el IWDG es de 8 s (debe cubrir el peor `reInit()`); hacerlo
-no bloqueante permitiría bajar el IWDG → detección de cuelgue más
-rápida. Toca el driver BQ79606 (validado) → exigiría re-validación.
+### 9.4 Init / reInit no bloqueantes — MITIGADO a nivel `main` (#3 opción B)
+- Boot: si `bms.begin()` falla, NO se cuelga esperando 'i'. Se marca
+  `bmsInitOk=false` (con `bmsFault=true` → `BMS_OK` LOW) y el loop
+  arranca. Cada `BMS_REINIT_RETRY_MS=2 s` se reintenta `reInit()`
+  desde `sampleAndEvaluate()` hasta éxito. Comando 'i' sigue como
+  disparo manual.
+- Pérdida de comms en operación: `reInit()` se llama con rate-limit
+  (uno cada 2 s), no en cada flanco/loop. Entre intentos el loop
+  corre a velocidad normal (CAN/fans/eval/IWDG siguen activos).
+- Residuo: el `reInit()` cuando *sí* se llama bloquea unos segundos
+  (toca el driver validado, opción C, para eliminarlo del todo). El
+  IWDG de 8 s sigue cubriéndolo. Si se mide en banco y queda con
+  margen, se puede bajar el IWDG para detectar cuelgues antes.
 
 ### 9.5 CAN bus-off / gate TX — RESUELTO (#4)
 `updateCanTx()` se inhibe si el FDCAN no inicializó OK (`gCanOk`).

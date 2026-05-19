@@ -146,6 +146,13 @@ struct FaultTimer {
 static FaultTimer fV, fT, fNtc, fComm;
 static bool bmsFault = false;     ///< fallo confirmado AHORA (no latcheado)
 
+// Estado de inicialización del BQ (#3, opción B: init/reInit no bloqueantes
+// a nivel main). El loop arranca aunque begin() falle; sampleAndEvaluate()
+// reintenta reInit() con rate-limit (no en cada flanco).
+static bool          bmsInitOk    = false;   ///< true tras begin()/reInit() OK
+static unsigned long tLastReinit  = 0;       ///< ms del último intento de reInit
+#define BMS_REINIT_RETRY_MS  2000UL          ///< cadencia mín. entre reintentos
+
 // Lecturas
 static BQResult lastResV = BQResult::OK, lastResT = BQResult::OK;
 
@@ -210,25 +217,18 @@ void setup()
     hall.begin();   // autocalibración (~1 s, vehículo en reposo)
     fan.begin();    // PWM ventiladores a 0 %
 
+    // Init NO BLOQUEANTE (#3, opción B): si begin() falla, NO colgamos
+    // esperando 'i'. El loop arranca igualmente y sampleAndEvaluate()
+    // reintenta reInit() cada BMS_REINIT_RETRY_MS. BMS_OK forzado LOW
+    // mientras !bmsInitOk (ver updateBmsOk: bmsFault |= !bmsInitOk).
     Serial.println(F("Iniciando BQ79606..."));
-    bool initOk = bms.begin();
-    if (!initOk) {
-        // No colgar: BMS_OK queda LOW (lo gestiona el driver). Reintento por 'i'.
-        Serial.println(F("[ERROR] BQ init fallo. BMS_OK LOW. Pulsa 'i' para reintentar."));
-        while (!initOk) {
-            if (Serial.available()) {
-                char c = Serial.read();
-                while (Serial.available()) Serial.read();
-                if (c == 'i' || c == 'I') {
-                    Serial.println(F(">>> Reintentando init..."));
-                    initOk = bms.reInit();
-                    Serial.println(initOk ? F("[OK]") : F("[ERROR]"));
-                }
-            }
-            delay(10);
-        }
+    bmsInitOk = bms.begin();
+    if (bmsInitOk) {
+        Serial.println(F("[OK] BQ79606 listo."));
+    } else {
+        tLastReinit = millis();
+        Serial.println(F("[WARN] BQ init FALLO. BMS_OK LOW; reintento en loop cada 2s."));
     }
-    Serial.println(F("[OK] BQ79606 listo."));
 
     // SOC: init desde OCV (se asume coche EN REPOSO al arrancar).
     if (bms.readVoltages() == BQResult::OK) {
@@ -314,6 +314,22 @@ void sampleAndEvaluate()
     static bool commLost = false;
     unsigned long now = millis();
 
+    // Si el BQ no está inicializado, NO leer (driver no configurado).
+    // Reintentar reInit() rate-limited y forzar fComm (BMS_OK LOW también
+    // queda garantizado por updateBmsOk vía !bmsInitOk).
+    if (!bmsInitOk) {
+        fComm.cond = true;
+        if ((now - tLastReinit) >= BMS_REINIT_RETRY_MS) {
+            tLastReinit = now;
+            canNumTriesReset++;
+            if (bms.reInit()) {
+                bmsInitOk = true;
+                Serial.println(F("[OK] BQ recuperado."));
+            }
+        }
+        return;
+    }
+
     // ── Voltaje: cada 500 ms (EV5.8). isVoltageReadingReliable() es
     //    siempre true en este firmware (no balancea); se mantiene como
     //    guarda defensiva. ────────────────────────────────────────────────
@@ -345,13 +361,16 @@ void sampleAndEvaluate()
     // ── Pérdida de comunicación BQ ──────────────────────────────────────────
     bool readErr = (lastResV != BQResult::OK) || (lastResT != BQResult::OK);
     if (readErr) {
-        if (!commLost) {
-            commLost  = true;
-            tCommLost = now;
-            bms.reInit();              // intento de recuperación
-            canNumTriesReset++;
-        }
+        if (!commLost) { commLost = true; tCommLost = now; }
         fComm.cond = ((now - tCommLost) >= FAULT_COMM_MS);
+        // Reintento con rate-limit (#3, opción B): reInit() bloquea
+        // unos segundos; con commLost persistente lo limitamos a uno
+        // cada BMS_REINIT_RETRY_MS (NO en cada flanco, NO en cada loop).
+        if ((now - tLastReinit) >= BMS_REINIT_RETRY_MS) {
+            tLastReinit = now;
+            canNumTriesReset++;
+            bms.reInit();
+        }
     } else {
         commLost   = false;
         fComm.cond = false;
@@ -371,7 +390,9 @@ void updateBmsOk()
     bool faultComm = fComm.confirmed(now, FAULT_COMM_MS);
     bool faultHall = !hall.isOK();      // HallSensor ya debounced 500 ms
 
-    bmsFault = faultV || faultT || faultNtc || faultComm || faultHall;
+    // !bmsInitOk fuerza fault para que BMS_OK quede LOW sin ventana
+    // de debounce al arrancar con init fallido (#3, opción B).
+    bmsFault = faultV || faultT || faultNtc || faultComm || faultHall || !bmsInitOk;
 
     // Telemetría: duración del episodio de fallo (IDs 13/14).
     if (bmsFault) {
@@ -622,7 +643,13 @@ void handleSerial()
         break;
 
     case 'i':
-        Serial.println(bms.reInit() ? F("Re-init [OK]") : F("Re-init [ERROR]"));
+        if (bms.reInit()) {
+            bmsInitOk   = true;
+            tLastReinit = millis();   // reset cadencia auto
+            Serial.println(F("Re-init [OK]"));
+        } else {
+            Serial.println(F("Re-init [ERROR]"));
+        }
         break;
 
     case 'r':
