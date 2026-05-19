@@ -370,9 +370,15 @@ void updateBmsOk()
 
     bmsFault = faultV || faultT || faultNtc || faultComm || faultHall;
 
-    // El balanceo NO debe correr con un fallo activo: el driver de seguridad
-    // es prioritario sobre el balanceo (gap-analysis).
-    if (bmsFault && bal.isEnabled()) bal.disable();
+    // Balanceo subordinado a seguridad Y a estado del SDC. Durante el
+    // balanceo HW la V REAL de celda no se vigila (solo el snapshot OCV,
+    // potencialmente rancio); por eso solo se balancea con el coche
+    // PARADO (SDC abierto). Con el TS energizado (SDC cerrado =
+    // conduciendo o cargando) o con fallo → parar. [ARQUITECTURA.md §9.2]
+    // ⚠ Balancear durante CARGA exigiría una señal "cargador presente"
+    //   (no definida en HW) → de momento NO se balancea con SDC cerrado.
+    if (bal.isEnabled() && (bmsFault || digitalRead(PIN_SDC_3V3) == HIGH))
+        bal.disable();
 
     // Telemetría: duración del episodio de fallo (IDs 13/14).
     if (bmsFault) {
@@ -597,12 +603,14 @@ void handleSerial()
         printStatus();
         break;
 
-    case 'b':   // toggle balanceo (bloqueado si hay fallo)
+    case 'b':   // toggle balanceo (bloqueado si fallo o SDC cerrado)
         if (bal.isEnabled()) {
             bal.disable();
             Serial.println(F("BAL: desactivado."));
         } else if (bmsFault) {
             Serial.println(F("BAL: NO (fallo BMS activo)."));
+        } else if (digitalRead(PIN_SDC_3V3) == HIGH) {
+            Serial.println(F("BAL: NO (SDC cerrado / TS activo). Solo parado."));
         } else {
             bal.enable();
         }

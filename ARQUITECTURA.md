@@ -192,13 +192,17 @@ Las libs BQ79606 y BalancingManager sí (banco 20 ICs). El `main` nuevo
 (BMS_OK, precarga, integración), HallSensor, SOC, fans y CAN: **solo
 compilan**. No es producción hasta validar en banco.
 
-### 9.2 Sin protección de V real durante el balanceo (RIESGO)
-Mientras el balanceo HW está activo, V no es fiable y la protección
-OV/UV de celda real **no se evalúa** (solo el snapshot OCV del
-BalancingManager, que puede tener minutos de antigüedad). EV5.8 exige
-monitorización continua. **Mitigación recomendada:** no balancear con
-el TS activo / coche en marcha (solo en carga o parado), y/o pausar el
-balanceo periódicamente para una lectura real de V.
+### 9.2 V real durante el balanceo — MITIGADO (con caveat)
+Mientras el balanceo HW está activo, V no es fiable y la OV/UV de
+celda real no se evalúa (solo el snapshot OCV del BalancingManager).
+**Mitigación implementada (#2):** el balanceo solo se permite con el
+**SDC abierto** (coche PARADO); con el TS energizado (SDC cerrado =
+conduciendo o cargando) o con fallo → `bal.disable()`. Así la ventana
+ciega de V solo existe con el coche parado y en reposo (bajo riesgo;
+el latch HW + las guardias del BalancingManager siguen de backstop).
+**Caveat:** esto también impide balancear durante CARGA (cuando es
+deseable). Habilitarlo exigiría una señal "cargador presente" (no
+definida en HW) para distinguir carga de conducción → trabajo futuro.
 
 ### 9.3 Sin watchdog independiente (RIESGO ALTO)
 Si el `loop()` se cuelga, `BMS_OK` mantiene su último estado (HIGH si
