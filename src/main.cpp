@@ -41,6 +41,11 @@
 #include "HallSensor.h"
 #include "MART_CAN.h"           // CAN (FDCAN1 PA11/PA12). Protocolo: TODO (mapa CAN)
 
+// Capacidad del PACK (Ah) = 4.0 (celda 40T) × Np (celdas en paralelo).
+// ⚠ [AJUSTAR] Np a la topología real del pack. Debe ir ANTES del include.
+#define SOC_PACK_CAPACITY_AH   (4.0f * 1)
+#include "SocEstimator.h"
+
 // ============================================================================
 //  PINES — STM32G474RE (NUCLEO-G474RE)
 // ============================================================================
@@ -84,6 +89,8 @@ static const BalConfig BAL_CFG;        // defaults = validados en HW
 BalancingManager bal(bms, BAL_CFG);
 
 HallSensor hall(PIN_AMP_30A, PIN_AMP_350A);
+
+SocEstimator soc;   // SOC: coulomb counting + OCV (ver SocEstimator.h)
 
 // NUM_MODULES derivado del driver: 2 boards por módulo. Se auto-adapta a
 // TOTALBOARDS (20 banco / 24 pack completo).
@@ -205,6 +212,12 @@ void setup()
     }
     Serial.println(F("[OK] BQ79606 listo."));
 
+    // SOC: init desde OCV (se asume coche EN REPOSO al arrancar).
+    if (bms.readVoltages() == BQResult::OK) {
+        soc.begin(bms.getMinVoltage());
+        Serial.printf("[SOC] init = %u%% (OCV)\n", soc.soc());
+    }
+
     // ── CAN: FDCAN1 PA11/PA12, 500 kbps, perfil BMS (nodeID=3). El ctor
     //    hace el init de FDCAN (HAL) → debe correr AQUI, no en global. ──
     static CAN_BUS canBus(HardwareType::Transciever, 500, 3);
@@ -217,6 +230,7 @@ void setup()
         gCan->setPacketTimer(12, 799);
         gCan->setPacketTimer(13, 798);
         gCan->setPacketTimer(14, 200);
+        gCan->setPacketTimer(392, 553);   // SOC
         Serial.println(F("[CAN] FDCAN listo (500k, IDs 10-14)."));
     }
 
@@ -233,6 +247,8 @@ void loop()
     bal.tick();           // máquina de estados de balanceo (no-op si IDLE)
 
     sampleAndEvaluate();  // V/T en cadencia + debounce de fallos
+    soc.update(hall.getCurrent(), bms.getMinVoltage(),
+               bms.isVoltageReadingReliable());   // coulomb + OCV
     updateBmsOk();         // BMS_OK no-latching (auto-rearma)
     updatePrecharge();
     updateCanTx();         // telemetría CAN IDs 10-14 (throttled por timer)
@@ -423,6 +439,10 @@ void updateCanTx()
                         canNumCrcFails, canNumTriesReset };
     gCan->setPacket((uint32_t)14, d14, 4);
 
+    // ── ID 392 (0x188) — SOC (UINT8, %) ────────────────────────────────────
+    uint8_t socv = soc.soc();
+    gCan->setPacket((uint32_t)392, &socv, 1);
+
     gCan->send();   // emite solo los vencidos según setPacketTimer
 }
 
@@ -556,6 +576,8 @@ void printStatus()
     Serial.printf("I: %.2f A (%s)  Hall=%s\n",
                   hall.getCurrent(), hall.isLowRange() ? "30A" : "350A",
                   hall.isOK() ? "OK" : "FALLO");
+    Serial.printf("SOC: %u%% (%.1f)  [aprox: tabla OCV generica]\n",
+                  soc.soc(), soc.socF());
     Serial.printf("Fallos: V=%d T=%d NTC=%d COMM=%d HALL=%d\n",
                   fV.confirmed(millis(), FAULT_V_MS),
                   fT.confirmed(millis(), FAULT_T_MS),
