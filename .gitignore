@@ -6,6 +6,6 @@
 .vscode/extensions.json
 .vscode/settings.json
 
-# Material de referencia / temporales (no es codigo del proyecto)
-docs/
+# Estado local de herramientas (no es codigo del proyecto)
+.claude/
 .git_msg_tmp

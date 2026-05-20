@@ -35,6 +35,7 @@ Celda: **Samsung INR21700-40T**, 4.0 Ah NCA, carga 4.2 V, corte 2.5 V.
 | Amperímetro DHAB 30A / 350A | PA1 / PA0 | HallSensor |
 | CAN (FDCAN1) RX / TX | PA11 / PA12 | fijo en la lib |
 | PWM ventiladores | PB4 | 2/3 hilos, baja frecuencia |
+| FRAM I²C1 SCL / SDA | PB8 / PB9 | MB85RC256V @ 0x50 (FaultLogger) |
 
 > ⚠ Los pines no-BQ se usan con la API Arduino; **verificar el mapeo
 > físico en HW** (que compile no garantiza el pin correcto, ni que PB4
@@ -94,6 +95,7 @@ lib/BQ79606/            Driver de la cadena BQ (VALIDADO HW, banco 20 ICs)
 lib/HallSensor/          Amperímetro DHAB S/118 (portado + corregido)
 lib/SocEstimator/        SOC: coulomb counting + OCV (header-only)
 lib/FanController/       Ventiladores: curva Tmax + feed-forward (header-only)
+lib/FaultLogger/         Log persistente en FRAM MB85RC256V (I²C1 PB8/PB9)
 ```
 
 Cada lib encapsula una responsabilidad; `main.cpp` solo orquesta y
@@ -118,9 +120,6 @@ handleSerial()        comandos de diagnóstico
 printStatus() @2s     volcado por serie
 ```
 
-Nota: `isVoltageReadingReliable()` es siempre true en este firmware
-(no hay balanceo) — se mantiene como guarda defensiva.
-
 ---
 
 ## 6. Componentes
@@ -129,7 +128,7 @@ Nota: `isVoltageReadingReliable()` es siempre true en este firmware
 V/T de toda la cadena, autoaddressing, detección de **NTC abierto**,
 control de balanceo HW. API usada: `begin/reInit`, `readVoltages/
 readTemperatures`, `getMin/MaxVoltage/Temp`, `hasOpenNtc`, `setBmsOk`,
-`isVoltageReadingReliable`, `getFaultStatus`, etc.
+`getFaultStatus`, etc.
 
 ### 6.2 Balanceo — FUERA DE ALCANCE
 El balanceo de celdas NO forma parte de este firmware: se hace
@@ -148,7 +147,15 @@ reposo (|I| bajo y estable). Tabla OCV→SOC **NCA genérica** (el
 datasheet no trae curva OCV) → SOC **orientativo** hasta caracterizar.
 `SOC_PACK_CAPACITY_AH = 4.0 × Np` (ajustar Np).
 
-### 6.5 FanController (header-only)
+### 6.5 FaultLogger (FRAM MB85RC256V via I²C)
+Log persistente de eventos en FRAM externa (32 KB, I²C1 PB8/PB9, addr 0x50).
+Resuelve "BMS_OK se cayó en pista y el CAN tampoco funcionaba" — los
+eventos quedan grabados aunque no haya telemetría. Ring buffer de 2047
+records de 16 bytes (BOOT, BMS_OK fall/rise, reInit, precharge fail).
+Lectura por comando serie `d` (dump) / `D` (clear). Endurance FRAM
+10¹² ciclos → seguro toda la vida del coche.
+
+### 6.6 FanController (header-only)
 Curva sobre **Tmax** del pack: OFF<32 °C / ON≥35 °C (histéresis) /
 rampa 30→100 % entre 35–50 °C / 100 % ≥50 °C. **Feed-forward**: |I|
 alta fuerza piso de duty (anticipa inercia térmica). 100 % a 50 °C deja
@@ -167,13 +174,15 @@ mapa; `setPacket`+`send()` cada loop (throttle por timer).
 | 11 | MaxT, MaxV(mV), MinV(mV), MinT |
 | 12/13 | GEN_STATUS / contadores — **encoding PROVISIONAL** |
 | 14 | lastFailTime, numCommFails, numCrcFails, numTriesReset |
+| **15** | **BMS_DEBUG (8 B)** — granularidad de fallos para diagnóstico: B0 confirmados, B1 sub-fallos Hall, B2 V/T snapshot, B3 state, B4 primer trigger, B5-6 duración, B7 reset cause |
 | 386–389 | por módulo: IDmod + V1..V11 + VTotal (paginado) |
 | 390–391 | por módulo: IDmod + T1..T9, Tmax/min, status |
 | 392 | SOC (%) |
 
 386–392 **paginado**: 1 módulo por ronda (~556 ms), el receptor lo
-identifica por el campo IDmodule. El mapeo Vn↔celda física y VTotal
-deben confirmarse contra el cableado/dashboard.
+identifica por el campo IDmodule. Mapeo Vn↔paralelo CONFIRMADO
+(2026-05-20): V1..V6 = par[0..5], V7..V11 = impar[0..4], canal 5
+del impar sin usar. VTotal = suma de los 11 paralelos en mV.
 
 ---
 
@@ -234,9 +243,14 @@ solo chequea `FDCAN_PSR_BO`; solo recupera si bus-off).
 ### 9.6 Otros
 - Fans fail-safe — RESUELTO (#5): T no fiable (lectura T fallida /
   comms / NTC abierto) → ventiladores 100 %.
-- Datos a confirmar (banco/equipo): umbrales UV/OV/UT/OT (datasheet),
-  `Np`, caracterización OCV-SOC, baud FDCAN (asume reloj kernel
-  24 MHz), semántica oficial ID 12/13, mapeo Vn↔celda.
+- Umbrales UV/OV/UT/OT — CONFIRMADOS contra datasheet INR21700-40T
+  (rev. 2026-05-20): UV 2.80 V, OV 4.20 V (estricto al máx.), UT −20 °C,
+  OT 60 °C (= FS EV5.8.4).
+- `Np` — CONFIRMADO = 11 (12 módulos × 11s11p, capacidad pack 44 Ah).
+- Mapeo Vn↔paralelo en CAN 386-389 — CONFIRMADO (2026-05-20): par antes
+  que impar, canales del BQ en orden ascendente, dummy del impar arriba.
+- Datos a confirmar (banco/equipo): caracterización OCV-SOC, baud FDCAN
+  (asume reloj kernel 24 MHz), semántica oficial ID 12/13.
 - `TOTALBOARDS` 20→24 para el pack completo (+ re-validar).
 
 ---
@@ -256,4 +270,5 @@ Ocupación actual: RAM ~4 % / Flash ~14 % de un STM32G474RE.
 ## 11. Comandos serie (diagnóstico)
 
 `v` voltajes · `t` temps · `a` amperímetro · `s` status · `f` fallos
-BQ · `c` limpiar fallos BQ · `i` re-init BQ · `r` reset MCU.
+BQ · `c` limpiar fallos BQ · `i` re-init BQ · `r` reset MCU ·
+`d` dump del log FRAM · `D` clear del log FRAM.

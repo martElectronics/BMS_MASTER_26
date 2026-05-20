@@ -6,10 +6,6 @@
  *   · Driver BQ79606 (cadena daisy-chain UART)
  *   · HallSensor (amperímetro DHAB S/118, doble rango)
  *
- * El BALANCEO no forma parte de este firmware: se hace off-car con una
- * herramienta aparte (no se balancea en el coche). Vive validado en el
- * repo BQ_CLASS, no aquí. Por eso V siempre es fiable en este master.
- *
  * ── ARQUITECTURA DE SEGURIDAD (Formula Student EV5.8 / EV6) ──────────────────
  *   · El latch que abre el SDC es HARDWARE no programable (EV6.1.6). Por
  *     tanto BMS_OK es una señal de SALUD: NO-latching, con debounce, y
@@ -44,10 +40,14 @@
 #include "MART_CAN.h"           // CAN (FDCAN1 PA11/PA12). Protocolo: TODO (mapa CAN)
 
 // Capacidad del PACK (Ah) = 4.0 (celda 40T) × Np (celdas en paralelo).
-// ⚠ [AJUSTAR] Np a la topología real del pack. Debe ir ANTES del include.
-#define SOC_PACK_CAPACITY_AH   (4.0f * 1)
+// ✓ Topología confirmada: 12 módulos × (6+5)s × 11p → Ns=132, Np=11, 44 Ah pack
+// (banco hoy: 10 mods → Ns=110, misma Np y misma capacidad). La capacidad
+// del pack solo depende de Np, no del nº de módulos en serie.
+// Debe ir ANTES del include de SocEstimator.h.
+#define SOC_PACK_CAPACITY_AH   (4.0f * 11)
 #include "SocEstimator.h"
 #include "FanController.h"      // ventiladores: curva Tmax + feed-forward I
+#include "FaultLogger.h"        // FRAM MB85RC256V (I²C1 PB8/PB9, 0x50)
 #include <IWatchdog.h>          // watchdog HW independiente (STM32 IWDG/LSI)
 
 // ============================================================================
@@ -105,12 +105,19 @@ static constexpr int NUM_MODULES = TOTALBOARDS / 2;
 // ============================================================================
 //  UMBRALES Y TIEMPOS
 // ============================================================================
-// ⚠ [TUNE-datasheet] Confirmar UV/OV/UT/OT con el datasheet de la celda
-//   (gap-analysis P1). Valores del diseño codigo_bms_master.txt.
+// ✓ Confirmado contra datasheet Samsung INR21700-40T (rev. 2026-05-20):
+//   UV 2.80 V — margen sobre el 2.50 V mín. del datasheet (preserva vida útil
+//             y deja reserva para el debounce de 500 ms).
+//   OV 4.20 V — estricto al máx. del datasheet (decisión del equipo:
+//             priorizar conservadurismo frente a falsos OV al final de carga).
+//   UT -20 °C — mín. descarga del datasheet; en pista funciona también como
+//             detector de NTC roto/desconectado (lectura espuria muy baja).
+//   OT  60 °C — coincide con FS EV5.8.4 y máx. del datasheet. Fans saturan
+//             al 100 % a 50 °C → 10 °C de margen real antes del trip.
 #define CELL_UV_V      2.8f     ///< Undervoltage (V)
 #define CELL_OV_V      4.2f     ///< Overvoltage (V)
 #define CELL_UT_C    -20.0f     ///< Undertemperature (°C)
-#define CELL_OT_C     60.0f     ///< Overtemperature (°C) — EV5.8.4: ≤60 o datasheet
+#define CELL_OT_C     60.0f     ///< Overtemperature (°C) — EV5.8.4: ≤60
 
 // Debounce por normativa FS EV5.8
 #define FAULT_V_MS     500UL    ///< V debe persistir ≥500 ms
@@ -196,6 +203,20 @@ static unsigned long faultEpisodeStart= 0;   ///< ms inicio episodio fallo (0=si
 static uint16_t      canLastFailMs    = 0;   ///< duración (ms) episodio actual/último
 static uint16_t      canMaxFailMs     = 0;   ///< máx duración de episodio vista
 
+// ── Debug / diagnóstico (ID 15 BMS_DEBUG) ──────────────────────────────────
+// firstFaultTrigger : primer fallo que entró en este episodio (enum B4 ID 15)
+//   0=none 1=V 2=T 3=NTC 4=Comm 5=Hall 6=!Init
+// resetCauseSnapshot: RCC->CSR capturado al boot (bitfield B7 ID 15)
+// prechargeFailed   : latch SW del timeout 5 s de precarga (igual que pin PRE_FAIL)
+static uint8_t       firstFaultTrigger  = 0;
+static uint8_t       resetCauseSnapshot = 0;
+static bool          prechargeFailed    = false;
+
+// ── Persistencia de fallos en FRAM (MB85RC256V via I²C1 PB8/PB9) ────────────
+// Se loguea: BOOT (con reset cause), transiciones BMS_OK fall/rise,
+// intentos de reInit, fallo de precarga. Lectura con comando 'd' (Serial).
+static FaultLogger   logger;
+
 // ============================================================================
 //  PROTOTIPOS
 // ============================================================================
@@ -206,6 +227,8 @@ void updatePrecharge();
 void updateCanTx();
 void handleSerial();
 void printStatus();
+static void buildDebugFlags(uint8_t out[4]);
+static FaultRecord buildFaultRecord(uint8_t eventType, uint8_t firstFlt);
 
 // ============================================================================
 //  SETUP
@@ -215,8 +238,26 @@ void setup()
     Serial.begin(115200);
     delay(500);
 
+    // Snapshot del último reset (RCC->CSR) ANTES de cualquier clear → consumido
+    // por ID 15 (BMS_DEBUG, B7). Mapeo de bits propio (no el del CSR raw) para
+    // que el receptor no dependa de la familia STM32. En G4 POR y BOR
+    // comparten BORRSTF; OBL = reset por option-byte loader.
+    {
+        uint32_t csr = RCC->CSR;
+        uint8_t  rc  = 0;
+        if (csr & RCC_CSR_LPWRRSTF) rc |= (1 << 0);  // LPWR
+        if (csr & RCC_CSR_WWDGRSTF) rc |= (1 << 1);  // WWDG (window)
+        if (csr & RCC_CSR_IWDGRSTF) rc |= (1 << 2);  // IWDG (independent) ←*
+        if (csr & RCC_CSR_SFTRSTF)  rc |= (1 << 3);  // software reset
+        if (csr & RCC_CSR_BORRSTF)  rc |= (1 << 4);  // POR/BOR (G4: BOR)
+        if (csr & RCC_CSR_PINRSTF)  rc |= (1 << 5);  // NRST pin
+        if (csr & RCC_CSR_OBLRSTF)  rc |= (1 << 7);  // option-byte loader
+        resetCauseSnapshot = rc;
+        __HAL_RCC_CLEAR_RESET_FLAGS();
+    }
+
     // Si el último reset lo causó el watchdog, dejar traza (diagnóstico).
-    if (IWatchdog.isReset(true))
+    if (resetCauseSnapshot & (1 << 2))
         Serial.println(F("[WDG] *** Reset previo causado por el WATCHDOG ***"));
 
     // Estado seguro inicial: BMS_OK lo pone el driver (LOW hasta init OK).
@@ -277,10 +318,18 @@ void setup()
         gCan->setPacketTimer(389, 555);
         gCan->setPacketTimer(390, 554);
         gCan->setPacketTimer(391, 554);
-        Serial.println(F("[CAN] FDCAN listo (500k, IDs 10-14)."));
+        gCan->setPacketTimer(15, 200);    // BMS_DEBUG (todos los fallos por bits)
+        Serial.println(F("[CAN] FDCAN listo (500k, IDs 10-15, 386-392)."));
     }
 
-    Serial.println(F("Cmd: v t a s f c i r"));
+    // ── FRAM logger (MB85RC256V): si está, loguear evento BOOT con
+    //    el resetCauseSnapshot capturado arriba. No bloquea si la FRAM
+    //    no responde — la telemetría sigue funcionando por CAN/Serial.
+    if (logger.begin()) {
+        logger.log(buildFaultRecord(FaultLogger::EVT_BOOT, 0));
+    }
+
+    Serial.println(F("Cmd: v t a s f c i r  d=dump log  D=clear log"));
 
     // Arrancar el watchdog AL FINAL (tras el init/calibración acotados).
     // Una vez iniciado NO se puede parar (es independiente por HW).
@@ -297,8 +346,7 @@ void loop()
     hall.update();        // amperímetro cada ciclo (máxima resolución)
 
     sampleAndEvaluate();  // V/T en cadencia + debounce de fallos
-    soc.update(hall.getCurrent(), bms.getMinVoltage(),
-               bms.isVoltageReadingReliable());   // coulomb + OCV
+    soc.update(hall.getCurrent(), bms.getMinVoltage(), true);   // coulomb + OCV
     // Fail-safe de refrigeración: T no fresca/fiable (lectura T fallida,
     // comms o NTC abierto) → ventiladores 100 % (no fiarse de Tmax rancia).
     bool fanFS = (lastResT != BQResult::OK) || fComm.cond || fNtc.cond;
@@ -341,6 +389,9 @@ void sampleAndEvaluate()
         if ((now - tLastReinit) >= BMS_REINIT_RETRY_MS) {
             tLastReinit = now;
             canNumTriesReset++;
+            // FRAM: persistir el intento (útil para ver cuánto le costó
+            // recuperar la cadena tras un episodio comm).
+            logger.log(buildFaultRecord(FaultLogger::EVT_REINIT_TRY, 4));
             if (bms.reInit()) {
                 bmsInitOk = true;
                 Serial.println(F("[OK] BQ recuperado."));
@@ -352,7 +403,7 @@ void sampleAndEvaluate()
     // ── Voltaje: cada SAMPLE_V_MS. Cadencia 2× sobre la ventana FS para
     //    que el debounce K-de-N del FaultTimer exija ≥2 muestras malas
     //    consecutivas (filtra una muestra ruidosa aislada). ─────────────
-    if ((now - tV) >= SAMPLE_V_MS && bms.isVoltageReadingReliable()) {
+    if ((now - tV) >= SAMPLE_V_MS) {
         tV = now;
         lastResV = bms.readVoltages();
         if      (lastResV == BQResult::COMM_ERROR) canNumCommFails++;
@@ -415,14 +466,36 @@ void updateBmsOk()
     // de debounce al arrancar con init fallido (#3, opción B).
     bmsFault = faultV || faultT || faultNtc || faultComm || faultHall || !bmsInitOk;
 
-    // Telemetría: duración del episodio de fallo (IDs 13/14).
+    // Telemetría: duración del episodio (IDs 13/14) + primer trigger (ID 15 B4).
+    // Y persistencia FRAM: log de FALL al inicio del episodio, RISE al final.
     if (bmsFault) {
-        if (faultEpisodeStart == 0) faultEpisodeStart = now;
+        if (faultEpisodeStart == 0) {
+            faultEpisodeStart = now;
+            // Prioridad arbitraria: si varios entran a la vez, gana el de
+            // mayor severidad de seguridad (V > T > NTC > Comm > Hall > Init).
+            if      (faultV)     firstFaultTrigger = 1;
+            else if (faultT)     firstFaultTrigger = 2;
+            else if (faultNtc)   firstFaultTrigger = 3;
+            else if (faultComm)  firstFaultTrigger = 4;
+            else if (faultHall)  firstFaultTrigger = 5;
+            else if (!bmsInitOk) firstFaultTrigger = 6;
+            else                 firstFaultTrigger = 0;
+            // Persistir en FRAM la transición BMS_OK ↓ (causa raíz + snapshot)
+            logger.log(buildFaultRecord(FaultLogger::EVT_BMS_OK_FALL,
+                                        firstFaultTrigger));
+        }
         unsigned long dur = now - faultEpisodeStart;
         canLastFailMs = (dur > 65535UL) ? 65535 : (uint16_t)dur;
         if (canLastFailMs > canMaxFailMs) canMaxFailMs = canLastFailMs;
     } else {
+        if (faultEpisodeStart != 0) {
+            // Transición BMS_OK ↑ (despeje): log con el firstFault del
+            // episodio que acaba (útil para correlacionar con el FALL).
+            logger.log(buildFaultRecord(FaultLogger::EVT_BMS_OK_RISE,
+                                        firstFaultTrigger));
+        }
         faultEpisodeStart = 0;   // canLastFailMs se mantiene (último episodio)
+        firstFaultTrigger = 0;
     }
 
     // Auto-rearma: cuando todo se despeja, BMS_OK vuelve a HIGH. El latch HW
@@ -450,12 +523,17 @@ void updatePrecharge()
             Serial.println(F("[PRE] Precarga OK."));
         } else if ((millis() - tPrechargeStart) >= PRECHARGE_TIMEOUT_MS) {
             digitalWrite(PIN_PRE_FAIL, HIGH);
+            if (!prechargeFailed) {     // log solo en la transición (1 vez)
+                prechargeFailed = true; // latch SW para ID 15 (B3 b5)
+                logger.log(buildFaultRecord(FaultLogger::EVT_PRECHARGE_FAIL, 0));
+            }
             Serial.println(F("[PRE] FALLO: precarga no completada en 5s."));
         }
     }
     if (!sdcActive) {
         prechargeStarted = false;
         prechargeOk      = false;
+        prechargeFailed  = false;       // se reinicia con SDC abierto
         digitalWrite(PIN_PRE_FAIL, LOW);
     }
 }
@@ -465,9 +543,12 @@ void updatePrecharge()
 //  Módulo m = 2 boards: par (2m) 6 celdas + 6 NTC; impar (2m+1) 5 celdas
 //  + 3 NTC.  V1..V6 = par 0..5 ; V7..V11 = impar 0..4 ; T1..T6 = par
 //  NTC 0..5 ; T7..T9 = impar NTC 0..2.
-//  ⚠ El mapeo Vn↔celda física y la def. de VTotal deben confirmarse
-//    contra el cableado real / lo que espera el dashboard (el diseño
-//    antiguo tenía una inconsistencia en V10/V11/celda dummy).
+//  ✓ Mapeo Vn↔paralelo CONFIRMADO contra cableado (rev. 2026-05-20):
+//    par antes que impar en el daisy-chain, canal 0 del BQ = paralelo
+//    más bajo del rango que mide, canal 5 del impar sin usar (dummy
+//    arriba). El antiguo dummy V10/V11 ya no aplica.
+//  VTotal (campo 4 de ID 389) = suma de los 11 paralelos en mV →
+//    debe coincidir con la tensión medida entre terminales del módulo.
 // ============================================================================
 static float modCellV(int m, int n)   // n = 1..11
 {
@@ -481,6 +562,72 @@ static float modCellT(int m, int k)   // k = 1..9
 }
 static uint16_t mv16(float v) { return (v > 0.0f) ? (uint16_t)lroundf(v * 1000.0f) : 0; }
 static uint8_t  t8(float t)   { return (uint8_t)(int8_t)lroundf(t); }
+
+// ============================================================================
+//  Helpers debug (compartidos por CAN ID 15 y por el FaultLogger en FRAM)
+// ============================================================================
+// buildDebugFlags rellena los 4 bytes B0..B3 del CAN ID 15 (ver
+// docs/CAN_Solo2DL.md §9). Uso desde ambos sitios garantiza coherencia
+// entre lo que ves en el sniffer y lo que queda en FRAM.
+static void buildDebugFlags(uint8_t out[4])
+{
+    out[0] = out[1] = out[2] = out[3] = 0;
+    const unsigned long now = millis();
+
+    // B0 — fallos CONFIRMADOS (drivers de bmsFault)
+    if (fV.confirmed(now,  FAULT_V_MS))    out[0] |= (1 << 0);
+    if (fT.confirmed(now,  FAULT_T_MS))    out[0] |= (1 << 1);
+    if (fNtc.confirmed(now,FAULT_NTC_MS))  out[0] |= (1 << 2);
+    if (fComm.confirmed(now,FAULT_COMM_MS))out[0] |= (1 << 3);
+    if (!hall.isOK())                      out[0] |= (1 << 4);
+    if (!bmsInitOk)                        out[0] |= (1 << 5);
+    if (bmsFault)                          out[0] |= (1 << 7);
+
+    // B1 — sub-fallos del Hall
+    if (hall.isDisconnected())             out[1] |= (1 << 0);
+    if (hall.isStuck())                    out[1] |= (1 << 1);
+    if (hall.isNoisy())                    out[1] |= (1 << 2);
+    if (hall.isOverCurrent())              out[1] |= (1 << 3);
+    if (hall.isAdcSaturated())             out[1] |= (1 << 4);
+
+    // B2 — snapshot V/T sin debounce
+    if (bms.getMinVoltage() < CELL_UV_V)   out[2] |= (1 << 0);
+    if (bms.getMaxVoltage() > CELL_OV_V)   out[2] |= (1 << 1);
+    if (bms.getMinTemp()    < CELL_UT_C)   out[2] |= (1 << 2);
+    if (bms.getMaxTemp()    > CELL_OT_C)   out[2] |= (1 << 3);
+    if (bms.hasOpenNtc())                  out[2] |= (1 << 4);
+    if (lastResV == BQResult::COMM_ERROR)  out[2] |= (1 << 5);
+    if (lastResV == BQResult::CRC_ERROR)   out[2] |= (1 << 6);
+    if (lastResT != BQResult::OK)          out[2] |= (1 << 7);
+
+    // B3 — state
+    if (bms.isOK())                        out[3] |= (1 << 0);
+    if (bmsInitOk)                         out[3] |= (1 << 1);
+    if (gCanOk)                            out[3] |= (1 << 2);
+    if (prechargeStarted)                  out[3] |= (1 << 3);
+    if (prechargeOk)                       out[3] |= (1 << 4);
+    if (prechargeFailed)                   out[3] |= (1 << 5);
+    if (digitalRead(PIN_SDC_3V3))          out[3] |= (1 << 6);
+    if (digitalRead(PIN_VIO_3V3))          out[3] |= (1 << 7);
+}
+
+static FaultRecord buildFaultRecord(uint8_t eventType, uint8_t firstFlt)
+{
+    uint8_t flags[4];
+    buildDebugFlags(flags);
+    FaultRecord r;
+    r.eventType  = eventType;
+    r.firstFault = firstFlt;
+    r.flagsConf  = flags[0];
+    r.flagsHall  = flags[1];
+    r.flagsSnap  = flags[2];
+    r.flagsState = flags[3];
+    r.resetCause = resetCauseSnapshot;
+    r.minV_mV    = (uint16_t)lroundf(bms.getMinVoltage() * 1000.0f);
+    r.maxV_mV    = (uint16_t)lroundf(bms.getMaxVoltage() * 1000.0f);
+    r.maxT_C     = (int8_t)lroundf(bms.getMaxTemp());
+    return r;
+}
 
 // ============================================================================
 //  TELEMETRÍA CAN — resumen IDs 10-14 (docs/Mapa_CAN.txt)
@@ -541,6 +688,42 @@ void updateCanTx()
     uint16_t d14[4] = { canLastFailMs, canNumCommFails,
                         canNumCrcFails, canNumTriesReset };
     gCan->setPacket((uint32_t)14, d14, 4);
+
+    // ── ID 15 (0xF) — BMS_DEBUG: TODOS los fallos por bits (8 bytes) ───────
+    // Layout completo en ARQUITECTURA.md §7 (tabla BMS_DEBUG).
+    //   B0 fallos confirmados (= drivers de bmsFault)
+    //   B1 sub-fallos del Hall (causa raíz del bit Hall de B0)
+    //   B2 snapshot V/T sin debounce (lo que pasa AHORA)
+    //   B3 state (init/CAN/precharge/pines)
+    //   B4 enum primer fallo del episodio actual
+    //   B5-6 duración del episodio actual (u16 ms, big-endian)
+    //   B7 causa del último reset (snapshot RCC->CSR del boot)
+    uint8_t d15[8] = {0};
+
+    // B0..B3 — flags via helper compartido con el FaultLogger.
+    uint8_t flags[4];
+    buildDebugFlags(flags);
+    d15[0] = flags[0];
+    d15[1] = flags[1];
+    d15[2] = flags[2];
+    d15[3] = flags[3];
+
+    // B4 — Primer fallo del episodio actual (enum, ver updateBmsOk).
+    d15[4] = firstFaultTrigger;
+
+    // B5-6 — Duración del episodio actual (u16 ms, big-endian, sat 65535).
+    {
+        uint32_t dur = (faultEpisodeStart != 0)
+                       ? (millis() - faultEpisodeStart) : 0UL;
+        uint16_t durU16 = (dur > 65535UL) ? 65535 : (uint16_t)dur;
+        d15[5] = (uint8_t)((durU16 >> 8) & 0xFF);
+        d15[6] = (uint8_t)(durU16 & 0xFF);
+    }
+
+    // B7 — Causa del último reset (snapshot RCC->CSR del boot).
+    d15[7] = resetCauseSnapshot;
+
+    gCan->setPacket((uint32_t)15, d15, 8);
 
     // ── ID 392 (0x188) — SOC (UINT8, %) ────────────────────────────────────
     uint8_t socv = soc.soc();
@@ -677,6 +860,19 @@ void handleSerial()
         Serial.println(F("Restart..."));
         delay(100);
         NVIC_SystemReset();
+        break;
+
+    case 'd':
+        // Volcado del log persistente (FRAM). Pasamos un callback que
+        // refresca el IWDG durante el dump (puede tardar varios segundos
+        // si el log está lleno: ~18 s a 115200 baud para 2047 records).
+        logger.dumpToSerial([]() { IWatchdog.reload(); });
+        break;
+
+    case 'D':
+        // Reset del log (no borra datos físicos — solo el índice).
+        // Confirmación implícita: D mayúscula es intencional.
+        logger.clearLog();
         break;
 
     default: break;
