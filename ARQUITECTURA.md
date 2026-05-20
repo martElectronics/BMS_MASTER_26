@@ -63,11 +63,19 @@ Un fallo solo baja `BMS_OK` si **persiste**:
 
 | Fallo | Ventana | Fuente |
 |---|---|---|
-| Voltaje (UV/OV) | ≥ 500 ms | V cada 500 ms, solo si lectura fiable |
-| Temperatura (UT/OT) | ≥ 1000 ms | T cada 1000 ms |
+| Voltaje (UV/OV) | ≥ 500 ms | V cada **250 ms**, solo si lectura fiable |
+| Temperatura (UT/OT) | ≥ 1000 ms | T cada **500 ms** |
 | NTC abierto (pérdida de medida, EV5.8.13) | ≥ 1000 ms | `bms.hasOpenNtc()` |
-| Comms BQ caídas | ≥ 500 ms | con `reInit()` de recuperación |
+| Comms BQ caídas | ≥ 500 ms | con `reInit()` rate-limited (#3) |
 | Corriente (sobre-I, Hall) | ≥ 500 ms | debounce interno de HallSensor |
+
+Las cadencias de muestreo son **2× más rápidas que la ventana FS** ⇒
+hay ≥ 2 muestras dentro de cada ventana. El `FaultTimer` exige
+**K = 2 muestras malas consecutivas** *Y* la ventana de wall-time
+para confirmar el fallo (un "OK" cualquiera resetea la serie). Con
+esto: una muestra ruidosa aislada se filtra (no llega a tripar), un
+fallo persistente sigue tripando a los 500 ms / 1000 ms de wall-time
+exactos (FS-compliant).
 
 Implementado con `struct FaultTimer` (timestamp por condición). Un error
 que se corrige antes de su ventana **no** dispara `BMS_OK`.

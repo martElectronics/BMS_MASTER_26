@@ -118,9 +118,11 @@ static constexpr int NUM_MODULES = TOTALBOARDS / 2;
 #define FAULT_NTC_MS  1000UL    ///< NTC abierto (pérdida de medida, clase T)
 #define FAULT_COMM_MS  500UL    ///< Comms BQ caídas sin recuperar
 
-// Cadencias de muestreo (EV5.8: V cada 500 ms, T cada 1000 ms)
-#define SAMPLE_V_MS    500UL
-#define SAMPLE_T_MS   1000UL
+// Cadencias de muestreo: 2× respecto al mínimo FS para tener ≥2 muestras
+// dentro de cada ventana de debounce → mejor filtrado de ruido transitorio.
+// Las ventanas FAULT_V_MS / FAULT_T_MS NO se tocan (las marca FS EV5.8).
+#define SAMPLE_V_MS    250UL
+#define SAMPLE_T_MS    500UL
 #define PRINT_MS      2000UL
 
 #define PRECHARGE_TIMEOUT_MS  5000UL
@@ -135,12 +137,31 @@ static constexpr int NUM_MODULES = TOTALBOARDS / 2;
 //  ESTADO DE FALLOS — debounce NO-latching (auto-rearma; el latch es HW)
 // ============================================================================
 struct FaultTimer {
-    bool          cond = false;   ///< condición presente AHORA
-    unsigned long tStart = 0;     ///< inicio de la condición (ms)
-    bool confirmed(unsigned long now, unsigned long windowMs) {
-        if (!cond) { tStart = 0; return false; }
-        if (tStart == 0) tStart = now;
-        return (now - tStart) >= windowMs;
+    // Debounce K-de-N consecutivas + ventana wall-time.
+    //  - sample(true)  : incrementa badRun (sat 255); fija tStart en
+    //                    el primer "bad" de la serie.
+    //  - sample(false) : un OK borra la serie (badRun=0, tStart=0).
+    //  - confirmed()   : >=k muestras malas consecutivas Y ventana de
+    //                    tiempo cumplida. k=2 filtra ráfagas de UNA
+    //                    sola muestra ruidosa (con cadencia ≥2 muestras
+    //                    por ventana FS, exige 2 consecutivas malas).
+    bool          cond   = false;   ///< última muestra (true=bad)
+    uint8_t       badRun = 0;       ///< muestras malas consecutivas
+    unsigned long tStart = 0;       ///< wall-time del primer bad (ms)
+
+    void sample(bool bad, unsigned long now) {
+        cond = bad;
+        if (bad) {
+            if (badRun == 0) tStart = now;
+            if (badRun < 255) badRun++;
+        } else {
+            badRun = 0;
+            tStart = 0;
+        }
+    }
+    bool confirmed(unsigned long now, unsigned long windowMs,
+                   uint8_t k = 2) const {
+        return (badRun >= k) && ((now - tStart) >= windowMs);
     }
 };
 static FaultTimer fV, fT, fNtc, fComm;
@@ -310,15 +331,13 @@ void updateVio()
 void sampleAndEvaluate()
 {
     static unsigned long tV = 0, tT = 0;
-    static unsigned long tCommLost = 0;
-    static bool commLost = false;
     unsigned long now = millis();
 
     // Si el BQ no está inicializado, NO leer (driver no configurado).
     // Reintentar reInit() rate-limited y forzar fComm (BMS_OK LOW también
     // queda garantizado por updateBmsOk vía !bmsInitOk).
     if (!bmsInitOk) {
-        fComm.cond = true;
+        fComm.sample(true, now);
         if ((now - tLastReinit) >= BMS_REINIT_RETRY_MS) {
             tLastReinit = now;
             canNumTriesReset++;
@@ -330,51 +349,53 @@ void sampleAndEvaluate()
         return;
     }
 
-    // ── Voltaje: cada 500 ms (EV5.8). isVoltageReadingReliable() es
-    //    siempre true en este firmware (no balancea); se mantiene como
-    //    guarda defensiva. ────────────────────────────────────────────────
+    // ── Voltaje: cada SAMPLE_V_MS. Cadencia 2× sobre la ventana FS para
+    //    que el debounce K-de-N del FaultTimer exija ≥2 muestras malas
+    //    consecutivas (filtra una muestra ruidosa aislada). ─────────────
     if ((now - tV) >= SAMPLE_V_MS && bms.isVoltageReadingReliable()) {
         tV = now;
         lastResV = bms.readVoltages();
         if      (lastResV == BQResult::COMM_ERROR) canNumCommFails++;
         else if (lastResV == BQResult::CRC_ERROR)  canNumCrcFails++;
         if (lastResV == BQResult::OK) {
-            fV.cond = (bms.getMinVoltage() < CELL_UV_V) ||
-                      (bms.getMaxVoltage() > CELL_OV_V);
+            bool badV = (bms.getMinVoltage() < CELL_UV_V) ||
+                        (bms.getMaxVoltage() > CELL_OV_V);
+            fV.sample(badV, now);
         }
     }
 
-    // ── Temperatura + NTC abierto: cada 1000 ms (siempre fiable) ────────────
+    // ── T + NTC abierto: cada SAMPLE_T_MS, idem ─────────────────────────
     if ((now - tT) >= SAMPLE_T_MS) {
         tT = now;
         lastResT = bms.readTemperatures();
         if      (lastResT == BQResult::COMM_ERROR) canNumCommFails++;
         else if (lastResT == BQResult::CRC_ERROR)  canNumCrcFails++;
         if (lastResT == BQResult::OK) {
-            fT.cond   = (bms.getMinTemp() < CELL_UT_C) ||
+            bool badT = (bms.getMinTemp() < CELL_UT_C) ||
                         (bms.getMaxTemp() > CELL_OT_C);
-            // Pérdida de medida térmica (EV5.8.13): NTC abierto/ inválido.
-            fNtc.cond = bms.hasOpenNtc();
+            fT.sample(badT, now);
+            // Pérdida de medida térmica (EV5.8.13): NTC abierto/inválido.
+            fNtc.sample(bms.hasOpenNtc(), now);
         }
     }
 
-    // ── Pérdida de comunicación BQ ──────────────────────────────────────────
+    // ── Pérdida de comunicación BQ ──────────────────────────────────────
+    // sample() cada loop: el FaultTimer pinea tStart al primer error y
+    // confirma tras FAULT_COMM_MS de wall-time (sustituye al
+    // commLost/tCommLost manual; mismo efecto, código uniforme).
     bool readErr = (lastResV != BQResult::OK) || (lastResT != BQResult::OK);
+    fComm.sample(readErr, now);
     if (readErr) {
-        if (!commLost) { commLost = true; tCommLost = now; }
-        fComm.cond = ((now - tCommLost) >= FAULT_COMM_MS);
         // Reintento con rate-limit (#3, opción B): reInit() bloquea
-        // unos segundos; con commLost persistente lo limitamos a uno
-        // cada BMS_REINIT_RETRY_MS (NO en cada flanco, NO en cada loop).
+        // unos segundos; lo limitamos a uno cada BMS_REINIT_RETRY_MS
+        // (NO en cada flanco, NO en cada loop).
         if ((now - tLastReinit) >= BMS_REINIT_RETRY_MS) {
             tLastReinit = now;
             canNumTriesReset++;
             bms.reInit();
         }
-    } else {
-        commLost   = false;
-        fComm.cond = false;
     }
+    // (else: fComm.sample(false) ya reseteó badRun/tStart arriba)
 }
 
 // ============================================================================
