@@ -86,7 +86,7 @@
 #define HALL_ADC_SAT_MARGIN  50     ///< Margen antes del rail para considerar saturación
 
 // ── Watchdog ────────────────────────────────────────────────────────────────
-#define HALL_WD_ADC_MIN      50        ///< ADC por debajo de esto → en el raíl bajo
+#define HALL_WD_ADC_MIN      150       ///< ADC por debajo de esto → raíl bajo (=cable roto). Margen: un canal suelto da 0-48 cuentas; la corriente legítima más baja (-7A) da raw ~1640.
 #define HALL_WD_ADC_MAX      4045      ///< ADC por encima de esto → en el raíl alto
 #define HALL_WD_STUCK_US     500000UL  ///< Ventana sin dither de ADC → congelado (us)
 
@@ -107,6 +107,13 @@
 // el OTRO canal NO corrobora una corriente grande real (|I_otro| < esto),
 // el raíl se debe a desconexión, no a sobre-rango legítimo.
 #define HALL_WD_DISC_CORROB_A   20.0f  ///< [TUNE] corriente mínima que corrobora un raíl real
+
+// Ventana de validez del offset en reposo. La salida del DHAB a 0 A es Vcc/2;
+// tras el divisor ≈ 1.62 V en el ADC. Si el begin() calibra fuera de esta
+// ventana, el sensor está desconectado/railado/mal alimentado al arrancar →
+// no fiarse (isOK()=false hasta reinit con sensor sano).
+#define HALL_OFFSET_MIN_V       1.40f  ///< V en el ADC (mínimo plausible a 0 A)
+#define HALL_OFFSET_MAX_V       1.85f  ///< V en el ADC (máximo plausible a 0 A)
 
 // Límites de corriente (Formula Student)
 #define HALL_I_MAX_DISCHARGE  170.0f  ///< Corriente máxima de descarga (A)
@@ -156,8 +163,12 @@ public:
 
     // ─── Estado de fallos ─────────────────────────────────────────────────────
 
-    /** @return true si NO hay fallo confirmado. Usar para gobernar BMS_OK. */
-    bool isOK() const { return !_faultConfirmed; }
+    /** @return true si NO hay fallo confirmado Y el offset del boot es válido.
+     *  Usar para gobernar BMS_OK. */
+    bool isOK() const { return _offsetValid && !_faultConfirmed; }
+
+    /** @return true si el offset calibrado al arrancar cayó en rango plausible. */
+    bool isOffsetValid() const { return _offsetValid; }
 
     /** @return true si el sensor parece desconectado (raíl sin corroborar). */
     bool isDisconnected() const { return _sensorDisconnected; }
@@ -216,6 +227,7 @@ private:
 
     bool _faultConfirmed = false;
     bool _overCurrent    = false;
+    bool _offsetValid    = false;   ///< true si el offset del begin() es plausible
 
     // ─── Funciones privadas ───────────────────────────────────────────────────
     void _updateWatchdog(int raw30, int raw350, float i30, float i350);

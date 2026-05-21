@@ -61,7 +61,20 @@ void HallSensor::begin()
 
     Serial.printf("[HALL] Offset 30A=%.4fV  Offset 350A=%.4fV\n",
                   _offset30Init, _offset350Init);
-    Serial.println(F("[HALL] Calibracion completada."));
+
+    // Sanity check: a 0 A el offset debe caer cerca de Vcc/2 × divisor (~1.62V).
+    // Fuera de ventana = sensor desconectado/railado/mal alimentado al arrancar.
+    // isOK() devolverá false hasta que se recalibre con el sensor sano (reinit).
+    _offsetValid =
+        (_offset30Init  > HALL_OFFSET_MIN_V && _offset30Init  < HALL_OFFSET_MAX_V) &&
+        (_offset350Init > HALL_OFFSET_MIN_V && _offset350Init < HALL_OFFSET_MAX_V);
+
+    if (_offsetValid) {
+        Serial.println(F("[HALL] Calibracion completada."));
+    } else {
+        Serial.println(F("[HALL] *** WARN: offset fuera de ~1.62V -> sensor "
+                         "desconectado/mal al boot. isOK()=false hasta reinit. ***"));
+    }
 }
 
 
@@ -100,7 +113,11 @@ void HallSensor::update()
             _usingLowRange = false;
         }
     } else {
-        if (!_adcSat350 && fabsf(i350) < HALL_THRESH_DOWN) {
+        // No volver al rango 30A si ESE canal está railado (p.ej. desconectado):
+        // el !_adcSat30 evita el ping-pong de rango que rompía el debounce de
+        // desconexión (un canal 30A roto saturaba → cambiaba a 350A → volvía a
+        // 30A → ... y el flag D nunca aguantaba los 500 ms). Bug de banco.
+        if (!_adcSat350 && !_adcSat30 && fabsf(i350) < HALL_THRESH_DOWN) {
             _usingLowRange = true;
         }
     }
@@ -134,21 +151,29 @@ void HallSensor::_updateWatchdog(int raw30, int raw350, float i30, float i350)
 {
     unsigned long now = micros();
 
-    const int   activeRaw = _usingLowRange ? raw30 : raw350;
-    const float otherI    = _usingLowRange ? i350  : i30;
+    const int activeRaw = _usingLowRange ? raw30 : raw350;
 
-    // ── Desconexión (incluye fallo de UN canal) ───────────────────────────────
-    // a) Ambos canales en un raíl → sensor/alimentación caídos.
-    // b) El canal ACTIVO en un raíl PERO el otro NO corrobora una corriente
-    //    grande real → el raíl es por desconexión, no por sobre-rango.
-    const bool bothRailed =
-        (raw30 < HALL_WD_ADC_MIN && raw350 < HALL_WD_ADC_MIN) ||
-        (raw30 > HALL_WD_ADC_MAX && raw350 > HALL_WD_ADC_MAX);
-    const bool activeRailed =
-        (activeRaw < HALL_WD_ADC_MIN) || (activeRaw > HALL_WD_ADC_MAX);
+    // ── Desconexión (robusta, sin depender del canal activo ni del ruido) ──────
+    // Hardware: un canal DESCONECTADO se va a ~0 cuentas (el 33k del divisor
+    // tira el pin a GND). En ESTA aplicación ninguna corriente legítima lleva un
+    // canal tan bajo (carga máx -7 A → raw ~1640; un raíl bajo implicaría
+    // < -38 A en el canal 30A o < -600 A en el 350A). Por eso:
+    //   railado BAJO = cable roto, SIN corroboración → inmune al ruido.
+    // (El canal 350A es de baja resolución: su corriente calculada salta ±15 A,
+    //  lo que con la corroboración antigua hacía parpadear D y rompía el
+    //  debounce de 500 ms. Bug encontrado en banco.)
+    const bool ch30Low   = (raw30  < HALL_WD_ADC_MIN);
+    const bool ch350Low  = (raw350 < HALL_WD_ADC_MIN);
+    const bool ch30High  = (raw30  > HALL_WD_ADC_MAX);
+    const bool ch350High = (raw350 > HALL_WD_ADC_MAX);
 
-    _sensorDisconnected = bothRailed ||
-        (activeRailed && fabsf(otherI) < HALL_WD_DISC_CORROB_A);
+    // Railado ALTO sí puede ser descarga legítima (el canal 30A satura por
+    // arriba a >~39 A, antes de cambiar al de 350A). Solo es desconexión (corto
+    // a Vcc) si el OTRO canal NO corrobora una corriente alta real.
+    const bool ch30HighDisc  = ch30High  && (i350 < HALL_WD_DISC_CORROB_A);
+    const bool ch350HighDisc = ch350High && (i30  < HALL_WD_DISC_CORROB_A);
+
+    _sensorDisconnected = ch30Low || ch350Low || ch30HighDisc || ch350HighDisc;
 
     // En el ciclo de cambio de rango el canal activo cambia: hay una
     // discontinuidad legítima en raw/corriente. No medir stuck/noise aquí.
