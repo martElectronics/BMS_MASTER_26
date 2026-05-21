@@ -51,9 +51,17 @@
 //  CONFIGURACIÓN DEL SENSOR
 // ============================================================================
 
-// Sensibilidades del DHAB S/118 (V/A)
-#define HALL_SENS_30A    0.066f   ///< 66 mV/A — canal de alta resolución
-#define HALL_SENS_350A   0.004f   ///< 4 mV/A  — canal de baja resolución
+// Divisor de entrada al ADC: 18k serie + 33k a GND. Teórico = 0.647.
+// VALIDADO en banco (2026-05-21) por DOS métodos independientes que coinciden:
+//   · offset 0 A: salida sensor 2.49 V → ADC 1.623 V → 1.623/2.49 = 0.652
+//   · ganancia 3 puntos: 0 A→0, 5 A→5.0, 10 A→10.0 → sens real ≈ 0.0430 V/A
+//     = 0.066 nativo × 0.652
+// ⚠ El begin() DEBE calibrar con 0 A reales: si el cero sale mal, toda la
+//   escala se desplaza (un boot previo dio offset 1.4975 V en vez de ~1.62 V
+//   y leía ~10 % alto). Comprobar que en reposo el offset ≈ 1.62 V.
+#define HALL_DIVIDER     0.652f   ///< 18k/33k validado en banco (teórico 0.647)
+#define HALL_SENS_30A    (0.066f * HALL_DIVIDER)  ///< ≈ 0.0430 V/A en el pin (±30A)
+#define HALL_SENS_350A   (0.004f * HALL_DIVIDER)  ///< ≈ 0.00261 V/A en el pin (±350A)
 
 // Tensión de referencia y resolución del ADC
 #define HALL_VREF        3.3f     ///< Tensión de referencia del ADC (V)
