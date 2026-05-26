@@ -306,19 +306,7 @@ void setup()
     if (!gCanOk) {
         Serial.println(F("[CAN] FDCAN init FALLO — TX CAN deshabilitada."));
     } else {
-        gCan->setPacketTimer(10, 800);   // periodos de docs/Mapa_CAN.txt
-        gCan->setPacketTimer(11, 799);
-        gCan->setPacketTimer(12, 799);
-        gCan->setPacketTimer(13, 798);
-        gCan->setPacketTimer(14, 200);
-        gCan->setPacketTimer(392, 553);   // SOC
-        gCan->setPacketTimer(386, 557);   // detalle/módulo (paginado)
-        gCan->setPacketTimer(387, 556);
-        gCan->setPacketTimer(388, 556);
-        gCan->setPacketTimer(389, 555);
-        gCan->setPacketTimer(390, 554);
-        gCan->setPacketTimer(391, 554);
-        gCan->setPacketTimer(15, 200);    // BMS_DEBUG (todos los fallos por bits)
+        gCan->configurePacketTimersByPriority();   // BMS_DEBUG (todos los fallos por bits)
         Serial.println(F("[CAN] FDCAN listo (500k, IDs 10-15, 386-392)."));
     }
 
