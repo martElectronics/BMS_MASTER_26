@@ -11,11 +11,15 @@
  *     tanto BMS_OK es una señal de SALUD: NO-latching, con debounce, y
  *     AUTO-REARMA cuando el fallo se despeja. El HW retiene el SDC abierto
  *     hasta el reset manual; el firmware nunca debe sostener el latch.
+ *   · ⚠ POLARIDAD INVERTIDA (solo rama testing): BMS_OK OK = LOW,
+ *     fallo = HIGH (en las demás ramas es al revés: OK = HIGH). Donde
+ *     abajo se diga "BMS_OK LOW/cae" como estado de FALLO, léase HIGH;
+ *     "BMS_OK HIGH/sube" como estado OK, léase LOW.
  *   · El indicador rojo "AMS" lo enciende el latch HW (EV5.8.12) → SIN
  *     código en firmware.
  *   · Debounce por normativa: V leída/evaluada cada 500 ms y el fallo debe
  *     persistir ≥500 ms; T cada 1000 ms y ≥1000 ms. Un error que se corrige
- *     antes de su ventana NO baja BMS_OK.
+ *     antes de su ventana NO dispara fallo en BMS_OK.
  *   · Pérdida de medida (NTC abierto, comms BQ caídas) → fallo (EV5.8.13).
  *   · Sobre-I la gestiona HallSensor (debounce 500 ms propio).
  *
@@ -27,6 +31,7 @@
  * ── COMANDOS SERIE ──────────────────────────────────────────────────────────
  *   v=voltajes  t=temps  a=amperimetro  s=status  f=fallos
  *   c=limpiar fallos BQ  i=re-init BQ  r=restart MCU
+ *   d=volcar log FRAM  D=reset índice log  C=reset contadores fallo (ID 16)
  *
  * ── PENDIENTE ───────────────────────────────────────────────────────────────
  *   · CAN (lib propia) y PWM ventiladores: marcados TODO, sin lib aún.
@@ -61,7 +66,6 @@
 #define PIN_BMS_OK      PB_5    ///< Señal al SDC. La gestiona el driver (setBmsOk).
 
 // Control SDC / estado (gestionados por el main)
-#define PIN_MC_OK           PA_6   ///< HIGH siempre que el micro esté vivo
 #define PIN_PRE_FAIL        PA_7   ///< HIGH si la precarga no termina a tiempo
 #define PIN_OE_TXS          PB_10  ///< OE del level shifter (gated por VIO_3V3)
 #define PIN_VIO_3V3         PB_0   ///< HIGH → activar OE_TXS
@@ -132,10 +136,8 @@ static constexpr int NUM_MODULES = TOTALBOARDS / 2;
 #define SAMPLE_T_MS    500UL
 #define PRINT_MS      2000UL
 
-#define PRECHARGE_TIMEOUT_MS  5000UL
-
 // Watchdog HW independiente: si el loop() se cuelga y no se refresca,
-// el IWDG resetea el MCU → BMS_OK cae (fail-safe). 8 s: por encima
+// el IWDG resetea el MCU → BMS_OK pasa a fallo (HIGH en esta rama). 8 s: por encima
 // del peor caso normal incl. reInit() (que bloquea — ver §9.4 del doc;
 // bajar este valor exige hacer reInit no bloqueante).
 #define WDG_TIMEOUT_US        8000000UL
@@ -187,7 +189,6 @@ static BQResult lastResV = BQResult::OK, lastResT = BQResult::OK;
 // Precarga
 static bool          prechargeStarted = false;
 static bool          prechargeOk      = false;
-static unsigned long tPrechargeStart  = 0;
 
 // ============================================================================
 //  TELEMETRÍA CAN (resumen IDs 10-14; ver docs/Mapa_CAN.txt)
@@ -203,14 +204,22 @@ static unsigned long faultEpisodeStart= 0;   ///< ms inicio episodio fallo (0=si
 static uint16_t      canLastFailMs    = 0;   ///< duración (ms) episodio actual/último
 static uint16_t      canMaxFailMs     = 0;   ///< máx duración de episodio vista
 
+// Contadores por causa (ID 16): nº de veces que cada fallo confirmado ha
+// disparado desde el último reset. Se incrementan en el FLANCO DE SUBIDA
+// (así captan episodios cortos que no verías en vivo). uint8 saturado a 255.
+static uint8_t       cntFltV    = 0;   ///< episodios de fallo de tensión
+static uint8_t       cntFltT    = 0;   ///< episodios de fallo de temperatura
+static uint8_t       cntFltNtc  = 0;   ///< episodios de NTC abierto
+static uint8_t       cntFltComm = 0;   ///< episodios de comms BQ caídas
+static uint8_t       cntFltHall = 0;   ///< episodios de fallo del Hall
+static uint8_t       cntFltInit = 0;   ///< episodios de init BQ fallido
+
 // ── Debug / diagnóstico (ID 15 BMS_DEBUG) ──────────────────────────────────
 // firstFaultTrigger : primer fallo que entró en este episodio (enum B4 ID 15)
 //   0=none 1=V 2=T 3=NTC 4=Comm 5=Hall 6=!Init
 // resetCauseSnapshot: RCC->CSR capturado al boot (bitfield B7 ID 15)
-// prechargeFailed   : latch SW del timeout 5 s de precarga (igual que pin PRE_FAIL)
 static uint8_t       firstFaultTrigger  = 0;
 static uint8_t       resetCauseSnapshot = 0;
-static bool          prechargeFailed    = false;
 
 // ── Persistencia de fallos en FRAM (MB85RC256V via I²C1 PB8/PB9) ────────────
 // Se loguea: BOOT (con reset cause), transiciones BMS_OK fall/rise,
@@ -261,7 +270,6 @@ void setup()
         Serial.println(F("[WDG] *** Reset previo causado por el WATCHDOG ***"));
 
     // Estado seguro inicial: BMS_OK lo pone el driver (LOW hasta init OK).
-    pinMode(PIN_MC_OK,   OUTPUT); digitalWrite(PIN_MC_OK,   HIGH); // micro vivo
     pinMode(PIN_PRE_FAIL,OUTPUT); digitalWrite(PIN_PRE_FAIL, LOW);
     pinMode(PIN_OE_TXS,  OUTPUT); digitalWrite(PIN_OE_TXS,  LOW);
     pinMode(PIN_VIO_3V3,        INPUT);
@@ -281,15 +289,15 @@ void setup()
 
     // Init NO BLOQUEANTE (#3, opción B): si begin() falla, NO colgamos
     // esperando 'i'. El loop arranca igualmente y sampleAndEvaluate()
-    // reintenta reInit() cada BMS_REINIT_RETRY_MS. BMS_OK forzado LOW
-    // mientras !bmsInitOk (ver updateBmsOk: bmsFault |= !bmsInitOk).
+    // reintenta reInit() cada BMS_REINIT_RETRY_MS. BMS_OK forzado a fallo
+    // (HIGH) mientras !bmsInitOk (ver updateBmsOk: bmsFault |= !bmsInitOk).
     Serial.println(F("Iniciando BQ79606..."));
     bmsInitOk = bms.begin();
     if (bmsInitOk) {
         Serial.println(F("[OK] BQ79606 listo."));
     } else {
         tLastReinit = millis();
-        Serial.println(F("[WARN] BQ init FALLO. BMS_OK LOW; reintento en loop cada 2s."));
+        Serial.println(F("[WARN] BQ init FALLO. BMS_OK en fallo (HIGH); reintento en loop cada 2s."));
     }
 
     // SOC: init desde OCV (se asume coche EN REPOSO al arrancar).
@@ -307,7 +315,8 @@ void setup()
         Serial.println(F("[CAN] FDCAN init FALLO — TX CAN deshabilitada."));
     } else {
         gCan->configurePacketTimersByPriority();   // BMS_DEBUG (todos los fallos por bits)
-        Serial.println(F("[CAN] FDCAN listo (500k, IDs 10-15, 386-392)."));
+        gCan->setPacketTimer(16, 500);             // ID 16 contadores de fallo: 500 ms
+        Serial.println(F("[CAN] FDCAN listo (500k, IDs 10-16, 386-392)."));
     }
 
     // ── FRAM logger (MB85RC256V): si está, loguear evento BOOT con
@@ -317,7 +326,7 @@ void setup()
         logger.log(buildFaultRecord(FaultLogger::EVT_BOOT, 0));
     }
 
-    Serial.println(F("Cmd: v t a s f c i r  d=dump log  D=clear log"));
+    Serial.println(F("Cmd: v t a s f c i r  d=dump log  D=clear log  C=clear cnt"));
 
     // Arrancar el watchdog AL FINAL (tras el init/calibración acotados).
     // Una vez iniciado NO se puede parar (es independiente por HW).
@@ -349,7 +358,7 @@ void loop()
 
     // Refrescar el watchdog SOLO si la iteración completa terminó: si el
     // loop se cuelga en cualquier punto, el IWDG no se refresca → reset
-    // → BMS_OK LOW (fail-safe). No mover esto al principio del loop.
+    // → BMS_OK a fallo (HIGH en esta rama). No mover esto al principio del loop.
     IWatchdog.reload();
 }
 
@@ -370,7 +379,7 @@ void sampleAndEvaluate()
     unsigned long now = millis();
 
     // Si el BQ no está inicializado, NO leer (driver no configurado).
-    // Reintentar reInit() rate-limited y forzar fComm (BMS_OK LOW también
+    // Reintentar reInit() rate-limited y forzar fComm (BMS_OK en fallo
     // queda garantizado por updateBmsOk vía !bmsInitOk).
     if (!bmsInitOk) {
         fComm.sample(true, now);
@@ -449,10 +458,25 @@ void updateBmsOk()
     bool faultNtc  = fNtc.confirmed(now, FAULT_NTC_MS);
     bool faultComm = fComm.confirmed(now, FAULT_COMM_MS);
     bool faultHall = !hall.isOK();      // HallSensor ya debounced 500 ms
+    bool faultInit = !bmsInitOk;
 
-    // !bmsInitOk fuerza fault para que BMS_OK quede LOW sin ventana
-    // de debounce al arrancar con init fallido (#3, opción B).
-    bmsFault = faultV || faultT || faultNtc || faultComm || faultHall || !bmsInitOk;
+    // Contadores por causa (ID 16): incrementar en el FLANCO de subida de
+    // cada fallo confirmado (0→1). Capta episodios cortos aunque ya se hayan
+    // despejado al mirar el bus. Saturan a 255 para no dar la vuelta.
+    static bool pV = false, pT = false, pNtc = false,
+                pComm = false, pHall = false, pInit = false;
+    if (faultV    && !pV   && cntFltV    < 255) cntFltV++;
+    if (faultT    && !pT   && cntFltT    < 255) cntFltT++;
+    if (faultNtc  && !pNtc && cntFltNtc  < 255) cntFltNtc++;
+    if (faultComm && !pComm&& cntFltComm < 255) cntFltComm++;
+    if (faultHall && !pHall&& cntFltHall < 255) cntFltHall++;
+    if (faultInit && !pInit&& cntFltInit < 255) cntFltInit++;
+    pV = faultV; pT = faultT; pNtc = faultNtc;
+    pComm = faultComm; pHall = faultHall; pInit = faultInit;
+
+    // !bmsInitOk fuerza fault para que BMS_OK quede en fallo (HIGH) sin
+    // ventana de debounce al arrancar con init fallido (#3, opción B).
+    bmsFault = faultV || faultT || faultNtc || faultComm || faultHall || faultInit;
 
     // Telemetría: duración del episodio (IDs 13/14) + primer trigger (ID 15 B4).
     // Y persistencia FRAM: log de FALL al inicio del episodio, RISE al final.
@@ -486,8 +510,8 @@ void updateBmsOk()
         firstFaultTrigger = 0;
     }
 
-    // Auto-rearma: cuando todo se despeja, BMS_OK vuelve a HIGH. El latch HW
-    // mantiene el SDC abierto hasta el reset manual humano (EV6.1.6).
+    // Auto-rearma: cuando todo se despeja, BMS_OK vuelve a OK (LOW en esta
+    // rama). El latch HW mantiene el SDC abierto hasta el reset manual humano (EV6.1.6).
     bms.setBmsOk(!bmsFault);
 }
 
@@ -501,7 +525,6 @@ void updatePrecharge()
 
     if (sdcActive && !prechargeStarted && !prechargeOk) {
         prechargeStarted = true;
-        tPrechargeStart  = millis();
         Serial.println(F("[PRE] Precarga iniciada."));
     }
     if (prechargeStarted && !prechargeOk) {
@@ -509,19 +532,11 @@ void updatePrecharge()
             prechargeOk = true;
             digitalWrite(PIN_PRE_FAIL, LOW);
             Serial.println(F("[PRE] Precarga OK."));
-        } else if ((millis() - tPrechargeStart) >= PRECHARGE_TIMEOUT_MS) {
-            digitalWrite(PIN_PRE_FAIL, HIGH);
-            if (!prechargeFailed) {     // log solo en la transición (1 vez)
-                prechargeFailed = true; // latch SW para ID 15 (B3 b5)
-                logger.log(buildFaultRecord(FaultLogger::EVT_PRECHARGE_FAIL, 0));
-            }
-            Serial.println(F("[PRE] FALLO: precarga no completada en 5s."));
         }
     }
     if (!sdcActive) {
         prechargeStarted = false;
         prechargeOk      = false;
-        prechargeFailed  = false;       // se reinicia con SDC abierto
         digitalWrite(PIN_PRE_FAIL, LOW);
     }
 }
@@ -594,7 +609,6 @@ static void buildDebugFlags(uint8_t out[4])
     if (gCanOk)                            out[3] |= (1 << 2);
     if (prechargeStarted)                  out[3] |= (1 << 3);
     if (prechargeOk)                       out[3] |= (1 << 4);
-    if (prechargeFailed)                   out[3] |= (1 << 5);
     if (digitalRead(PIN_SDC_3V3))          out[3] |= (1 << 6);
     if (digitalRead(PIN_VIO_3V3))          out[3] |= (1 << 7);
 }
@@ -637,7 +651,8 @@ void updateCanTx()
     bool condNow = fV.cond || fT.cond || fNtc.cond || fComm.cond || !hall.isOK();
     uint8_t st = 0;
     if (bmsFault)                                  st |= (1 << 0); // B0 StsFail
-    // B1, B2: reservados (0)
+    if (!bmsFault)                                 st |= (1 << 1); // B1 BMSok (=!bmsFault)
+    if (digitalRead(PIN_SDC_3V3))                  st |= (1 << 2); // B2 SDC presente
     if (condNow)                                   st |= (1 << 3); // B3 failCondition
     if (fComm.confirmed(millis(), FAULT_COMM_MS))  st |= (1 << 4); // B4 COMM
     if (fV.confirmed(millis(), FAULT_V_MS))        st |= (1 << 5); // B5 VOLT
@@ -712,6 +727,13 @@ void updateCanTx()
     d15[7] = resetCauseSnapshot;
 
     gCan->setPacket((uint32_t)15, d15, 8);
+
+    // ── ID 16 (0x10) — contadores de fallo por causa (6×UINT8) ─────────────
+    // nº de episodios de cada fallo desde el último reset (flanco de subida).
+    // Post-mortem rápido: si no viste el fallo en vivo, mira qué contador subió.
+    uint8_t d16[6] = { cntFltV, cntFltT, cntFltNtc,
+                       cntFltComm, cntFltHall, cntFltInit };
+    gCan->setPacket((uint32_t)16, d16, 6);
 
     // ── ID 392 (0x188) — SOC (UINT8, %) ────────────────────────────────────
     uint8_t socv = soc.soc();
@@ -863,6 +885,12 @@ void handleSerial()
         logger.clearLog();
         break;
 
+    case 'C':
+        // Reset de los contadores de fallo por causa (CAN ID 16).
+        cntFltV = cntFltT = cntFltNtc = cntFltComm = cntFltHall = cntFltInit = 0;
+        Serial.println(F("Contadores de fallo (ID 16) reseteados a 0."));
+        break;
+
     default: break;
     }
 }
@@ -874,7 +902,7 @@ void printStatus()
 {
     Serial.println(F("\n=== BMS STATUS ==="));
     Serial.printf("BMS_OK:   %s%s\n",
-                  bmsFault ? "LOW (FALLO)" : "HIGH (OK)",
+                  bmsFault ? "HIGH (FALLO)" : "LOW (OK)",
                   bmsFault ? "" : "  [latch SDC es HW]");
     Serial.printf("V: min=%.3f max=%.3f d=%.1fmV\n",
                   bms.getMinVoltage(), bms.getMaxVoltage(), bms.getVoltageDelta());
@@ -892,6 +920,8 @@ void printStatus()
                   fNtc.confirmed(millis(), FAULT_NTC_MS),
                   fComm.confirmed(millis(), FAULT_COMM_MS),
                   !hall.isOK());
+    Serial.printf("Cnt(ID16): V=%u T=%u NTC=%u COMM=%u HALL=%u INIT=%u  [C=reset]\n",
+                  cntFltV, cntFltT, cntFltNtc, cntFltComm, cntFltHall, cntFltInit);
     Serial.printf("PRE_FAIL=%s  VIO=%s  SDC=%s\n",
                   digitalRead(PIN_PRE_FAIL) ? "HIGH" : "LOW",
                   digitalRead(PIN_VIO_3V3)  ? "HIGH" : "LOW",

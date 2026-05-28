@@ -138,7 +138,7 @@ struct BQConfig {
     uint8_t  uartPort;     ///< Solo ESP32 (índice de UART). No usado en STM32.
     BQPin    pinWake;      ///< Pin WAKE del BQ79606. Pulso LOW activa el IC desde shutdown.
     BQPin    pinFault;     ///< Pin FAULT del BQ79606 (entrada). LOW = hay fallo hardware.
-    BQPin    pinBmsOk;     ///< Pin BMS_OK hacia el SDC. HIGH = todo OK, LOW = fallo.
+    BQPin    pinBmsOk;     ///< Pin BMS_OK hacia el SDC. LOW = todo OK, HIGH = fallo.
     BQPin    pinRx;        ///< Pin RX de la UART del microcontrolador.
     BQPin    pinTx;        ///< Pin TX de la UART del microcontrolador.
     int32_t  pinTxEnable;  ///< Pin OE del level shifter. -1 si no se usa; si se usa, valor de pin.
@@ -529,7 +529,7 @@ public:
      * @brief Inicializa el BMS: pines, UART, autoadressing y configuración de ADC.
      *
      * Secuencia interna:
-     *   1. Configura pines: Wake (HIGH), BmsOk (LOW), Fault (INPUT), TxEnable (HIGH).
+     *   1. Configura pines: Wake (HIGH), BmsOk (HIGH=fallo), Fault (INPUT), TxEnable (HIGH).
      *   2. Abre la UART al baudrate configurado.
      *   3. Intenta el autoadressing hasta _maxAttempts veces:
      *      - Genera pulso WAKE
@@ -703,13 +703,13 @@ public:
 
     /**
      * @brief Limpia el latch de seguridad y, si el driver está OK, vuelve
-     * a poner BMS_OK en HIGH. Llamar solo cuando la causa esté resuelta.
+     * a poner BMS_OK en LOW (OK). Llamar solo cuando la causa esté resuelta.
      * Reanuda la vigilancia.
      */
     void clearSafetyLatch();
 
     /**
-     * @brief Controla el pin BMS_OK hacia el SDC (HIGH = OK, LOW = fallo).
+     * @brief Controla el pin BMS_OK hacia el SDC (LOW = OK, HIGH = fallo).
      * Escribe solo en los cambios de estado.
      */
     void setBmsOk(bool ok);

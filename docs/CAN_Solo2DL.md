@@ -51,6 +51,7 @@
 | 13 | 0x0D | 4  | 798 ms | maxFailTime, numTriesReset |
 | 14 | 0x0E | 8  | 200 ms | lastFailTime, contadores comm/CRC/reset |
 | **15** | **0x0F** | **8** | **200 ms** | **BMS_DEBUG — granularidad por bit** |
+| 16 | 0x10 | 6 | 500 ms | Contadores de fallo por causa (6×UINT8) |
 | 386 | 0x182 | 8 | 557 ms paginado | IDmod, V1, V2, V3 |
 | 387 | 0x183 | 8 | 556 ms paginado | IDmod, V4, V5, V6 |
 | 388 | 0x184 | 8 | 556 ms paginado | IDmod, V7, V8, V9 |
@@ -69,21 +70,22 @@ El campo `IDmod` (byte 0-1) te dice de cuál es la trama.
 
 ```
 Byte 0:  [b7][b6][b5][b4][b3][b2][b1][b0]
-          AUTO AMP VOLT COMM cond res res Sts
-          ADDR             Now              Fail
+          AUTO AMP VOLT COMM cond SDC BMS Sts
+          ADDR             Now         ok  Fail
 ```
 
 | Canal | Short | Byte | Bit | Len | Tipo | Descripción |
 |---|---|---|---|---|---|---|
 | BMS_StsFail    | SFAI | 0 | 0 | 1 | bool | `bmsFault` global (OR confirmado) |
+| BMS_Ok         | BMOK | 0 | 1 | 1 | bool | `!bmsFault` (pack sano) |
+| BMS_SDC        | PSDC | 0 | 2 | 1 | bool | SDC presente (`PIN_SDC_3V3` HIGH) |
 | BMS_CondNow    | FCON | 0 | 3 | 1 | bool | Alguna condición SAMPLE activa (sin debounce) |
 | BMS_CommErr    | ECOM | 0 | 4 | 1 | bool | `fComm.confirmed` (≥500 ms) |
 | BMS_VoltErr    | EVOL | 0 | 5 | 1 | bool | `fV.confirmed` (≥500 ms) |
 | BMS_AmpErr     | EAMP | 0 | 6 | 1 | bool | `!hall.isOK()` |
 | BMS_AutoAddrOk | EAUT | 0 | 7 | 1 | bool | AutoAddress completado |
 
-> Los bits 1 y 2 están reservados (siempre 0). Sin bit propio para `fT`,
-> `fNtc`, `!bmsInitOk`, `prechargeFailed` — usar **ID 15** para esos.
+> Sin bit propio para `fT`, `fNtc`, `!bmsInitOk` — usar **ID 15** para esos.
 >
 > Nota nomenclatura: he renombrado los antiguos `*ErrorLatch` por `*Err`
 > porque el firmware nuevo es **no-latching** (el latch es HW). Mantén los
@@ -207,7 +209,6 @@ B7: causa del último reset
 | State_CanOk     | SCAN | 3 | 2 | 1  | bool      | FDCAN inicializó OK |
 | Pre_Started     | PSTR | 3 | 3 | 1  | bool      | Precarga iniciada |
 | Pre_Ok          | POK_ | 3 | 4 | 1  | bool      | Precarga completada |
-| Pre_Failed      | PFAI | 3 | 5 | 1  | bool      | Timeout 5 s de precarga |
 | Pin_SDC_3V3     | PSDC | 3 | 6 | 1  | bool      | SDC alimentado |
 | Pin_VIO_3V3     | PVIO | 3 | 7 | 1  | bool      | VIO_3V3 presente |
 | FirstFault      | FFLT | 4 | 0 | 8  | uint8     | **Enum**: 0=none 1=V 2=T 3=NTC 4=Comm 5=Hall 6=!Init |
@@ -220,6 +221,10 @@ B7: causa del último reset
 | Rst_PIN         | RPIN | 7 | 5 | 1  | bool      | Reset por pin NRST |
 | Rst_OBL         | ROBL | 7 | 7 | 1  | bool      | Option-byte loader |
 
+> ⚠ **Rama `testing`:** el antiguo `Pre_Failed` (PFAI, B3 b5) se ha ELIMINADO
+> del firmware → ese bit es siempre 0, NO lo configures como canal. El byte 3
+> bit 5 queda libre.
+
 ### Recetas de debug (post-mortem)
 
 | Síntoma | Lectura del frame | Causa raíz probable |
@@ -230,7 +235,39 @@ B7: causa del último reset
 | `BMS_Flt_NoInit=1`, `State_BmsInit=0` | Init falló y aún reintentando | Bus al BQ apagado / `VIO_3V3` ausente |
 | `V_UV_now=1` pero `BMS_Flt_V=0` | Glitch UV filtrado por debounce | Ruido en lectura, NO es UV real |
 | `Rst_IWDG=1` al boot | Loop colgado | Punto donde se quedó: revisar logs serie |
-| `Pre_Failed=1` | Timeout 5 s precarga | Resistencia de precarga / contactores |
+
+---
+
+## 9b. ID 16 (0x10) — Contadores de fallo por causa · 6 bytes · 500 ms
+
+> ⚠ **No está en el Excel base** — añadido en rama `testing`. Si regeneras el
+> Excel de datos CAN, mete este ID como BMS / 0x10 / 6 bytes / UINT8.
+
+Cuenta cuántas **veces** ha disparado cada fallo confirmado desde el último
+reset del micro (se incrementa en el flanco de subida 0→1, así capta
+episodios cortos que no verías en vivo). uint8 saturado a 255. Se reciben en
+orden de byte, sin conversión. Reset por comando serie `C` o al reiniciar.
+
+```
+Byte 0: cntFltV    — episodios de fallo de tensión
+Byte 1: cntFltT    — de temperatura
+Byte 2: cntFltNtc  — de NTC abierto
+Byte 3: cntFltComm — de comms BQ caídas
+Byte 4: cntFltHall — de fallo del Hall
+Byte 5: cntFltInit — de init BQ fallido
+```
+
+| Canal | Short | Byte | Bit | Len | Tipo | Descripción |
+|---|---|---|---|---|---|---|
+| BMS_CntV    | CNTV | 0 | 0 | 8 | uint8 | nº episodios fallo V |
+| BMS_CntT    | CNTT | 1 | 0 | 8 | uint8 | nº episodios fallo T |
+| BMS_CntNTC  | CNTN | 2 | 0 | 8 | uint8 | nº episodios NTC abierto |
+| BMS_CntComm | CNTC | 3 | 0 | 8 | uint8 | nº episodios comms BQ |
+| BMS_CntHall | CNTH | 4 | 0 | 8 | uint8 | nº episodios Hall |
+| BMS_CntInit | CNTI | 5 | 0 | 8 | uint8 | nº episodios init BQ |
+
+> Complementa al ID 15: el ID 15 te dice qué pasa **ahora**; el ID 16 te dice
+> **cuántas veces** ha pasado cada cosa aunque ya se haya despejado.
 
 ---
 
@@ -433,5 +470,152 @@ Tras flashear y poner el coche en marcha (sin tracción):
 
 ---
 
-*Generado a partir de `src/main.cpp` (rev. 2026-05-20). Si cambia alguna
-trama, regenerar este doc antes de subir el coche a pista.*
+## 20. Start Bit absoluto — tabla calculada para RaceStudio 3
+
+Las tablas de arriba dan `Byte`/`Bit` relativos. RaceStudio 3 (diálogo
+**CAN Measure Settings**) pide el **Start Bit absoluto** = `Byte × 8 + Bit`.
+Aquí está ya calculado por ID, con el `Number of Bits` y `Data Format`
+(`U` = Unsigned, `S` = Signed) que toca poner en el diálogo.
+
+> Recordatorios: Byte Order = **Big Endian (Motorola)** en todos. Gain = 1
+> salvo tensiones en mV → **0.001**. Offset = 0. Temperaturas = **Signed**.
+
+### ID 0x0A — Estado general (DLC 1) · flags 1 bit
+| Name | Short | Start Bit | Bits | Fmt |
+|---|---|---|---|---|
+| BMS_StsFail | SFAI | 0 | 1 | U |
+| BMS_Ok | BMOK | 1 | 1 | U |
+| BMS_SDC | PSDC | 2 | 1 | U |
+| BMS_CondNow | FCON | 3 | 1 | U |
+| BMS_CommErr | ECOM | 4 | 1 | U |
+| BMS_VoltErr | EVOL | 5 | 1 | U |
+| BMS_AmpErr | EAMP | 6 | 1 | U |
+| BMS_AutoAddrOk | EAUT | 7 | 1 | U |
+
+### ID 0x0B — Métricas V/T (DLC 8)
+| Name | Short | Start Bit | Bits | Fmt | Gain | Ud |
+|---|---|---|---|---|---|---|
+| BMS_MaxT | Tmax | 0 | 16 | S | 1 | °C |
+| BMS_MaxV | Vmax | 16 | 16 | U | 0.001 | V |
+| BMS_MinV | Vmin | 32 | 16 | U | 0.001 | V |
+| BMS_MinT | Tmin | 48 | 16 | S | 1 | °C |
+
+### ID 0x0C — Status V/T (DLC 4, provisional)
+| Name | Short | Start Bit | Bits | Fmt |
+|---|---|---|---|---|
+| BMS_StatusV | GSV_ | 0 | 16 | U |
+| BMS_StatusT | GST_ | 16 | 16 | U |
+
+### ID 0x0D — Estadística (DLC 4)
+| Name | Short | Start Bit | Bits | Fmt | Ud |
+|---|---|---|---|---|---|
+| BMS_MaxFailMs | MFLM | 0 | 16 | U | ms |
+| BMS_NumTryReset | NTR_ | 16 | 16 | U | — |
+
+### ID 0x0E — Último episodio (DLC 8)
+| Name | Short | Start Bit | Bits | Fmt |
+|---|---|---|---|---|
+| BMS_LastFailMs | LTFT | 0 | 16 | U |
+| BMS_NumCommFail | NCFA | 16 | 16 | U |
+| BMS_NumCrcFail | NCRC | 32 | 16 | U |
+| BMS_NumTryRst14 | NTRR | 48 | 16 | U |
+
+### ID 0x0F — BMS_DEBUG (DLC 8)
+| Name | Short | Start Bit | Bits | Fmt |
+|---|---|---|---|---|
+| BMS_Flt_V | FV__ | 0 | 1 | U |
+| BMS_Flt_T | FT__ | 1 | 1 | U |
+| BMS_Flt_NTC | FNTC | 2 | 1 | U |
+| BMS_Flt_Comm | FCOM | 3 | 1 | U |
+| BMS_Flt_Hall | FHAL | 4 | 1 | U |
+| BMS_Flt_NoInit | FINI | 5 | 1 | U |
+| BMS_Fault | BFLT | 7 | 1 | U |
+| Hall_Disc | HDIS | 8 | 1 | U |
+| Hall_Stuck | HSTK | 9 | 1 | U |
+| Hall_Noisy | HNOI | 10 | 1 | U |
+| Hall_OverI | HOVI | 11 | 1 | U |
+| Hall_AdcSat | HSAT | 12 | 1 | U |
+| V_UV_now | NUV_ | 16 | 1 | U |
+| V_OV_now | NOV_ | 17 | 1 | U |
+| T_UT_now | NUT_ | 18 | 1 | U |
+| T_OT_now | NOT_ | 19 | 1 | U |
+| NTC_open_now | NNTC | 20 | 1 | U |
+| ReadV_CommErr | RVCO | 21 | 1 | U |
+| ReadV_CrcErr | RVCR | 22 | 1 | U |
+| ReadT_Err | RTER | 23 | 1 | U |
+| State_AutoAddr | SADR | 24 | 1 | U |
+| State_BmsInit | SINI | 25 | 1 | U |
+| State_CanOk | SCAN | 26 | 1 | U |
+| Pre_Started | PSTR | 27 | 1 | U |
+| Pre_Ok | POK_ | 28 | 1 | U |
+| Pin_SDC_3V3 | PSDC | 30 | 1 | U |
+| Pin_VIO_3V3 | PVIO | 31 | 1 | U |
+| FirstFault | FFLT | 32 | 8 | U (enum) |
+| EpisodeMs | EPMS | 40 | 16 | U (ms) |
+| Rst_LPWR | RLPW | 56 | 1 | U |
+| Rst_WWDG | RWWD | 57 | 1 | U |
+| Rst_IWDG | RIWD | 58 | 1 | U |
+| Rst_SOFT | RSFT | 59 | 1 | U |
+| Rst_BOR | RBOR | 60 | 1 | U |
+| Rst_PIN | RPIN | 61 | 1 | U |
+| Rst_OBL | ROBL | 63 | 1 | U |
+
+> Start Bit 29 (PFAI) ELIMINADO en rama `testing` — no crear canal.
+
+### ID 0x10 — Contadores de fallo (DLC 6)
+| Name | Short | Start Bit | Bits | Fmt |
+|---|---|---|---|---|
+| BMS_CntV | CNTV | 0 | 8 | U |
+| BMS_CntT | CNTT | 8 | 8 | U |
+| BMS_CntNTC | CNTN | 16 | 8 | U |
+| BMS_CntComm | CNTC | 24 | 8 | U |
+| BMS_CntHall | CNTH | 32 | 8 | U |
+| BMS_CntInit | CNTI | 40 | 8 | U |
+
+### ID 0x182 / 0x183 / 0x184 / 0x185 — Tensiones (DLC 8)
+IDmod en SB 0 (16 bits, U, gain 1). Tensiones en SB 16/32/48 (16 bits, U, gain **0.001**, V).
+| ID | IDmod (SB 0) | SB 16 | SB 32 | SB 48 |
+|---|---|---|---|---|
+| 0x182 | IM86 | MV01 | MV02 | MV03 |
+| 0x183 | IM87 | MV04 | MV05 | MV06 |
+| 0x184 | IM88 | MV07 | MV08 | MV09 |
+| 0x185 | IM89 | MV10 | MV11 | MVTT |
+
+### ID 0x186 — Temperaturas T1-T7 (DLC 8, 8 bits c/u)
+| Name | Short | Start Bit | Bits | Fmt |
+|---|---|---|---|---|
+| Mod_IDmod_390 | IM90 | 0 | 8 | U |
+| Mod_T1 | MT01 | 8 | 8 | S |
+| Mod_T2 | MT02 | 16 | 8 | S |
+| Mod_T3 | MT03 | 24 | 8 | S |
+| Mod_T4 | MT04 | 32 | 8 | S |
+| Mod_T5 | MT05 | 40 | 8 | S |
+| Mod_T6 | MT06 | 48 | 8 | S |
+| Mod_T7 | MT07 | 56 | 8 | S |
+
+### ID 0x187 — T8-T9 + Tmax/min + Status (DLC 8, 8 bits)
+| Name | Short | Start Bit | Bits | Fmt |
+|---|---|---|---|---|
+| Mod_IDmod_391 | IM91 | 0 | 8 | U |
+| Mod_T8 | MT08 | 8 | 8 | S |
+| Mod_T9 | MT09 | 16 | 8 | S |
+| Mod_Tmax | MTMX | 24 | 8 | S |
+| Mod_Tmin | MTMN | 32 | 8 | S |
+| Mod_StatusV | MSV_ | 40 | 8 | U |
+| Mod_StatusT | MST_ | 48 | 8 | U |
+
+### ID 0x188 — SOC (DLC 1)
+| Name | Short | Start Bit | Bits | Fmt | Ud |
+|---|---|---|---|---|---|
+| BMS_SOC | SOC_ | 0 | 8 | U | % |
+
+> ⚠ Verifica el Start Bit con un canal conocido: configura `BMS_MaxV`
+> (0x0B, SB 16) y compara en vivo con la tensión real de celda (~3.7-4.0 V).
+> Si sale un valor absurdo (~29000), la versión de RaceStudio interpreta el
+> Start Bit Motorola desde el MSB → ajusta el offset y re-verifica.
+
+---
+
+*Generado a partir de `src/main.cpp` (rev. 2026-05-20; §20 y poda de PFAI
+añadidos en rama `testing` rev. 2026-05-28). Si cambia alguna trama,
+regenerar este doc antes de subir el coche a pista.*
