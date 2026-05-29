@@ -671,14 +671,25 @@ void updateCanTx()
     gCan->setPacket((uint32_t)11, d11, 4);
 
     // ── ID 12 (0xC) — GEN_STATUS_VOLT, GEN_STATUS_TEMP UINT16×2 ────────────
-    // ⚠ PROVISIONAL: la tabla oficial de códigos NO está definida.
-    //   Asumido VOLT: 0=OK 1=UV 2=OV ; TEMP: 0=OK 1=UT 2=OT 3=NTC_open.
-    //   Confirmar con el equipo y ajustar.
-    uint16_t gsV = (bms.getMinVoltage() < CELL_UV_V) ? 1 :
-                   (bms.getMaxVoltage() > CELL_OV_V) ? 2 : 0;
-    uint16_t gsT = bms.hasOpenNtc()                  ? 3 :
-                   (bms.getMinTemp()    < CELL_UT_C) ? 1 :
-                   (bms.getMaxTemp()    > CELL_OT_C) ? 2 : 0;
+    // Bitmap POR MÓDULO (alineado con el Excel CAN): cada bit i = módulo i.
+    //   VOLT bit i = 1 si algún paralelo del módulo i fuera de [UV,OV].
+    //   TEMP bit i = 1 si algún NTC del módulo i fuera de [UT,OT].
+    // Los NUM_MODULES bits menos significativos son válidos (resto = 0).
+    uint16_t gsV = 0, gsT = 0;
+    for (int m = 0; m < NUM_MODULES; m++) {
+        bool vFail = false;
+        for (int n = 1; n <= 11; n++) {
+            float v = modCellV(m, n);
+            if (v > CELL_OV_V || (v > 0.0f && v < CELL_UV_V)) { vFail = true; break; }
+        }
+        bool tFail = false;
+        for (int k = 1; k <= 9; k++) {
+            float t = modCellT(m, k);
+            if (t > CELL_OT_C || t < CELL_UT_C) { tFail = true; break; }
+        }
+        if (vFail) gsV |= (1u << m);
+        if (tFail) gsT |= (1u << m);
+    }
     uint16_t d12[2] = { gsV, gsT };
     gCan->setPacket((uint32_t)12, d12, 2);
 
