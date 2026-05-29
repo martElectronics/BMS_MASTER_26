@@ -483,10 +483,19 @@ Tras flashear y poner el coche en marcha (sin tracción):
 
 ## 20. Start Bit absoluto — tabla calculada para RaceStudio 3
 
-Las tablas de arriba dan `Byte`/`Bit` relativos. RaceStudio 3 (diálogo
-**CAN Measure Settings**) pide el **Start Bit absoluto** = `Byte × 8 + Bit`.
-Aquí está ya calculado por ID, con el `Number of Bits` y `Data Format`
-(`U` = Unsigned, `S` = Signed) que toca poner en el diálogo.
+Las tablas de arriba dan `Byte`/`Bit` relativos. Aquí está el **Start Bit**
+ya calculado para el diálogo **CAN Measure Settings**, con `Number of Bits`
+y `Data Format` (`U` = Unsigned, `S` = Signed).
+
+> ⚠ **Convención del Start Bit en RaceStudio 3 (Motorola/Big Endian)** —
+> verificado en HW (rev. testing): el Start Bit apunta al **byte BAJO (LSB)**
+> del campo, no al alto.
+> - **Flags de 1 bit y campos de 8 bit**: Start Bit = `Byte × 8 + Bit`.
+> - **Campos de 16 bit** en los bytes `[b, b+1]`: Start Bit = `(b+1) × 8`
+>   (p.ej. un u16 en bytes 2-3 → Start Bit **24**, no 16).
+>
+> Regla infalible: no te fíes del número, **mira el grid** — el resaltado debe
+> cubrir exactamente los bytes del campo. Los valores de abajo ya están así.
 
 > Recordatorios: Byte Order = **Big Endian (Motorola)** en todos. Gain = 1
 > salvo tensiones en mV → **0.001**. Offset = 0. Temperaturas = **Signed**.
@@ -506,30 +515,30 @@ Aquí está ya calculado por ID, con el `Number of Bits` y `Data Format`
 ### ID 0x0B — Métricas V/T (DLC 8)
 | Name | Short | Start Bit | Bits | Fmt | Gain | Ud |
 |---|---|---|---|---|---|---|
-| BMS_MaxT | Tmax | 0 | 16 | S | 1 | °C |
-| BMS_MaxV | Vmax | 16 | 16 | U | 0.001 | V |
-| BMS_MinV | Vmin | 32 | 16 | U | 0.001 | V |
-| BMS_MinT | Tmin | 48 | 16 | S | 1 | °C |
+| BMS_MaxT | Tmax | 8 | 16 | S | 1 | °C |
+| BMS_MaxV | Vmax | 24 | 16 | U | 0.001 | V |
+| BMS_MinV | Vmin | 40 | 16 | U | 0.001 | V |
+| BMS_MinT | Tmin | 56 | 16 | S | 1 | °C |
 
-### ID 0x0C — Status V/T (DLC 4, provisional)
+### ID 0x0C — Status V/T por módulo (bitmap, DLC 4)
 | Name | Short | Start Bit | Bits | Fmt |
 |---|---|---|---|---|
-| BMS_StatusV | GSV_ | 0 | 16 | U |
-| BMS_StatusT | GST_ | 16 | 16 | U |
+| BMS_StatusV | GSV_ | 8 | 16 | U |
+| BMS_StatusT | GST_ | 24 | 16 | U |
 
 ### ID 0x0D — Estadística (DLC 4)
 | Name | Short | Start Bit | Bits | Fmt | Ud |
 |---|---|---|---|---|---|
-| BMS_MaxFailMs | MFLM | 0 | 16 | U | ms |
-| BMS_NumTryReset | NTR_ | 16 | 16 | U | — |
+| BMS_MaxFailMs | MFLM | 8 | 16 | U | ms |
+| BMS_NumTryReset | NTR_ | 24 | 16 | U | — |
 
 ### ID 0x0E — Último episodio (DLC 8)
 | Name | Short | Start Bit | Bits | Fmt |
 |---|---|---|---|---|
-| BMS_LastFailMs | LTFT | 0 | 16 | U |
-| BMS_NumCommFail | NCFA | 16 | 16 | U |
-| BMS_NumCrcFail | NCRC | 32 | 16 | U |
-| BMS_NumTryRst14 | NTRR | 48 | 16 | U |
+| BMS_LastFailMs | LTFT | 8 | 16 | U |
+| BMS_NumCommFail | NCFA | 24 | 16 | U |
+| BMS_NumCrcFail | NCRC | 40 | 16 | U |
+| BMS_NumTryRst14 | NTRR | 56 | 16 | U |
 
 ### ID 0x0F — BMS_DEBUG (DLC 8)
 | Name | Short | Start Bit | Bits | Fmt |
@@ -562,7 +571,7 @@ Aquí está ya calculado por ID, con el `Number of Bits` y `Data Format`
 | Pin_SDC_3V3 | PSDC | 30 | 1 | U |
 | Pin_VIO_3V3 | PVIO | 31 | 1 | U |
 | FirstFault | FFLT | 32 | 8 | U (enum) |
-| EpisodeMs | EPMS | 40 | 16 | U (ms) |
+| EpisodeMs | EPMS | 48 | 16 | U (ms) |
 | Rst_LPWR | RLPW | 56 | 1 | U |
 | Rst_WWDG | RWWD | 57 | 1 | U |
 | Rst_IWDG | RIWD | 58 | 1 | U |
@@ -584,8 +593,8 @@ Aquí está ya calculado por ID, con el `Number of Bits` y `Data Format`
 | BMS_CntInit | CNTI | 40 | 8 | U |
 
 ### ID 0x182 / 0x183 / 0x184 / 0x185 — Tensiones (DLC 8)
-IDmod en SB 0 (16 bits, U, gain 1). Tensiones en SB 16/32/48 (16 bits, U, gain **0.001**, V).
-| ID | IDmod (SB 0) | SB 16 | SB 32 | SB 48 |
+Todos uint16. IDmod en SB 8 (gain 1). Tensiones en SB 24/40/56 (gain **0.001**, V).
+| ID | IDmod (SB 8) | SB 24 | SB 40 | SB 56 |
 |---|---|---|---|---|
 | 0x182 | IM86 | MV01 | MV02 | MV03 |
 | 0x183 | IM87 | MV04 | MV05 | MV06 |
@@ -620,10 +629,9 @@ IDmod en SB 0 (16 bits, U, gain 1). Tensiones en SB 16/32/48 (16 bits, U, gain *
 |---|---|---|---|---|---|
 | BMS_SOC | SOC_ | 0 | 8 | U | % |
 
-> ⚠ Verifica el Start Bit con un canal conocido: configura `BMS_MaxV`
-> (0x0B, SB 16) y compara en vivo con la tensión real de celda (~3.7-4.0 V).
-> Si sale un valor absurdo (~29000), la versión de RaceStudio interpreta el
-> Start Bit Motorola desde el MSB → ajusta el offset y re-verifica.
+> ⚠ Verifica con un canal conocido: configura `BMS_MaxV` (0x0B, **SB 24**) y
+> compara en vivo con la tensión real de celda (~3.7-4.0 V). Si sale un valor
+> absurdo (~29000), el byte order o el Start Bit están mal → revisa el grid.
 
 ---
 
