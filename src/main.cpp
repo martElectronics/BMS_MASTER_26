@@ -306,9 +306,9 @@ void setup()
         Serial.printf("[SOC] init = %u%% (OCV)\n", soc.soc());
     }
 
-    // ── CAN: FDCAN1 PA11/PA12, 500 kbps, perfil BMS (nodeID=3). El ctor
-    //    hace el init de FDCAN (HAL) → debe correr AQUI, no en global. ──
-    static CAN_BUS canBus(HardwareType::Transciever, 500, 3);
+    // ── CAN: FDCAN1 PA11/PA12, 125 kbps (bus del coche), perfil BMS (nodeID=3).
+    //    El ctor hace el init de FDCAN (HAL) → debe correr AQUI, no en global. ──
+    static CAN_BUS canBus(HardwareType::Transciever, 125, 3);
     gCan = &canBus;
     gCanOk = (gCan->SetupState() == 0);
     if (!gCanOk) {
@@ -316,7 +316,7 @@ void setup()
     } else {
         gCan->configurePacketTimersByPriority();   // BMS_DEBUG (todos los fallos por bits)
         gCan->setPacketTimer(16, 500);             // ID 16 contadores de fallo: 500 ms
-        Serial.println(F("[CAN] FDCAN listo (500k, IDs 10-16, 386-392)."));
+        Serial.println(F("[CAN] FDCAN listo (125k, IDs 10-16, 386-392)."));
     }
 
     // ── FRAM logger (MB85RC256V): si está, loguear evento BOOT con

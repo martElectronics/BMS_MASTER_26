@@ -9,7 +9,7 @@
 
 | | Valor |
 |---|---|
-| Bitrate | **500 kbps** |
+| Bitrate | **125 kbps** (bus del coche) |
 | Formato ID | **Standard 11-bit** |
 | Byte order (multi-byte) | **Big-Endian (Motorola)** |
 | Sample point típico | 75-87.5 % (deja que RaceStudio elija) |
@@ -26,8 +26,8 @@
 1. **USB / WiFi → Configurations → New → Solo 2 DL**.
 2. En la pestaña **ECU Stream / CAN2 → Custom protocol → New**.
 3. Rellenar:
-   - **Name:** `MART_BMS_500k`
-   - **Bitrate:** 500 kbps
+   - **Name:** `MART_BMS_125k`
+   - **Bitrate:** 125 kbps
    - **ID type:** Standard
    - **Byte order:** Big Endian (Motorola)
 4. **Add channel** por cada fila de las tablas siguientes.

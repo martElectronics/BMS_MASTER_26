@@ -165,7 +165,7 @@ alta fuerza piso de duty (anticipa inercia térmica). 100 % a 50 °C deja
 
 ## 7. Protocolo CAN (docs externo: `Mapa_CAN.txt`)
 
-FDCAN1, 500 kbps, perfil BMS. `setPacketTimer` con los periodos del
+FDCAN1, 125 kbps (bus del coche), perfil BMS. `setPacketTimer` con los periodos del
 mapa; `setPacket`+`send()` cada loop (throttle por timer).
 
 | IDs | Contenido |
