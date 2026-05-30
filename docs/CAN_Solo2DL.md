@@ -635,6 +635,77 @@ Todos uint16. IDmod en SB 8 (gain 1). Tensiones en SB 24/40/56 (gain **0.001**, 
 
 ---
 
+## 21. Inversor DTI HV-500 (CAN Manual v2.3)
+
+El AiM es un **logger**: del inversor lee lo que **transmite** (§21.1). Los
+**comandos** (§21.2) los envía el **VCU** (y el BMS solo el límite de
+corriente DC); el AiM los puede loguear igual para ver qué se pide.
+
+> ⚠⚠ **Los IDs dependen del Node ID del inversor** (derivado del nº de serie).
+> Los de abajo son los del Excel del equipo; **CONFIRMA sniffeando el bus**
+> antes de fiarte. Fórmula DTI: Standard `ID = (PacketID << 5) | NodeID`;
+> Extended `ID = (PacketID << 8) | NodeID`.
+>
+> ⚠ El inversor debe estar a **125 kbps** en CAN2 (por defecto viene a 500 —
+> ajustar con el DTI CAN Tool). Byte order **Big Endian**, casi todo
+> **Signed**, **Gain = 1/Scale**. Start Bit en convención RaceStudio (byte bajo).
+
+### 21.1 Transmitido por el inversor (el AiM lo lee)
+
+| ID | Canal | Start Bit | Bits | Fmt | Gain | Ud |
+|---|---|---|---|---|---|---|
+| 0x401 | INV_ERPM        | 24 | 32 | S | 1    | ERPM |
+| 0x401 | INV_Duty        | 40 | 16 | S | 0.1  | % |
+| 0x401 | INV_VinDC       | 56 | 16 | S | 1    | V |
+| 0x421 | INV_AC_Current  | 8  | 16 | S | 0.1  | A |
+| 0x421 | INV_DC_Current  | 24 | 16 | S | 0.1  | A |
+| 0x441 | INV_CtrlTemp    | 8  | 16 | S | 0.1  | °C |
+| 0x441 | INV_MotorTemp   | 24 | 16 | S | 0.1  | °C |
+| 0x441 | INV_FaultCode   | 32 | 8  | U | 1    | enum |
+| 0x461 | INV_Id          | 24 | 32 | S | 0.01 | A |
+| 0x461 | INV_Iq          | 56 | 32 | S | 0.01 | A |
+| 0x481 | INV_Throttle    | 0  | 8  | S | 1    | % |
+| 0x481 | INV_Brake       | 8  | 8  | S | 1    | % |
+| 0x481 | INV_DriveEnable | 24 | 1  | U | 1    | bool |
+| 0x481 | INV_CANmapVer   | 56 | 8  | U | 1    | — |
+
+**INV_FaultCode (0x441 byte 4):** 0=OK · 1=Overvoltage · 2=Undervoltage ·
+3=DRV · 4=Overcurrent · 5=Ctrl OverTemp · 6=Motor OverTemp · 7=Sensor wire ·
+8=Sensor general · 9=CAN cmd error · A=Analog input error.
+
+**Bits opcionales del 0x481** (1 bit, Unsigned, Start Bit = el del manual):
+DigIn1-4 = 16-19 · DigOut1-4 = 20-23 · CapTempLim=32 · DCcurrLim=33 ·
+DrvEnLim=34 · IGBTaccelLim=35 · IGBTtempLim=36 · VinLim=37 · MotAccelLim=38 ·
+MotTempLim=39 · RPMminLim=40 · RPMmaxLim=41 · PowerLim=42.
+
+### 21.2 Comandos al inversor (los manda el VCU; loguear es opcional)
+
+Todos 2 bytes en bytes 0-1 (Start Bit 8) salvo ERPM (4 bytes, SB 24) y Drive
+enable (1 byte, SB 0). Casi todos Signed, Gain 0.1.
+
+| ID | Canal | Start Bit | Bits | Fmt | Gain | Ud |
+|---|---|---|---|---|---|---|
+| 0x021 | CMD_SetCurrent     | 8  | 16 | S | 0.1 | A |
+| 0x041 | CMD_SetBrakeCurr   | 8  | 16 | S | 0.1 | A |
+| 0x061 | CMD_SetERPM        | 24 | 32 | S | 1   | ERPM |
+| 0x081 | CMD_SetPosition    | 8  | 16 | S | 0.1 | deg |
+| 0x0A1 | CMD_SetRelCurrent  | 8  | 16 | S | 0.1 | % |
+| 0x0C1 | CMD_SetRelBrake    | 8  | 16 | S | 0.1 | % |
+| 0x0E1 | CMD_SetDigitalOut  | —  | —  | — | —   | (no en manual v2.3) |
+| 0x101 | CMD_SetMaxACCurr   | 8  | 16 | S | 0.1 | A |
+| 0x121 | CMD_SetMaxACBrake  | 8  | 16 | S | 0.1 | A |
+| 0x141 | CMD_SetMaxDCCurr   | 8  | 16 | S | 0.1 | A |
+| 0x161 | CMD_SetMaxDCBrake  | 8  | 16 | S | 0.1 | A |
+| 0x181 | CMD_DriveEnable    | 0  | 8  | U | 1   | bool |
+
+> `CMD_SetMaxDCCurr` (0x141) es el que el **BMS** usaría para limitar la
+> corriente de descarga; `CMD_SetMaxDCBrake` (0x161) la de carga/regen.
+> `CMD_SetDigitalOut` (0xE1) aparece en el Excel pero no está documentado en
+> el manual DTI v2.3 → confirmar layout antes de configurarlo.
+
+---
+
 *Generado a partir de `src/main.cpp` (rev. 2026-05-20; §20 y poda de PFAI
-añadidos en rama `testing` rev. 2026-05-28). Si cambia alguna trama,
-regenerar este doc antes de subir el coche a pista.*
+añadidos en rama `testing` rev. 2026-05-28; §21 inversor DTI HV-500 rev.
+2026-05-30). Si cambia alguna trama, regenerar este doc antes de subir el
+coche a pista.*
