@@ -638,42 +638,46 @@ Todos uint16. IDmod en SB 8 (gain 1). Tensiones en SB 24/40/56 (gain **0.001**, 
 ## 21. Inversor DTI HV-500 (CAN Manual v2.3)
 
 El AiM es un **logger**: del inversor lee lo que **transmite** (§21.1). Los
-**comandos** (§21.2) los envía el **VCU** (y el BMS solo el límite de
-corriente DC); el AiM los puede loguear igual para ver qué se pide.
+**comandos** (§21.2) los envía el **VCU** (y el límite de corriente DC); el AiM
+los puede loguear igual para ver qué se pide.
 
-> ⚠⚠ **Los IDs dependen del Node ID del inversor** (derivado del nº de serie).
-> Los de abajo son los del Excel del equipo; **CONFIRMA sniffeando el bus**
-> antes de fiarte. Fórmula DTI: Standard `ID = (PacketID << 5) | NodeID`;
-> Extended `ID = (PacketID << 8) | NodeID`.
+> **IDs CAN** = `(PacketID << 5) | NodeID` (modo Standard del DTI). **Node ID = 1
+> CONFIRMADO** y verificado contra el VCU (`mart-cockpit`, rama
+> `feature/modJoseSTM32`). Packet IDs según el manual DTI v2.3: transmitidos
+> 0x00-0x04, comandos 0x1A-0x24.
 >
 > ⚠ El inversor debe estar a **125 kbps** en CAN2 (por defecto viene a 500 —
 > ajustar con el DTI CAN Tool). Byte order **Big Endian**, casi todo
 > **Signed**, **Gain = 1/Scale**. Start Bit en convención RaceStudio (byte bajo).
+>
+> ⚠ Corrección rev. 2026-05-31: antes estos IDs estaban MAL (se habían puesto
+> los comandos 0x401-0x481 como si fueran telemetría). Los transmitidos van en
+> 0x01-0x81; 0x401-0x481 son en realidad los comandos de límite/drive-enable.
 
 ### 21.1 Transmitido por el inversor (el AiM lo lee)
 
-| ID | Canal | Start Bit | Bits | Fmt | Gain | Ud |
-|---|---|---|---|---|---|---|
-| 0x401 | INV_ERPM        | 24 | 32 | S | 1    | ERPM |
-| 0x401 | INV_Duty        | 40 | 16 | S | 0.1  | % |
-| 0x401 | INV_VinDC       | 56 | 16 | S | 1    | V |
-| 0x421 | INV_AC_Current  | 8  | 16 | S | 0.1  | A |
-| 0x421 | INV_DC_Current  | 24 | 16 | S | 0.1  | A |
-| 0x441 | INV_CtrlTemp    | 8  | 16 | S | 0.1  | °C |
-| 0x441 | INV_MotorTemp   | 24 | 16 | S | 0.1  | °C |
-| 0x441 | INV_FaultCode   | 32 | 8  | U | 1    | enum |
-| 0x461 | INV_Id          | 24 | 32 | S | 0.01 | A |
-| 0x461 | INV_Iq          | 56 | 32 | S | 0.01 | A |
-| 0x481 | INV_Throttle    | 0  | 8  | S | 1    | % |
-| 0x481 | INV_Brake       | 8  | 8  | S | 1    | % |
-| 0x481 | INV_DriveEnable | 24 | 1  | U | 1    | bool |
-| 0x481 | INV_CANmapVer   | 56 | 8  | U | 1    | — |
+| ID | Packet | Canal | Start Bit | Bits | Fmt | Gain | Ud |
+|---|---|---|---|---|---|---|---|
+| 0x01 | 0x00 | INV_ERPM        | 24 | 32 | S | 1    | ERPM |
+| 0x01 | 0x00 | INV_Duty        | 40 | 16 | S | 0.1  | % |
+| 0x01 | 0x00 | INV_VinDC       | 56 | 16 | S | 1    | V |
+| 0x21 | 0x01 | INV_AC_Current  | 8  | 16 | S | 0.1  | A |
+| 0x21 | 0x01 | INV_DC_Current  | 24 | 16 | S | 0.1  | A |
+| 0x41 | 0x02 | INV_CtrlTemp    | 8  | 16 | S | 0.1  | °C |
+| 0x41 | 0x02 | INV_MotorTemp   | 24 | 16 | S | 0.1  | °C |
+| 0x41 | 0x02 | INV_FaultCode   | 32 | 8  | U | 1    | enum |
+| 0x61 | 0x03 | INV_Id          | 24 | 32 | S | 0.01 | A |
+| 0x61 | 0x03 | INV_Iq          | 56 | 32 | S | 0.01 | A |
+| 0x81 | 0x04 | INV_Throttle    | 0  | 8  | S | 1    | % |
+| 0x81 | 0x04 | INV_Brake       | 8  | 8  | S | 1    | % |
+| 0x81 | 0x04 | INV_DriveEnable | 24 | 1  | U | 1    | bool |
+| 0x81 | 0x04 | INV_CANmapVer   | 56 | 8  | U | 1    | — |
 
-**INV_FaultCode (0x441 byte 4):** 0=OK · 1=Overvoltage · 2=Undervoltage ·
+**INV_FaultCode (0x41 byte 4):** 0=OK · 1=Overvoltage · 2=Undervoltage ·
 3=DRV · 4=Overcurrent · 5=Ctrl OverTemp · 6=Motor OverTemp · 7=Sensor wire ·
 8=Sensor general · 9=CAN cmd error · A=Analog input error.
 
-**Bits opcionales del 0x481** (1 bit, Unsigned, Start Bit = el del manual):
+**Bits opcionales del 0x81** (1 bit, Unsigned, Start Bit = el del manual):
 DigIn1-4 = 16-19 · DigOut1-4 = 20-23 · CapTempLim=32 · DCcurrLim=33 ·
 DrvEnLim=34 · IGBTaccelLim=35 · IGBTtempLim=36 · VinLim=37 · MotAccelLim=38 ·
 MotTempLim=39 · RPMminLim=40 · RPMmaxLim=41 · PowerLim=42.
@@ -683,29 +687,29 @@ MotTempLim=39 · RPMminLim=40 · RPMmaxLim=41 · PowerLim=42.
 Todos 2 bytes en bytes 0-1 (Start Bit 8) salvo ERPM (4 bytes, SB 24) y Drive
 enable (1 byte, SB 0). Casi todos Signed, Gain 0.1.
 
-| ID | Canal | Start Bit | Bits | Fmt | Gain | Ud |
-|---|---|---|---|---|---|---|
-| 0x021 | CMD_SetCurrent     | 8  | 16 | S | 0.1 | A |
-| 0x041 | CMD_SetBrakeCurr   | 8  | 16 | S | 0.1 | A |
-| 0x061 | CMD_SetERPM        | 24 | 32 | S | 1   | ERPM |
-| 0x081 | CMD_SetPosition    | 8  | 16 | S | 0.1 | deg |
-| 0x0A1 | CMD_SetRelCurrent  | 8  | 16 | S | 0.1 | % |
-| 0x0C1 | CMD_SetRelBrake    | 8  | 16 | S | 0.1 | % |
-| 0x0E1 | CMD_SetDigitalOut  | —  | —  | — | —   | (no en manual v2.3) |
-| 0x101 | CMD_SetMaxACCurr   | 8  | 16 | S | 0.1 | A |
-| 0x121 | CMD_SetMaxACBrake  | 8  | 16 | S | 0.1 | A |
-| 0x141 | CMD_SetMaxDCCurr   | 8  | 16 | S | 0.1 | A |
-| 0x161 | CMD_SetMaxDCBrake  | 8  | 16 | S | 0.1 | A |
-| 0x181 | CMD_DriveEnable    | 0  | 8  | U | 1   | bool |
+| ID | Packet | Canal | Start Bit | Bits | Fmt | Gain | Ud |
+|---|---|---|---|---|---|---|---|
+| 0x341 | 0x1A | CMD_SetCurrent     | 8  | 16 | S | 0.1 | A |
+| 0x361 | 0x1B | CMD_SetBrakeCurr   | 8  | 16 | S | 0.1 | A |
+| 0x381 | 0x1C | CMD_SetERPM        | 24 | 32 | S | 1   | ERPM |
+| 0x3A1 | 0x1D | CMD_SetPosition    | 8  | 16 | S | 0.1 | deg |
+| 0x3C1 | 0x1E | CMD_SetRelCurrent  | 8  | 16 | S | 0.1 | % |
+| 0x3E1 | 0x1F | CMD_SetRelBrake    | 8  | 16 | S | 0.1 | % |
+| 0x401 | 0x20 | CMD_SetMaxACCurr   | 8  | 16 | S | 0.1 | A |
+| 0x421 | 0x21 | CMD_SetMaxACBrake  | 8  | 16 | S | 0.1 | A |
+| 0x441 | 0x22 | CMD_SetMaxDCCurr   | 8  | 16 | S | 0.1 | A |
+| 0x461 | 0x23 | CMD_SetMaxDCBrake  | 8  | 16 | S | 0.1 | A |
+| 0x481 | 0x24 | CMD_DriveEnable    | 0  | 8  | U | 1   | bool |
 
-> `CMD_SetMaxDCCurr` (0x141) es el que el **BMS** usaría para limitar la
-> corriente de descarga; `CMD_SetMaxDCBrake` (0x161) la de carga/regen.
-> `CMD_SetDigitalOut` (0xE1) aparece en el Excel pero no está documentado en
-> el manual DTI v2.3 → confirmar layout antes de configurarlo.
+> `CMD_SetMaxDCCurr` (0x441, packet 0x22) limita la corriente de descarga;
+> `CMD_SetMaxDCBrake` (0x461) la de carga/regen. El VCU `modJoseSTM32` manda
+> ERPM (0x381), max AC (0x401), max DC (0x441) y drive enable (0x481).
+> No hay comando "digital output" en el manual DTI v2.3.
 
 ---
 
 *Generado a partir de `src/main.cpp` (rev. 2026-05-20; §20 y poda de PFAI
 añadidos en rama `testing` rev. 2026-05-28; §21 inversor DTI HV-500 rev.
-2026-05-30). Si cambia alguna trama, regenerar este doc antes de subir el
-coche a pista.*
+2026-05-30, IDs corregidos rev. 2026-05-31 contra `mart-cockpit`
+`feature/modJoseSTM32`). Si cambia alguna trama, regenerar este doc antes de
+subir el coche a pista.*
