@@ -635,23 +635,24 @@ Todos uint16. IDmod en SB 8 (gain 1). Tensiones en SB 24/40/56 (gain **0.001**, 
 
 ---
 
-## 21. Inversor DTI HV-500 (CAN Manual v2.3)
+## 21. Inversor DTI HV-500 (CAN Manual v2.5)
 
 El AiM es un **logger**: del inversor lee lo que **transmite** (§21.1). Los
 **comandos** (§21.2) los envía el VCU; loguearlos es opcional.
 
-> **Transmitidos CONFIRMADOS** con el DTI CAN Tool (firmware V24): packets
-> **0x20-0x24**, periodo 25 ms (40 Hz). CAN ID = `(Packet<<5)|NodeID` con
-> **Node ID = 1** → **0x401-0x481**.
+> **CONFIRMADO** (DTI CAN Tool + DBC): **Standard ID, Node ID = 1**, numeración
+> de packets **V2.5**. CAN ID = `(Packet << 5) | 1`. Transmite packets 0x1F-0x26
+> (→ 0x3E1-0x4C1); recibe comandos packets 0x01-0x0C (→ 0x21-0x181).
+> **No hay colisión** entre transmit y comandos.
 >
-> ⚠ El inversor debe estar a **125 kbps** en CAN2. Byte order **Big Endian**,
-> casi todo **Signed**, **Gain = 1/Scale**. Start Bit en convención RaceStudio
-> (byte bajo). Los byte/start-bit de cada mensaje salen del manual DTI v2.3.
+> ⚠ El inversor a **125 kbps** en CAN2. Byte order **Big Endian**, casi todo
+> **Signed**, **Gain = 1/Scale**. Start Bit en convención RaceStudio (byte bajo).
 
 ### 21.1 Transmitido por el inversor (el AiM lo lee)
 
 | ID | Packet | Canal | Start Bit | Bits | Fmt | Gain | Ud |
 |---|---|---|---|---|---|---|---|
+| 0x3E1 | 0x1F | INV_TargetIq    | 8  | 16 | S | 0.1  | A |
 | 0x401 | 0x20 | INV_ERPM        | 24 | 32 | S | 1    | ERPM |
 | 0x401 | 0x20 | INV_Duty        | 40 | 16 | S | 0.1  | % |
 | 0x401 | 0x20 | INV_VinDC       | 56 | 16 | S | 1    | V |
@@ -666,6 +667,10 @@ El AiM es un **logger**: del inversor lee lo que **transmite** (§21.1). Los
 | 0x481 | 0x24 | INV_Brake       | 8  | 8  | S | 1    | % |
 | 0x481 | 0x24 | INV_DriveEnable | 24 | 1  | U | 1    | bool |
 | 0x481 | 0x24 | INV_CANmapVer   | 56 | 8  | U | 1    | — |
+| 0x4A1 | 0x25 | INV_MaxAC_cfg   | 8  | 16 | S | 0.1  | A |
+| 0x4A1 | 0x25 | INV_MaxAC_avail | 24 | 16 | S | 0.1  | A |
+| 0x4C1 | 0x26 | INV_MaxDC_cfg   | 8  | 16 | S | 0.1  | A |
+| 0x4C1 | 0x26 | INV_MaxDC_avail | 24 | 16 | S | 0.1  | A |
 
 **INV_FaultCode (0x441 byte 4):** 0=OK · 1=Overvoltage · 2=Undervoltage ·
 3=DRV · 4=Overcurrent · 5=Ctrl OverTemp · 6=Motor OverTemp · 7=Sensor wire ·
@@ -676,22 +681,37 @@ DigIn1-4 = 16-19 · DigOut1-4 = 20-23 · CapTempLim=32 · DCcurrLim=33 ·
 DrvEnLim=34 · IGBTaccelLim=35 · IGBTtempLim=36 · VinLim=37 · MotAccelLim=38 ·
 MotTempLim=39 · RPMminLim=40 · RPMmaxLim=41 · PowerLim=42.
 
-### 21.2 Comandos al inversor (VCU → inversor) — ⚠ SIN CONFIRMAR
+> **INV_MaxDC_avail** (0x4C1, bytes 2-3) = corriente DC máx disponible tras las
+> limitaciones internas del inversor. Útil para cerrar el lazo del **derating**.
 
-El manual DTI da los comandos en packets 0x1A-0x24, pero los packets 0x20-0x24
-**ya los usa el inversor para transmitir** (0x401-0x481), así que no pueden ser
-también los comandos de límite. **Los IDs reales de comando NO están claros.**
+### 21.2 Comandos al inversor (VCU → inversor; loguear opcional)
 
-➡️ Abre la pantalla de **comandos** del DTI CAN Tool (como hiciste con los
-transmitidos) o **sniffea el bus** mientras el VCU manda, y se fijan. No
-configures comandos en el AiM hasta confirmarlos. Layout (cuando se confirmen):
-Set Current/ERPM/max AC/max DC = 16-bit (o 32-bit ERPM) Signed, Gain 0.1
-(ERPM gain 1); Drive enable = 1 byte 0/1.
+Numeración V2.5 (packets 0x01-0x0C). 2 bytes en bytes 0-1 (SB 8) salvo ERPM
+(4 bytes, SB 24) y Drive enable (1 byte, SB 0). Casi todos Signed, Gain 0.1.
+
+| ID | Packet | Canal | Start Bit | Bits | Fmt | Gain | Ud |
+|---|---|---|---|---|---|---|---|
+| 0x21  | 0x01 | CMD_SetCurrent    | 8  | 16 | S | 0.1 | A |
+| 0x41  | 0x02 | CMD_SetBrakeCurr  | 8  | 16 | S | 0.1 | A |
+| 0x61  | 0x03 | CMD_SetERPM       | 24 | 32 | S | 1   | ERPM |
+| 0x81  | 0x04 | CMD_SetPosition   | 8  | 16 | S | 0.1 | deg |
+| 0xA1  | 0x05 | CMD_SetRelCurrent | 8  | 16 | S | 0.1 | % |
+| 0xC1  | 0x06 | CMD_SetRelBrake   | 8  | 16 | S | 0.1 | % |
+| 0xE1  | 0x07 | CMD_SetDigOut     | 0  | 4  | U | 1   | bits |
+| 0x101 | 0x08 | CMD_SetMaxACCurr  | 8  | 16 | S | 0.1 | A |
+| 0x121 | 0x09 | CMD_SetMaxACBrake | 8  | 16 | S | 0.1 | A |
+| 0x141 | 0x0A | CMD_SetMaxDCCurr  | 8  | 16 | S | 0.1 | A |
+| 0x161 | 0x0B | CMD_SetMaxDCBrake | 8  | 16 | S | 0.1 | A |
+| 0x181 | 0x0C | CMD_DriveEnable   | 0  | 8  | U | 1   | bool |
+
+> **Derating del BMS:** `CMD_SetMaxDCCurr` (0x141) limita la descarga;
+> `CMD_SetMaxDCBrake` (0x161) la carga/regen. El BMS puede mandarlos según T/V
+> de celda y leer en 0x4C1 el `available` que aplica el inversor.
 
 ---
 
 *Generado a partir de `src/main.cpp` (rev. 2026-05-20; §20 y poda de PFAI
 añadidos en rama `testing` rev. 2026-05-28; §21 inversor DTI HV-500 rev.
-2026-05-30; IDs transmitidos del inversor CONFIRMADOS en 0x401-0x481 con el
-DTI CAN Tool rev. 2026-05-31). Si cambia alguna trama, regenerar este doc
-antes de subir el coche a pista.*
+2026-05-30; §21 inversor rehecha con manual DTI v2.5 + DBC: Standard/node 1,
+numeracion V2.5, transmit 0x3E1-0x4C1, comandos 0x21-0x181, rev. 2026-05-31).
+Si cambia alguna trama, regenerar este doc antes de subir el coche a pista.*
