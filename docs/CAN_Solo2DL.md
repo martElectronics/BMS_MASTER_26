@@ -710,8 +710,62 @@ Numeración V2.5 (packets 0x01-0x0C). 2 bytes en bytes 0-1 (SB 8) salvo ERPM
 
 ---
 
+## 22. VCU (mart-cockpit) — telemetría que transmite
+
+Lo que **publica la VCU** y el AiM puede loguear (fuente: `CAN_VCU.md` del
+cockpit, rama `feature/modJoseSTM32`). Standard ID, Big Endian, 125 kbps.
+Start Bit en convención RaceStudio (byte bajo en multi-byte).
+
+### 22.1 ID 0x488 (1160) — VCU_DIAG (8 bytes)
+| Canal | Short | Start Bit | Bits | Fmt | Descripción |
+|---|---|---|---|---|---|
+| VCU_FaultCause | FCAU | 0  | 8  | U | 0=OK 1=sinR2D 2=SDC abierto 3=APPS impl 4=fallo inv 5=BMS perdido |
+| VCU_AppsImpl   | AIMP | 8  | 8  | U | 0=none 1=S1 2=S2 3=ambos 4=desv>10% |
+| VCU_BmsFresh   | BMSF | 16 | 1  | U | trama BMS reciente |
+| VCU_InvFresh   | INVF | 17 | 1  | U | estado inversor reciente |
+| VCU_Simulating | SIMU | 18 | 1  | U | modo simulación |
+| VCU_ModeCAN    | MCAN | 19 | 1  | U | 1=control CAN |
+| VCU_Debug      | DBG_ | 20 | 1  | U | debug serie |
+| VCU_DriveEN    | DREN | 21 | 1  | U | par habilitado |
+| VCU_ResetCause | RCAU | 24 | 8  | U | 1=BOR 2=NRST 3=SW 4=IWDG 5=WWDG 6=lowpwr |
+| VCU_InvFault   | IFLT | 32 | 8  | U | eco del fault code del inversor |
+| VCU_Throttle   | THR_ | 40 | 8  | U | acelerador 0-100 % |
+| VCU_Heartbeat  | HBT_ | 56 | 16 | U | cuenta de loop (se congela si cuelga) |
+
+### 22.2 ID 0x48B (1163) — APPS (8 bytes)
+| Canal | Short | Start Bit | Bits | Fmt | Gain | Ud |
+|---|---|---|---|---|---|---|
+| APPS1_pct | A1PC | 8  | 16 | U | 0.1 | % |
+| APPS2_pct | A2PC | 24 | 16 | U | 0.1 | % |
+| APPS1_raw | A1RW | 40 | 16 | U | 1   | ADC |
+| APPS2_raw | A2RW | 56 | 16 | U | 1   | ADC |
+
+### 22.3 ID 0x48C (1164) — Freno (8 bytes)
+| Canal | Short | Start Bit | Bits | Fmt | Gain | Ud |
+|---|---|---|---|---|---|---|
+| Brake1_pct | B1PC | 8  | 16 | U | 0.1 | % (TODO: hoy 0) |
+| Brake2_pct | B2PC | 24 | 16 | U | 0.1 | % (TODO: hoy 0) |
+| Brake1_raw | B1RW | 40 | 16 | U | 1   | ADC |
+| Brake2_raw | B2RW | 56 | 16 | U | 1   | ADC |
+
+### 22.4 ID 0x48E (1166) — Señales VCU (8 bytes)
+| Canal | Short | Start Bit | Bits | Fmt | Descripción |
+|---|---|---|---|---|---|
+| VCU_Vbat   | VBAT | 8  | 16 | U | Vbat cruda (ADC; TODO escalar a V) |
+| VCU_SDC    | SDC_ | 16 | 8  | U | SDC presente (del BMS) |
+| VCU_Start  | STRT | 24 | 8  | U | pulsador Start |
+| VCU_R2D    | R2D_ | 32 | 8  | U | Ready-to-Drive |
+| VCU_AppsSt | APST | 40 | 8  | U | estado APPS 0=NORMAL 1=IMPL 2=PENDING |
+
+> IDs VCU del Excel aún **sin implementar**: 0x190 (400), 0x489/0x48A (FAIL
+> CODES), 0x48D (steer/ruedas), 0x48F (PWM). El layout de 0x48E cambió respecto
+> al Excel original (Vbat 2 bytes, SDC en vez de TSON, +estado APPS).
+
+---
+
 *Generado a partir de `src/main.cpp` (rev. 2026-05-20; §20 y poda de PFAI
 añadidos en rama `testing` rev. 2026-05-28; §21 inversor DTI HV-500 rev.
 2026-05-30; §21 inversor rehecha con manual DTI v2.5 + DBC: Standard/node 1,
-numeracion V2.5, transmit 0x3E1-0x4C1, comandos 0x21-0x181, rev. 2026-05-31).
+numeracion V2.5, transmit 0x3E1-0x4C1, comandos 0x21-0x181, rev. 2026-05-31;
+§22 telemetria de la VCU mart-cockpit rev. 2026-05-31).
 Si cambia alguna trama, regenerar este doc antes de subir el coche a pista.*
