@@ -147,6 +147,10 @@ static constexpr int NUM_MODULES = TOTALBOARDS / 2;
 // bajar este valor exige hacer reInit no bloqueante).
 #define WDG_TIMEOUT_US        8000000UL
 
+// Tras armar SDC_TSON, PRECHARGE_DONE debe llegar antes de este tiempo o
+// PRECHARGE_FAIL se enclava HIGH (solo se quita con reset de alimentación).
+#define PRECHARGE_TIMEOUT_MS  5000UL
+
 // ============================================================================
 //  ESTADO DE FALLOS — debounce NO-latching (auto-rearma; el latch es HW)
 // ============================================================================
@@ -286,6 +290,9 @@ void setup()
     pinMode(PIN_SDC_3V3,        INPUT);
     pinMode(PIN_IMD_OK,         INPUT);
     pinMode(PIN_HV_ACCU_VIL,    INPUT);
+    // Estado real del botón al arrancar → un botón pegado en HIGH al boot NO
+    // se interpreta como flanco de subida (no auto-arma el TSON).
+    tsonBtnPrev = digitalRead(PIN_TSON_BTN);
 
     Serial.println(F("========================================"));
     Serial.println(F("  BMS MASTER — STM32G474RE (Formula Student)"));
@@ -565,7 +572,7 @@ void updateTson()
         if (digitalRead(PIN_PRECHARGE_DONE)) {
             prechargeRunning = false;            // precarga completada a tiempo
             Serial.println(F("[PRE] Precarga OK."));
-        } else if ((millis() - tPrechargeStart) >= 5000UL) {
+        } else if ((millis() - tPrechargeStart) >= PRECHARGE_TIMEOUT_MS) {
             prechargeFail = true;                // LATCH duro → reset de alimentación
             logger.log(buildFaultRecord(FaultLogger::EVT_PRECHARGE_FAIL, 0));
             Serial.println(F("[PRE] FALLO: precarga no completada en 5 s (enclavado)."));
