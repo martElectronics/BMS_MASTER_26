@@ -87,8 +87,8 @@ bool BQ79606::begin()
     Serial.println(F("  [begin] antes pinMode WAKE")); Serial.flush();
     pinMode(BQ_DPIN(_cfg.pinWake),  OUTPUT); digitalWrite(BQ_DPIN(_cfg.pinWake),  HIGH);
     Serial.println(F("  [begin] WAKE OK")); Serial.flush();
-    pinMode(BQ_DPIN(_cfg.pinBmsOk), OUTPUT); digitalWrite(BQ_DPIN(_cfg.pinBmsOk), HIGH);
-    _bmsOkState = false;  // BMS_OK arranca en HIGH (fallo) hasta init OK
+    pinMode(BQ_DPIN(_cfg.pinBmsOk), OUTPUT); digitalWrite(BQ_DPIN(_cfg.pinBmsOk), LOW);
+    _bmsOkState = false;  // BMS_OK arranca en LOW (fallo) hasta init OK
     Serial.println(F("  [begin] BMS_OK OK")); Serial.flush();
     pinMode(BQ_DPIN(_cfg.pinFault), INPUT);
     Serial.println(F("  [begin] pinMode trio OK")); Serial.flush();
@@ -353,7 +353,7 @@ void BQ79606::clearAllFaults()
 void BQ79606::setBmsOk(bool ok)
 {
     if (ok == _bmsOkState) return;          // escribir solo en los cambios
-    digitalWrite(BQ_DPIN(_cfg.pinBmsOk), ok ? LOW : HIGH);  // OK=LOW, fallo=HIGH
+    digitalWrite(BQ_DPIN(_cfg.pinBmsOk), ok ? HIGH : LOW);  // OK=HIGH, fallo=LOW
     _bmsOkState = ok;
 }
 

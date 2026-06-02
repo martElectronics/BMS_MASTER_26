@@ -218,10 +218,11 @@ B7: causa del último reset
 | State_AutoAddr  | SADR | 3 | 0 | 1  | bool      | `bms.isOK` |
 | State_BmsInit   | SINI | 3 | 1 | 1  | bool      | `bmsInitOk` |
 | State_CanOk     | SCAN | 3 | 2 | 1  | bool      | FDCAN inicializó OK |
-| Pre_Started     | PSTR | 3 | 3 | 1  | bool      | Precarga iniciada |
-| Pre_Ok          | POK_ | 3 | 4 | 1  | bool      | Precarga completada |
-| Pin_SDC_3V3     | PSDC | 3 | 6 | 1  | bool      | SDC alimentado |
-| Pin_VIO_3V3     | PVIO | 3 | 7 | 1  | bool      | VIO_3V3 presente |
+| SDC_TSON        | STSN | 3 | 3 | 1  | bool      | Latch TSON cerrado |
+| Precharge_Fail  | PFAI | 3 | 4 | 1  | bool      | Precarga falló (enclavado → reset alim.) |
+| IMD_OK          | IMDK | 3 | 5 | 1  | bool      | IMD OK |
+| Pin_SDC_3V3     | PSDC | 3 | 6 | 1  | bool      | SDC presente |
+| TSON_Fail       | TSNF | 3 | 7 | 1  | bool      | TSON_FAIL activo |
 | FirstFault      | FFLT | 4 | 0 | 8  | uint8     | **Enum**: 0=none 1=V 2=T 3=NTC 4=Comm 5=Hall 6=!Init |
 | EpisodeMs       | EPMS | 5 | 0 | 16 | uint16 BE | Duración episodio actual (ms, clamp 65535) |
 | Rst_LPWR        | RLPW | 7 | 0 | 1  | bool      | Reset por low-power |
@@ -232,9 +233,9 @@ B7: causa del último reset
 | Rst_PIN         | RPIN | 7 | 5 | 1  | bool      | Reset por pin NRST |
 | Rst_OBL         | ROBL | 7 | 7 | 1  | bool      | Option-byte loader |
 
-> ⚠ **Rama `testing`:** el antiguo `Pre_Failed` (PFAI, B3 b5) se ha ELIMINADO
-> del firmware → ese bit es siempre 0, NO lo configures como canal. El byte 3
-> bit 5 queda libre.
+> **B3 reorganizado (PCB nueva):** lleva el estado de la máquina TSON. SDC_TSON
+> (b3) = latch cerrado; Precharge_Fail (b4) = enclavado hasta reset de
+> alimentación; IMD_OK (b5); SDC presente (b6); TSON_FAIL (b7).
 
 ### Recetas de debug (post-mortem)
 
@@ -566,10 +567,11 @@ y `Data Format` (`U` = Unsigned, `S` = Signed).
 | State_AutoAddr | SADR | 24 | 1 | U |
 | State_BmsInit | SINI | 25 | 1 | U |
 | State_CanOk | SCAN | 26 | 1 | U |
-| Pre_Started | PSTR | 27 | 1 | U |
-| Pre_Ok | POK_ | 28 | 1 | U |
+| SDC_TSON | STSN | 27 | 1 | U |
+| Precharge_Fail | PFAI | 28 | 1 | U |
+| IMD_OK | IMDK | 29 | 1 | U |
 | Pin_SDC_3V3 | PSDC | 30 | 1 | U |
-| Pin_VIO_3V3 | PVIO | 31 | 1 | U |
+| TSON_Fail | TSNF | 31 | 1 | U |
 | FirstFault | FFLT | 32 | 8 | U (enum) |
 | EpisodeMs | EPMS | 48 | 16 | U (ms) |
 | Rst_LPWR | RLPW | 56 | 1 | U |
@@ -580,7 +582,7 @@ y `Data Format` (`U` = Unsigned, `S` = Signed).
 | Rst_PIN | RPIN | 61 | 1 | U |
 | Rst_OBL | ROBL | 63 | 1 | U |
 
-> Start Bit 29 (PFAI) ELIMINADO en rama `testing` — no crear canal.
+> B3 (bits 24-31) reorganizado para la PCB nueva (TSON/precarga/IMD).
 
 ### ID 0x10 — Contadores de fallo (DLC 6)
 | Name | Short | Start Bit | Bits | Fmt |

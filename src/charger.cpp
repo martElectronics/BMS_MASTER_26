@@ -169,8 +169,7 @@ void loop()
         charging = allow;
 
         // BMS_OK refleja la SEGURIDAD del pack (no si cargamos o no).
-        // ⚠ Polaridad heredada del driver (rama testing: OK=LOW). Verificar
-        //   que coincide con lo que espera el hardware de habilitación de carga.
+        // Polaridad del driver: OK=HIGH, fallo=LOW (fail-safe).
         bms.setBmsOk(safe);
 
         printChgStatus();

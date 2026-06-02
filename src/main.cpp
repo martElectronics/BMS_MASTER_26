@@ -11,10 +11,12 @@
  *     tanto BMS_OK es una señal de SALUD: NO-latching, con debounce, y
  *     AUTO-REARMA cuando el fallo se despeja. El HW retiene el SDC abierto
  *     hasta el reset manual; el firmware nunca debe sostener el latch.
- *   · ⚠ POLARIDAD INVERTIDA (solo rama testing): BMS_OK OK = LOW,
- *     fallo = HIGH (en las demás ramas es al revés: OK = HIGH). Donde
- *     abajo se diga "BMS_OK LOW/cae" como estado de FALLO, léase HIGH;
- *     "BMS_OK HIGH/sube" como estado OK, léase LOW.
+ *     BMS_OK: OK = HIGH, fallo = LOW (fail-safe: micro muerto → LOW → SDC).
+ *   · TSON: máquina de estados del Tractive System ON (ver updateTson). El
+ *     latch SDC_TSON se arma con el botón solo si BMS_OK=HIGH, HV_ACCU=LOW,
+ *     SDC_3V3=HIGH y TSON_FAIL=LOW; se mantiene mientras SDC_3V3 y !TSON_FAIL.
+ *   · Precarga: al armar SDC_TSON, PRECHARGE_DONE debe llegar en 5 s o
+ *     PRECHARGE_FAIL se enclava HIGH (solo se quita con reset de alimentación).
  *   · El indicador rojo "AMS" lo enciende el latch HW (EV5.8.12) → SIN
  *     código en firmware.
  *   · Debounce por normativa: V leída/evaluada cada 500 ms y el fallo debe
@@ -34,15 +36,15 @@
  *   d=volcar log FRAM  D=reset índice log  C=reset contadores fallo (ID 16)
  *
  * ── PENDIENTE ───────────────────────────────────────────────────────────────
- *   · CAN (lib propia) y PWM ventiladores: marcados TODO, sin lib aún.
  *   · Umbrales de celda (UV/OV/UT/OT) y [TUNE] del HallSensor: confirmar
  *     contra datasheet de la celda / ruido real del HW (gap-analysis P1).
+ *   · TOTALBOARDS (BQ79606.h): poner el nº real de ICs de la PCB y RE-VALIDAR.
  */
 
 #include <Arduino.h>
 #include "BQ79606.h"            // driver de la cadena BQ
 #include "HallSensor.h"
-#include "MART_CAN.h"           // CAN (FDCAN1 PA11/PA12). Protocolo: TODO (mapa CAN)
+#include "MART_CAN.h"           // CAN (FDCAN1 PA11/PA12, 125 kbps, mapa en docs/)
 
 // Capacidad del PACK (Ah) = 4.0 (celda 40T) × Np (celdas en paralelo).
 // ✓ Topología confirmada: 12 módulos × (6+5)s × 11p → Ns=132, Np=11, 44 Ah pack
@@ -56,30 +58,33 @@
 #include <IWatchdog.h>          // watchdog HW independiente (STM32 IWDG/LSI)
 
 // ============================================================================
-//  PINES — STM32G474RE (NUCLEO-G474RE)
+//  PINES — STM32G474RE (PCB BMS Master, rev. nueva)
 // ============================================================================
 // BQ79606 (van en BQConfig)
 #define PIN_BQ_WAKE     PB_7
 #define PIN_BQ_FAULT    PB_2
 #define PIN_BQ_RX       PC_5
 #define PIN_BQ_TX       PC_4
-#define PIN_BMS_OK      PB_5    ///< Señal al SDC. La gestiona el driver (setBmsOk).
+#define PIN_BMS_OK      PB_5    ///< BMS_OK_STM → SDC. OK=HIGH (la gestiona el driver).
 
-// Control SDC / estado (gestionados por el main)
-#define PIN_PRE_FAIL        PA_7   ///< HIGH si la precarga no termina a tiempo
-#define PIN_OE_TXS          PB_10  ///< OE del level shifter (gated por VIO_3V3)
-#define PIN_VIO_3V3         PB_0   ///< HIGH → activar OE_TXS
-#define PIN_PRECHARGE_DONE  PA_5   ///< HIGH = precarga finalizada
-#define PIN_SDC_3V3         PC_7   ///< HIGH = precarga iniciada (SDC cerrado)
+// SDC / TSON / precarga (gestionados por el main) — PCB nueva
+#define PIN_TSON_FAIL       PB_8   ///< TSON_FAIL_STM (in). HIGH = fallo TSON
+#define PIN_TSON_BTN        PB_9   ///< TSON_STM (in). Pulsador de arranque del TSON
+#define PIN_SDC_TSON        PA_6   ///< SDC_TSON_STM (out). Latch del TSON
+#define PIN_PRECHARGE_DONE  PA_7   ///< PRECHARGE_DONE_STM (in). HIGH = precarga OK
+#define PIN_PRECHARGE_FAIL  PB_6   ///< PRECHARGE_FAIL_STM (out). HIGH enclavado si timeout 5 s
+#define PIN_SDC_3V3         PC_7   ///< SDC_3V3_STM (in). HIGH = SDC presente
+#define PIN_IMD_OK          PA_8   ///< IMD_OK_STM (in). Solo telemetría CAN
+#define PIN_HV_ACCU_VIL     PB_4   ///< HV_ACCU_VIL_STM (in). Condición de armado del TSON
 
 // Amperímetro DHAB S/118
 #define PIN_AMP_30A     PA_1   ///< Canal alta resolución (±30A)
 #define PIN_AMP_350A    PA_0   ///< Canal baja resolución (±350A)
 
-// PWM ventiladores (2/3 hilos vía driver, baja frecuencia)
-#define PIN_PWM         PB_4
+// PWM ventiladores (FanController)
+#define PIN_PWM         PB_10  ///< PWM_STM (out) → FanController
 
-// Pendiente (sin lib aún): CAN PA12/PA11
+// CAN: FDCAN1 PA12/PA11
 
 // ============================================================================
 //  OBJETOS
@@ -91,7 +96,7 @@ static const BQConfig bqCfg = {
     .pinBmsOk     = PIN_BMS_OK,
     .pinRx        = PIN_BQ_RX,
     .pinTx        = PIN_BQ_TX,
-    .pinTxEnable  = -1,       // OE_TXS lo gestiona el main (gated por VIO)
+    .pinTxEnable  = -1,       // sin level shifter en la PCB nueva
     .baudrate     = 125000
 };
 BQ79606 bms(bqCfg);
@@ -137,7 +142,7 @@ static constexpr int NUM_MODULES = TOTALBOARDS / 2;
 #define PRINT_MS      2000UL
 
 // Watchdog HW independiente: si el loop() se cuelga y no se refresca,
-// el IWDG resetea el MCU → BMS_OK pasa a fallo (HIGH en esta rama). 8 s: por encima
+// el IWDG resetea el MCU → BMS_OK cae a LOW (fail-safe). 8 s: por encima
 // del peor caso normal incl. reInit() (que bloquea — ver §9.4 del doc;
 // bajar este valor exige hacer reInit no bloqueante).
 #define WDG_TIMEOUT_US        8000000UL
@@ -186,9 +191,12 @@ static unsigned long tLastReinit  = 0;       ///< ms del último intento de reIn
 // Lecturas
 static BQResult lastResV = BQResult::OK, lastResT = BQResult::OK;
 
-// Precarga
-static bool          prechargeStarted = false;
-static bool          prechargeOk      = false;
+// SDC_TSON (latch del TSON) + precarga (PCB nueva)
+static bool          sdcTson          = false;  ///< estado del latch TSON (= nivel de PIN_SDC_TSON)
+static bool          tsonBtnPrev      = false;  ///< nivel previo del botón (flanco de subida)
+static bool          prechargeRunning = false;  ///< temporizador de precarga en marcha
+static bool          prechargeFail    = false;  ///< latch HIGH si timeout 5 s (se quita con reset de alimentación)
+static unsigned long tPrechargeStart  = 0;
 
 // ============================================================================
 //  TELEMETRÍA CAN (resumen IDs 10-14; ver docs/Mapa_CAN.txt)
@@ -229,10 +237,9 @@ static FaultLogger   logger;
 // ============================================================================
 //  PROTOTIPOS
 // ============================================================================
-void updateVio();
 void sampleAndEvaluate();
 void updateBmsOk();
-void updatePrecharge();
+void updateTson();
 void updateCanTx();
 void handleSerial();
 void printStatus();
@@ -270,11 +277,15 @@ void setup()
         Serial.println(F("[WDG] *** Reset previo causado por el WATCHDOG ***"));
 
     // Estado seguro inicial: BMS_OK lo pone el driver (LOW hasta init OK).
-    pinMode(PIN_PRE_FAIL,OUTPUT); digitalWrite(PIN_PRE_FAIL, LOW);
-    pinMode(PIN_OE_TXS,  OUTPUT); digitalWrite(PIN_OE_TXS,  LOW);
-    pinMode(PIN_VIO_3V3,        INPUT);
+    // Salidas en estado seguro: SDC_TSON abierto, PRECHARGE_FAIL sin fallo.
+    pinMode(PIN_SDC_TSON,      OUTPUT); digitalWrite(PIN_SDC_TSON,      LOW);
+    pinMode(PIN_PRECHARGE_FAIL,OUTPUT); digitalWrite(PIN_PRECHARGE_FAIL, LOW);
+    pinMode(PIN_TSON_FAIL,      INPUT);
+    pinMode(PIN_TSON_BTN,       INPUT);
     pinMode(PIN_PRECHARGE_DONE, INPUT);
     pinMode(PIN_SDC_3V3,        INPUT);
+    pinMode(PIN_IMD_OK,         INPUT);
+    pinMode(PIN_HV_ACCU_VIL,    INPUT);
 
     Serial.println(F("========================================"));
     Serial.println(F("  BMS MASTER — STM32G474RE (Formula Student)"));
@@ -289,15 +300,15 @@ void setup()
 
     // Init NO BLOQUEANTE (#3, opción B): si begin() falla, NO colgamos
     // esperando 'i'. El loop arranca igualmente y sampleAndEvaluate()
-    // reintenta reInit() cada BMS_REINIT_RETRY_MS. BMS_OK forzado a fallo
-    // (HIGH) mientras !bmsInitOk (ver updateBmsOk: bmsFault |= !bmsInitOk).
+    // reintenta reInit() cada BMS_REINIT_RETRY_MS. BMS_OK forzado LOW
+    // mientras !bmsInitOk (ver updateBmsOk: bmsFault |= !bmsInitOk).
     Serial.println(F("Iniciando BQ79606..."));
     bmsInitOk = bms.begin();
     if (bmsInitOk) {
         Serial.println(F("[OK] BQ79606 listo."));
     } else {
         tLastReinit = millis();
-        Serial.println(F("[WARN] BQ init FALLO. BMS_OK en fallo (HIGH); reintento en loop cada 2s."));
+        Serial.println(F("[WARN] BQ init FALLO. BMS_OK LOW; reintento en loop cada 2s."));
     }
 
     // SOC: init desde OCV (se asume coche EN REPOSO al arrancar).
@@ -339,7 +350,6 @@ void setup()
 // ============================================================================
 void loop()
 {
-    updateVio();          // OE_TXS según VIO_3V3
     hall.update();        // amperímetro cada ciclo (máxima resolución)
 
     sampleAndEvaluate();  // V/T en cadencia + debounce de fallos
@@ -348,9 +358,9 @@ void loop()
     // comms o NTC abierto) → ventiladores 100 % (no fiarse de Tmax rancia).
     bool fanFS = (lastResT != BQResult::OK) || fComm.cond || fNtc.cond;
     fan.update(bms.getMaxTemp(), hall.getCurrent(), fanFS);  // curva + FF
-    updateBmsOk();         // BMS_OK no-latching (auto-rearma)
-    updatePrecharge();
-    updateCanTx();         // telemetría CAN IDs 10-14 (throttled por timer)
+    updateBmsOk();         // BMS_OK no-latching (auto-rearma). Antes que updateTson.
+    updateTson();          // máquina TSON + precarga (usa bmsFault de updateBmsOk)
+    updateCanTx();         // telemetría CAN IDs 10-16 (throttled por timer)
     handleSerial();
 
     static unsigned long tPrint = 0;
@@ -358,16 +368,8 @@ void loop()
 
     // Refrescar el watchdog SOLO si la iteración completa terminó: si el
     // loop se cuelga en cualquier punto, el IWDG no se refresca → reset
-    // → BMS_OK a fallo (HIGH en esta rama). No mover esto al principio del loop.
+    // → BMS_OK cae a LOW (fail-safe). No mover esto al principio del loop.
     IWatchdog.reload();
-}
-
-// ============================================================================
-//  OE_TXS (level shifter) — solo activo si VIO_3V3 presente
-// ============================================================================
-void updateVio()
-{
-    digitalWrite(PIN_OE_TXS, digitalRead(PIN_VIO_3V3) ? HIGH : LOW);
 }
 
 // ============================================================================
@@ -474,7 +476,7 @@ void updateBmsOk()
     pV = faultV; pT = faultT; pNtc = faultNtc;
     pComm = faultComm; pHall = faultHall; pInit = faultInit;
 
-    // !bmsInitOk fuerza fault para que BMS_OK quede en fallo (HIGH) sin
+    // !bmsInitOk fuerza fault para que BMS_OK quede LOW sin
     // ventana de debounce al arrancar con init fallido (#3, opción B).
     bmsFault = faultV || faultT || faultNtc || faultComm || faultHall || faultInit;
 
@@ -510,35 +512,66 @@ void updateBmsOk()
         firstFaultTrigger = 0;
     }
 
-    // Auto-rearma: cuando todo se despeja, BMS_OK vuelve a OK (LOW en esta
-    // rama). El latch HW mantiene el SDC abierto hasta el reset manual humano (EV6.1.6).
+    // Auto-rearma: cuando todo se despeja, BMS_OK vuelve a HIGH. El latch HW
+    // mantiene el SDC abierto hasta el reset manual humano (EV6.1.6).
     bms.setBmsOk(!bmsFault);
 }
 
 // ============================================================================
-//  PRECARGA
+//  TSON — máquina del Tractive System ON + precarga (PCB nueva)
 // ============================================================================
-void updatePrecharge()
+//  SDC_TSON (salida, latch):
+//    · ARMA (LOW→HIGH) con el FLANCO DE SUBIDA del botón TSON, solo si en ese
+//      instante: BMS_OK=HIGH (!bmsFault) Y HV_ACCU_VIL=LOW Y SDC_3V3=HIGH Y
+//      TSON_FAIL=LOW.
+//    · SE MANTIENE mientras SDC_3V3=HIGH y TSON_FAIL=LOW.
+//    · Si SDC_3V3 cae o TSON_FAIL sube → desarma (hay que re-pulsar el botón).
+//  PRECHARGE_FAIL (salida, latch DURO):
+//    · Al armar SDC_TSON arranca un temporizador de 5 s.
+//    · Si PRECHARGE_DONE no llega en 5 s → HIGH ENCLAVADO (solo se quita con
+//      reset de alimentación / MCU; re-armar NO lo limpia).
+// ============================================================================
+void updateTson()
 {
-    bool sdcActive     = digitalRead(PIN_SDC_3V3);
-    bool prechargeDone = digitalRead(PIN_PRECHARGE_DONE);
+    bool sdc3v3   = digitalRead(PIN_SDC_3V3);
+    bool tsonFail = digitalRead(PIN_TSON_FAIL);
+    bool hvAccu   = digitalRead(PIN_HV_ACCU_VIL);
+    bool tsonBtn  = digitalRead(PIN_TSON_BTN);
 
-    if (sdcActive && !prechargeStarted && !prechargeOk) {
-        prechargeStarted = true;
-        Serial.println(F("[PRE] Precarga iniciada."));
+    // ── Latch SDC_TSON ──
+    if (sdcTson && (!sdc3v3 || tsonFail)) {     // pierde condición de mantenimiento
+        sdcTson = false;
+        Serial.println(F("[TSON] desarmado (SDC_3V3 bajo o TSON_FAIL)."));
     }
-    if (prechargeStarted && !prechargeOk) {
-        if (prechargeDone) {
-            prechargeOk = true;
-            digitalWrite(PIN_PRE_FAIL, LOW);
+    bool btnRising = tsonBtn && !tsonBtnPrev;   // flanco de subida del botón
+    if (!sdcTson && btnRising && !bmsFault && !hvAccu && sdc3v3 && !tsonFail) {
+        sdcTson = true;
+        Serial.println(F("[TSON] armado."));
+    }
+    tsonBtnPrev = tsonBtn;
+    digitalWrite(PIN_SDC_TSON, sdcTson ? HIGH : LOW);
+
+    // ── Precarga: temporizador de 5 s desde el flanco SDC_TSON ↑ ──
+    static bool sdcTsonPrev = false;
+    if (sdcTson && !sdcTsonPrev) {               // flanco de armado
+        prechargeRunning = true;
+        tPrechargeStart  = millis();
+        Serial.println(F("[PRE] Precarga iniciada (5 s)."));
+    }
+    if (!sdcTson) prechargeRunning = false;      // se cancela al desarmar (si no falló)
+    sdcTsonPrev = sdcTson;
+
+    if (prechargeRunning && !prechargeFail) {
+        if (digitalRead(PIN_PRECHARGE_DONE)) {
+            prechargeRunning = false;            // precarga completada a tiempo
             Serial.println(F("[PRE] Precarga OK."));
+        } else if ((millis() - tPrechargeStart) >= 5000UL) {
+            prechargeFail = true;                // LATCH duro → reset de alimentación
+            logger.log(buildFaultRecord(FaultLogger::EVT_PRECHARGE_FAIL, 0));
+            Serial.println(F("[PRE] FALLO: precarga no completada en 5 s (enclavado)."));
         }
     }
-    if (!sdcActive) {
-        prechargeStarted = false;
-        prechargeOk      = false;
-        digitalWrite(PIN_PRE_FAIL, LOW);
-    }
+    digitalWrite(PIN_PRECHARGE_FAIL, prechargeFail ? HIGH : LOW);
 }
 
 // ============================================================================
@@ -603,14 +636,15 @@ static void buildDebugFlags(uint8_t out[4])
     if (lastResV == BQResult::CRC_ERROR)   out[2] |= (1 << 6);
     if (lastResT != BQResult::OK)          out[2] |= (1 << 7);
 
-    // B3 — state
-    if (bms.isOK())                        out[3] |= (1 << 0);
-    if (bmsInitOk)                         out[3] |= (1 << 1);
-    if (gCanOk)                            out[3] |= (1 << 2);
-    if (prechargeStarted)                  out[3] |= (1 << 3);
-    if (prechargeOk)                       out[3] |= (1 << 4);
-    if (digitalRead(PIN_SDC_3V3))          out[3] |= (1 << 6);
-    if (digitalRead(PIN_VIO_3V3))          out[3] |= (1 << 7);
+    // B3 — state (PCB nueva: SDC/TSON/precarga/IMD)
+    if (bms.isOK())                        out[3] |= (1 << 0); // AutoAddress OK
+    if (bmsInitOk)                         out[3] |= (1 << 1); // init BQ OK
+    if (gCanOk)                            out[3] |= (1 << 2); // FDCAN OK
+    if (sdcTson)                           out[3] |= (1 << 3); // latch TSON cerrado
+    if (prechargeFail)                     out[3] |= (1 << 4); // precarga FALLÓ (enclavado)
+    if (digitalRead(PIN_IMD_OK))           out[3] |= (1 << 5); // IMD_OK
+    if (digitalRead(PIN_SDC_3V3))          out[3] |= (1 << 6); // SDC presente
+    if (digitalRead(PIN_TSON_FAIL))        out[3] |= (1 << 7); // TSON_FAIL
 }
 
 static FaultRecord buildFaultRecord(uint8_t eventType, uint8_t firstFlt)
@@ -913,7 +947,7 @@ void printStatus()
 {
     Serial.println(F("\n=== BMS STATUS ==="));
     Serial.printf("BMS_OK:   %s%s\n",
-                  bmsFault ? "HIGH (FALLO)" : "LOW (OK)",
+                  bmsFault ? "LOW (FALLO)" : "HIGH (OK)",
                   bmsFault ? "" : "  [latch SDC es HW]");
     Serial.printf("V: min=%.3f max=%.3f d=%.1fmV\n",
                   bms.getMinVoltage(), bms.getMaxVoltage(), bms.getVoltageDelta());
@@ -933,9 +967,9 @@ void printStatus()
                   !hall.isOK());
     Serial.printf("Cnt(ID16): V=%u T=%u NTC=%u COMM=%u HALL=%u INIT=%u  [C=reset]\n",
                   cntFltV, cntFltT, cntFltNtc, cntFltComm, cntFltHall, cntFltInit);
-    Serial.printf("PRE_FAIL=%s  VIO=%s  SDC=%s\n",
-                  digitalRead(PIN_PRE_FAIL) ? "HIGH" : "LOW",
-                  digitalRead(PIN_VIO_3V3)  ? "HIGH" : "LOW",
-                  digitalRead(PIN_SDC_3V3)  ? "HIGH" : "LOW");
+    Serial.printf("TSON: SDC_TSON=%d PRE_FAIL=%d | SDC_3V3=%d TSON_FAIL=%d HV_ACCU=%d IMD_OK=%d\n",
+                  sdcTson, prechargeFail,
+                  digitalRead(PIN_SDC_3V3), digitalRead(PIN_TSON_FAIL),
+                  digitalRead(PIN_HV_ACCU_VIL), digitalRead(PIN_IMD_OK));
     Serial.println(F("=================="));
 }
