@@ -229,7 +229,7 @@ static uint8_t       cntFltInit = 0;   ///< episodios de init BQ fallido
 static uint8_t       firstFaultTrigger  = 0;
 static uint8_t       resetCauseSnapshot = 0;
 
-// ── Persistencia de fallos en FRAM (MB85RC256V via I²C1 PB8/PB9) ────────────
+// ── Persistencia de fallos en FRAM (MB85RC256V via I²C3 PC8/PC9) ────────────
 // Se loguea: BOOT (con reset cause), transiciones BMS_OK fall/rise,
 // intentos de reInit, fallo de precarga. Lectura con comando 'd' (Serial).
 static FaultLogger   logger;

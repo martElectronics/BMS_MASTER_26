@@ -19,8 +19,8 @@
 // ============================================================================
 bool FaultLogger::begin()
 {
-    Wire.setSCL(PB8);
-    Wire.setSDA(PB9);
+    Wire.setSCL(PC8);   // I2C3_SCL (PB8 ahora es TSON_FAIL en la PCB nueva)
+    Wire.setSDA(PC9);   // I2C3_SDA (PB9 ahora es TSON_BTN)
     Wire.begin();
     Wire.setClock(400000);    // Fast Mode (la chip aguanta hasta 1 MHz)
 

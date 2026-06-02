@@ -8,7 +8,7 @@
  *
  * Hardware:
  *   MB85RC256V (Fujitsu / Adafruit breakout) — 32 KB I²C @ 400 kHz.
- *   SCL = PB8  SDA = PB9   (I²C1 alt en NUCLEO-G474RE).
+ *   SCL = PC8  SDA = PC9   (I²C3 en la PCB nueva; PB8/PB9 son TSON).
  *   Address = 0x50 (A0/A1/A2 a GND). WP a GND.
  *
  * Estructura en FRAM (ver doc):
@@ -56,7 +56,7 @@ public:
     };
 
     /**
-     * Inicializa I²C1 en PB8/PB9 @ 400 kHz, comprueba que el MB85RC256V
+     * Inicializa I²C3 en PC8/PC9 @ 400 kHz, comprueba que el MB85RC256V
      * responde, lee/valida el header. Si el magic está corrupto o no
      * existe (primera vez), formatea el log.
      * @return true si la FRAM responde y queda lista para loguear.
