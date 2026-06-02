@@ -284,6 +284,9 @@ void setup()
     // Salidas en estado seguro: SDC_TSON abierto, PRECHARGE_FAIL sin fallo.
     pinMode(PIN_SDC_TSON,      OUTPUT); digitalWrite(PIN_SDC_TSON,      LOW);
     pinMode(PIN_PRECHARGE_FAIL,OUTPUT); digitalWrite(PIN_PRECHARGE_FAIL, LOW);
+    // Entradas SIN pull: vienen drivadas por el aislador ISO7742 (push-pull,
+    // inactivo=LOW) y el botón pasa por un comparador → flanco limpio. NO añadir
+    // INPUT_PULLUP/DOWN (sería redundante y pelearía con el driver).
     pinMode(PIN_TSON_FAIL,      INPUT);
     pinMode(PIN_TSON_BTN,       INPUT);
     pinMode(PIN_PRECHARGE_DONE, INPUT);
