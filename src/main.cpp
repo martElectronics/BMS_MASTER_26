@@ -129,6 +129,22 @@ static constexpr int NUM_MODULES = TOTALBOARDS / 2;
 #define FAULT_NTC_MS  1000UL    ///< NTC abierto (pérdida de medida, clase T)
 #define FAULT_COMM_MS  500UL    ///< Comms BQ caídas sin recuperar
 
+// ⚠⚠ BANCO — relaja las ventanas de fallo para que un glitch del BQ no abra el
+// SDC mientras se prueban otros subsistemas. SOLO en el build de banco
+// (env [env:bms_bench], -D BENCH_BMS). EN PRODUCCIÓN rigen 0,5/1 s (FS EV5.8,
+// scruti 103/104). NO FLASHEAR ESTE BUILD AL COCHE.
+#ifdef BENCH_BMS
+  #undef  FAULT_V_MS
+  #undef  FAULT_T_MS
+  #undef  FAULT_NTC_MS
+  #undef  FAULT_COMM_MS
+  #define FAULT_V_MS    1000UL   ///< BANCO: 1 s (prod 500 ms)
+  #define FAULT_T_MS    1500UL   ///< BANCO: 1,5 s (prod 1000 ms)
+  #define FAULT_NTC_MS  1500UL   ///< BANCO: 1,5 s (prod 1000 ms)
+  #define FAULT_COMM_MS 1500UL   ///< BANCO: 1,5 s (prod 500 ms)
+  #warning "BENCH_BMS activo: ventanas de fallo relajadas (1-1.5s). NO FLASHEAR AL COCHE."
+#endif
+
 // Cadencias de muestreo: 2× respecto al mínimo FS para tener ≥2 muestras
 // dentro de cada ventana de debounce → mejor filtrado de ruido transitorio.
 // Las ventanas FAULT_V_MS / FAULT_T_MS NO se tocan (las marca FS EV5.8).
@@ -279,6 +295,12 @@ void setup()
     Serial.println(F("========================================"));
     Serial.println(F("  BMS MASTER — STM32G474RE (Formula Student)"));
     Serial.println(F("========================================"));
+#ifdef BENCH_BMS
+    Serial.println(F("  *** BUILD DE BANCO (BENCH_BMS) ***"));
+    Serial.println(F("  Ventanas de fallo RELAJADAS (1-1.5s)."));
+    Serial.println(F("  >>> NO FLASHEAR AL COCHE <<<"));
+    Serial.println(F("========================================"));
+#endif
     Serial.printf("  Modulos=%d (TOTALBOARDS=%d)  UV=%.2f OV=%.2f UT=%.0f OT=%.0f\n",
                   NUM_MODULES, TOTALBOARDS, CELL_UV_V, CELL_OV_V, CELL_UT_C, CELL_OT_C);
     Serial.printf("  I_max desc=%.0fA carga=%.0fA\n",
