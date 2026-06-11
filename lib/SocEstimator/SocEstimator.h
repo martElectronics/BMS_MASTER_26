@@ -41,7 +41,7 @@
 // Detección de reposo para confiar el OCV (IR despreciable a baja I).
 #define SOC_REST_CURRENT_A     2.0f      ///< |I| < esto = candidato a reposo
 #define SOC_REST_MS            30000UL   ///< estable este tiempo → reposo fiable
-#define SOC_RECAL_ALPHA        0.05f     ///< EMA de re-ajuste hacia OCV (suave)
+#define SOC_RECAL_PER_S        0.02f     ///< Coef. de re-ajuste hacia OCV POR SEGUNDO (tau ~50 s). Time-normalizado → no depende de la frecuencia del loop.
 
 class SocEstimator {
 public:
@@ -86,7 +86,13 @@ public:
             if (_restSince == 0) _restSince = now;
             if ((now - _restSince) >= SOC_REST_MS) {
                 float ocvSoc = _ocvToSoc(minCellV);
-                _soc += SOC_RECAL_ALPHA * (ocvSoc - _soc);  // nudge suave
+                // Nudge hacia el OCV normalizado por tiempo: alpha_eff = coef/s × dt_s.
+                // Así la convergencia es independiente de la frecuencia del loop
+                // (antes, con alpha por iteración, saltaba al OCV en una fracción
+                // de segundo y metía saltos en la telemetría).
+                float a = SOC_RECAL_PER_S * dt_s;
+                if (a > 1.0f) a = 1.0f;
+                _soc += a * (ocvSoc - _soc);
             }
         } else {
             _restSince = 0;

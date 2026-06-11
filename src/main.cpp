@@ -363,7 +363,11 @@ void loop()
     hall.update();        // amperímetro cada ciclo (máxima resolución)
 
     sampleAndEvaluate();  // V/T en cadencia + debounce de fallos
-    soc.update(hall.getCurrent(), bms.getMinVoltage(), true);   // coulomb + OCV
+    // voltsReliable: solo fiar la V (para el re-snap OCV) si el BQ está
+    // inicializado Y la última lectura de tensión fue OK. Si no, getMinVoltage()
+    // devuelve 0/rancio y en reposo arrastraría el SOC hacia un valor falso.
+    bool vReliable = bmsInitOk && (lastResV == BQResult::OK);
+    soc.update(hall.getCurrent(), bms.getMinVoltage(), vReliable);   // coulomb + OCV
     // Fail-safe de refrigeración: T no fresca/fiable (lectura T fallida,
     // comms o NTC abierto) → ventiladores 100 % (no fiarse de Tmax rancia).
     bool fanFS = (lastResT != BQResult::OK) || fComm.cond || fNtc.cond;
@@ -564,9 +568,18 @@ void updateTson()
     // ── Precarga: temporizador de 5 s desde el flanco SDC_TSON ↑ ──
     static bool sdcTsonPrev = false;
     if (sdcTson && !sdcTsonPrev) {               // flanco de armado
-        prechargeRunning = true;
-        tPrechargeStart  = millis();
-        Serial.println(F("[PRE] Precarga iniciada (5 s)."));
+        // PRECHARGE_DONE NO puede estar HIGH antes de cerrar el TSON: si lo
+        // está, la entrada está atascada (aislador/soldadura) → no fiarse y
+        // enclavar fallo, en vez de dar la precarga por hecha al instante.
+        if (digitalRead(PIN_PRECHARGE_DONE)) {
+            prechargeFail = true;
+            logger.log(buildFaultRecord(FaultLogger::EVT_PRECHARGE_FAIL, 0));
+            Serial.println(F("[PRE] FALLO: PRECHARGE_DONE ya HIGH al armar (entrada atascada)."));
+        } else {
+            prechargeRunning = true;
+            tPrechargeStart  = millis();
+            Serial.println(F("[PRE] Precarga iniciada (5 s)."));
+        }
     }
     if (!sdcTson) prechargeRunning = false;      // se cancela al desarmar (si no falló)
     sdcTsonPrev = sdcTson;
