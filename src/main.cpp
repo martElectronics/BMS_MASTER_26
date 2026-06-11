@@ -55,6 +55,7 @@
 #include "SocEstimator.h"
 #include "FanController.h"      // ventiladores: curva Tmax + feed-forward I
 #include "FaultLogger.h"        // FRAM MB85RC256V (I²C1 PB8/PB9, 0x50)
+#include "FaultTimer.h"         // debounce K-de-N (lógica pura, testeable en nativo)
 #include <IWatchdog.h>          // watchdog HW independiente (STM32 IWDG/LSI)
 
 // ============================================================================
@@ -153,35 +154,9 @@ static constexpr int NUM_MODULES = TOTALBOARDS / 2;
 
 // ============================================================================
 //  ESTADO DE FALLOS — debounce NO-latching (auto-rearma; el latch es HW)
+//  La clase FaultTimer vive en lib/FaultTimer/FaultTimer.h (testeable en
+//  nativo: test/test_faulttimer/, `pio test -e native`).
 // ============================================================================
-struct FaultTimer {
-    // Debounce K-de-N consecutivas + ventana wall-time.
-    //  - sample(true)  : incrementa badRun (sat 255); fija tStart en
-    //                    el primer "bad" de la serie.
-    //  - sample(false) : un OK borra la serie (badRun=0, tStart=0).
-    //  - confirmed()   : >=k muestras malas consecutivas Y ventana de
-    //                    tiempo cumplida. k=2 filtra ráfagas de UNA
-    //                    sola muestra ruidosa (con cadencia ≥2 muestras
-    //                    por ventana FS, exige 2 consecutivas malas).
-    bool          cond   = false;   ///< última muestra (true=bad)
-    uint8_t       badRun = 0;       ///< muestras malas consecutivas
-    unsigned long tStart = 0;       ///< wall-time del primer bad (ms)
-
-    void sample(bool bad, unsigned long now) {
-        cond = bad;
-        if (bad) {
-            if (badRun == 0) tStart = now;
-            if (badRun < 255) badRun++;
-        } else {
-            badRun = 0;
-            tStart = 0;
-        }
-    }
-    bool confirmed(unsigned long now, unsigned long windowMs,
-                   uint8_t k = 2) const {
-        return (badRun >= k) && ((now - tStart) >= windowMs);
-    }
-};
 static FaultTimer fV, fT, fNtc, fComm;
 static bool bmsFault = false;     ///< fallo confirmado AHORA (no latcheado)
 

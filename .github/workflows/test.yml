@@ -1,0 +1,27 @@
+name: tests
+
+# Corre los tests unitarios nativos en cada push y cada pull request.
+# Los runners de GitHub (ubuntu-latest) ya traen gcc/g++, así que
+# `pio test -e native` funciona sin instalar toolchain.
+on:
+  push:
+  pull_request:
+
+jobs:
+  native-tests:
+    name: Tests nativos (FaultTimer)
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      - name: Install PlatformIO
+        run: pip install --upgrade platformio
+
+      - name: Run native unit tests
+        run: pio test -e native -v
