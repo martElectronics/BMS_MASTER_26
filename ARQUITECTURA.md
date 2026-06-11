@@ -13,8 +13,10 @@
 
 Monitorizar el acumulador de tracción (TS) y gobernar la señal `BMS_OK`
 del Shutdown Circuit (SDC): medida de corriente, estimación de SOC,
-refrigeración y telemetría CAN. **El balanceo NO forma parte de este
-firmware** — se hace off-car con una herramienta aparte.
+refrigeración y telemetría CAN. En la **PCB nueva** gestiona además el
+arranque del TS: **máquina TSON + precarga** y lectura de **IMD** (§3.3).
+**El balanceo NO forma parte de este firmware** — se hace off-car con
+una herramienta aparte.
 
 El acumulador: cadena daisy-chain de BQ79606A-Q1 (N ICs), agrupados en
 módulos de 2 boards (par: 6 celdas + 6 NTC; impar: 5 celdas + 3 NTC).
@@ -24,22 +26,30 @@ Celda: **Samsung INR21700-40T**, 4.0 Ah NCA, carga 4.2 V, corte 2.5 V.
 
 ## 2. Mapa de pines (STM32G474RE)
 
-| Función | Pin | Notas |
-|---|---|---|
-| BQ WAKE / FAULT / RX / TX | PB7 / PB2 / PC5 / PC4 | en `BQConfig` |
-| `BMS_OK` → SDC | PB5 | lo escribe el driver (`setBmsOk`) |
-| `MC_OK` (micro vivo) | PA6 | HIGH en setup |
-| `PRE_FAIL` | PA7 | precarga fallida |
-| `OE_TXS` (level shifter) | PB10 | gated por VIO_3V3 |
-| VIO_3V3 / PRECHARGE_DONE / SDC_3V3 | PB0 / PA5 / PC7 | entradas |
-| Amperímetro DHAB 30A / 350A | PA1 / PA0 | HallSensor |
-| CAN (FDCAN1) RX / TX | PA11 / PA12 | fijo en la lib |
-| PWM ventiladores | PB4 | 2/3 hilos, baja frecuencia |
-| FRAM I²C1 SCL / SDA | PB8 / PB9 | MB85RC256V @ 0x50 (FaultLogger) |
+> Pinout de la **PCB nueva** (sin level shifter: `pinTxEnable = -1`).
+
+| Función | Pin | Dir | Notas |
+|---|---|---|---|
+| BQ WAKE / FAULT / RX / TX | PB7 / PB2 / PC5 / PC4 | — | en `BQConfig` |
+| `BMS_OK` → SDC | PB5 | out | lo escribe el driver (`setBmsOk`). **OK=HIGH, fallo=LOW** |
+| `TSON_FAIL` | PB8 | in | HIGH = fallo del TSON |
+| `TSON_BTN` | PB9 | in | pulsador de armado del TSON |
+| `SDC_TSON` | PA6 | out | latch del TSON |
+| `PRECHARGE_DONE` | PA7 | in | HIGH = precarga completada |
+| `PRECHARGE_FAIL` | PB6 | out | HIGH **enclavado** si timeout 5 s |
+| `SDC_3V3` | PC7 | in | HIGH = SDC presente |
+| `IMD_OK` | PA8 | in | solo telemetría CAN |
+| `HV_ACCU_VIL` | PB4 | in | condición de armado del TSON |
+| Amperímetro DHAB 30A / 350A | PA1 / PA0 | in | HallSensor |
+| CAN (FDCAN1) RX / TX | PA11 / PA12 | — | fijo en la lib (125 kbps) |
+| PWM ventiladores | PB10 | out | 2/3 hilos, baja frecuencia |
+| FRAM I²C3 SCL / SDA | PC8 / PC9 | — | MB85RC256V @ 0x50 (FaultLogger) |
 
 > ⚠ Los pines no-BQ se usan con la API Arduino; **verificar el mapeo
-> físico en HW** (que compile no garantiza el pin correcto, ni que PB4
-> tenga PWM en ese timer).
+> físico en HW** (que compile no garantiza el pin correcto, ni que **PB10**
+> tenga PWM en el timer esperado).
+> Entradas del TSON (PB8/PB9/PC7/PB4) sin pull: vienen de un 595/ISO7742
+> (inactivas a LOW) y el botón pasa por un comparador.
 
 ---
 
@@ -85,6 +95,25 @@ El balanceo no forma parte de este firmware (se hace off-car); este
 master nunca activa los FETs → la V siempre es fiable (sin ventana
 ciega de tensión).
 
+### 3.3 TSON + precarga (PCB nueva, `updateTson()`)
+
+Máquina de estados del **Tractive System ON**:
+
+- **Armado:** el latch `SDC_TSON` (PA6) pasa a HIGH al **pulsar `TSON_BTN`**
+  (PB9) **solo si**: `BMS_OK`=HIGH, `HV_ACCU_VIL` (PB4)=LOW, `SDC_3V3`
+  (PC7)=HIGH y `TSON_FAIL` (PB8)=LOW. Anti auto-arme en boot (lee el botón
+  al arrancar para no contar un nivel ya alto como pulsación).
+- **Mantenimiento:** sigue HIGH mientras `SDC_3V3`=HIGH y `!TSON_FAIL`; si
+  cualquiera cambia, cae y hay que **re-pulsar**.
+- **Precarga:** al flanco de armado de `SDC_TSON` arranca un timer; si
+  `PRECHARGE_DONE` (PA7) no llega antes de `PRECHARGE_TIMEOUT_MS` (5 s),
+  `PRECHARGE_FAIL` (PB6) se **enclava HIGH** (solo se quita con reset de
+  alimentación).
+- `IMD_OK` (PA8) no influye en el TSON: solo se publica por CAN.
+
+> El BMS_OK **gobierna** el TSON (sin BMS_OK no se arma), pero el TSON no
+> influye en BMS_OK.
+
 ---
 
 ## 4. Estructura del proyecto
@@ -95,7 +124,7 @@ lib/BQ79606/            Driver de la cadena BQ (VALIDADO HW, banco 20 ICs)
 lib/HallSensor/          Amperímetro DHAB S/118 (portado + corregido)
 lib/SocEstimator/        SOC: coulomb counting + OCV (header-only)
 lib/FanController/       Ventiladores: curva Tmax + feed-forward (header-only)
-lib/FaultLogger/         Log persistente en FRAM MB85RC256V (I²C1 PB8/PB9)
+lib/FaultLogger/         Log persistente en FRAM MB85RC256V (I²C3 PC8/PC9)
 ```
 
 Cada lib encapsula una responsabilidad; `main.cpp` solo orquesta y
@@ -106,18 +135,18 @@ mantiene la cadena de fallo / `BMS_OK`.
 ## 5. Flujo del `loop()`
 
 ```
-updateVio()           OE_TXS = VIO_3V3
 hall.update()         lee amperímetro (cada ciclo, máx resolución)
-sampleAndEvaluate()   V@500ms + T@1000ms + NTC + comms → fija
-                      las condiciones de fallo (FaultTimer.cond)
+sampleAndEvaluate()   V@250ms + T@500ms + NTC + comms → fija las
+                      condiciones de fallo (FaultTimer.cond) + reInit rate-limited
 soc.update()          coulomb counting + re-snap OCV en reposo
-fan.update()          curva sobre Tmax + feed-forward por I
+fan.update()          curva sobre Tmax + feed-forward; fail-safe 100 % si T no fiable
 updateBmsOk()         confirma fallos (debounce) → bms.setBmsOk(!fault);
-                      gestiona episodio de fallo (telemetría)
-updatePrecharge()     timer 5 s → PRE_FAIL
-updateCanTx()         arma IDs 10-14, 386-392; send() (throttle por timer)
+                      contadores por causa + log FRAM   (ANTES que updateTson)
+updateTson()          máquina TSON (botón/SDC) + precarga (timer 5 s → PRECHARGE_FAIL)
+updateCanTx()         arma IDs 10-16 + 386-392; send() (throttle por timer)
 handleSerial()        comandos de diagnóstico
 printStatus() @2s     volcado por serie
+IWatchdog.reload()    AL FINAL: si el loop se cuelga → reset → BMS_OK LOW (fail-safe)
 ```
 
 ---
@@ -148,7 +177,7 @@ datasheet no trae curva OCV) → SOC **orientativo** hasta caracterizar.
 `SOC_PACK_CAPACITY_AH = 4.0 × Np` (ajustar Np).
 
 ### 6.5 FaultLogger (FRAM MB85RC256V via I²C)
-Log persistente de eventos en FRAM externa (32 KB, I²C1 PB8/PB9, addr 0x50).
+Log persistente de eventos en FRAM externa (32 KB, I²C3 PC8/PC9, addr 0x50).
 Resuelve "BMS_OK se cayó en pista y el CAN tampoco funcionaba" — los
 eventos quedan grabados aunque no haya telemetría. Ring buffer de 2047
 records de 16 bytes (BOOT, BMS_OK fall/rise, reInit, precharge fail).
@@ -159,7 +188,8 @@ Lectura por comando serie `d` (dump) / `D` (clear). Endurance FRAM
 Curva sobre **Tmax** del pack: OFF<32 °C / ON≥35 °C (histéresis) /
 rampa 30→100 % entre 35–50 °C / 100 % ≥50 °C. **Feed-forward**: |I|
 alta fuerza piso de duty (anticipa inercia térmica). 100 % a 50 °C deja
-10 °C de margen al corte FS de 60 °C. PWM 2/3 hilos baja-f (PB4).
+10 °C de margen al corte FS de 60 °C. PWM 2/3 hilos baja-f (PB10).
+`fan.update()` recibe un `failSafe` (T no fiable → 100 %).
 
 ---
 
@@ -174,7 +204,8 @@ mapa; `setPacket`+`send()` cada loop (throttle por timer).
 | 11 | MaxT, MaxV(mV), MinV(mV), MinT |
 | 12/13 | GEN_STATUS / contadores — **encoding PROVISIONAL** |
 | 14 | lastFailTime, numCommFails, numCrcFails, numTriesReset |
-| **15** | **BMS_DEBUG (8 B)** — granularidad de fallos para diagnóstico: B0 confirmados, B1 sub-fallos Hall, B2 V/T snapshot, B3 state, B4 primer trigger, B5-6 duración, B7 reset cause |
+| **15** | **BMS_DEBUG (8 B)** — granularidad de fallos para diagnóstico: B0 confirmados, B1 sub-fallos Hall, B2 V/T snapshot, B3 state (incl. SDC_TSON/Precharge_Fail/IMD_OK), B4 primer trigger, B5-6 duración, B7 reset cause |
+| **16** | **contadores de fallo por causa** (`cntFltV/T/NTC/Comm/Hall/Init`), incrementados en flanco de subida (uint8 saturado a 255) |
 | 386–389 | por módulo: IDmod + V1..V11 + VTotal (paginado) |
 | 390–391 | por módulo: IDmod + T1..T9, Tmax/min, status |
 | 392 | SOC (%) |
