@@ -57,6 +57,7 @@ void HallSensor::begin()
     // Inicializar watchdog: timestamp actual + raw activo, para no generar
     // un falso "stuck" en el primer arranque.
     _lastChangeTime = micros();
+    _lastUpdateUs   = micros();   // para la normalización dt de los EMA
     _lastActiveRaw  = analogRead(_usingLowRange ? _pin30A : _pin350A);
 
     Serial.printf("[HALL] Offset 30A=%.4fV  Offset 350A=%.4fV\n",
@@ -84,6 +85,12 @@ void HallSensor::begin()
 
 void HallSensor::update()
 {
+    // dt desde la última update() (us → s) para normalizar los EMA. micros()
+    // es unsigned → la resta es correcta aun con wrap (~71 min).
+    unsigned long nowUs = micros();
+    float dt_s = (nowUs - _lastUpdateUs) / 1.0e6f;
+    _lastUpdateUs = nowUs;
+
     // ── 1. Leer ADC ──────────────────────────────────────────────────────────
     int raw30  = analogRead(_pin30A);
     int raw350 = analogRead(_pin350A);
@@ -131,12 +138,21 @@ void HallSensor::update()
     // ── 8. Offset dinámico ────────────────────────────────────────────────────
     // Solo se adapta con corriente baja y sensor sano.
     if (fabsf(_currentRaw) < HALL_ZERO_THRESHOLD && !_sensorDisconnected) {
-        _offsetDyn30  += HALL_ZERO_ALPHA * (v30  - _offsetDyn30);
-        _offsetDyn350 += HALL_ZERO_ALPHA * (v350 - _offsetDyn350);
+        float aZero = dt_s / HALL_ZERO_TAU_S;
+        if (aZero > 1.0f) aZero = 1.0f;
+        _offsetDyn30  += aZero * (v30  - _offsetDyn30);
+        _offsetDyn350 += aZero * (v350 - _offsetDyn350);
     }
 
     // ── 9. Filtro EMA (solo para la salida pública / display) ─────────────────
-    _currentFiltered += HALL_FILTER_ALPHA * (_currentRaw - _currentFiltered);
+    // alpha normalizada por dt → filtrado independiente de la frecuencia del loop.
+    // Si el sensor está desconectado (raw railado) se CONGELA (último valor bueno)
+    // para no arrastrar la telemetría al rail durante el latcheo del fallo.
+    if (!_sensorDisconnected) {
+        float aFilt = dt_s / HALL_FILTER_TAU_S;
+        if (aFilt > 1.0f) aFilt = 1.0f;
+        _currentFiltered += aFilt * (_currentRaw - _currentFiltered);
+    }
 
     // ── 10. Evaluar timers de fallo ───────────────────────────────────────────
     _updateFaultTimers();

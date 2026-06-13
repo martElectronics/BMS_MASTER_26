@@ -71,16 +71,20 @@ public:
      * @param packCurrentA  Corriente de pack (Hall). + = descarga, - = carga.
      * @param minCellV      Celda más baja (para re-snap OCV en reposo).
      * @param voltsReliable bms.isVoltageReadingReliable() (false si balanceo HW).
+     * @param iReliable     hall.isOK(): si false, NO integra la corriente (railada).
      * @param now           Tiempo actual (millis()). Se inyecta para testabilidad.
      */
-    void update(float packCurrentA, float minCellV, bool voltsReliable, unsigned long now)
+    void update(float packCurrentA, float minCellV, bool voltsReliable, bool iReliable, unsigned long now)
     {
         if (!_initDone) { begin(minCellV, now); return; }
 
         // ── Coulomb counting ────────────────────────────────────────────────
         float dt_s = (now - _lastMs) / 1000.0f;
         _lastMs = now;
-        if (dt_s > 0.0f && dt_s < 5.0f) {              // descarta saltos raros
+        // Solo integrar si la corriente es fiable: si el Hall falla, getCurrent()
+        // se va al rail y arrastraría el SOC en la ventana previa a confirmar el
+        // fallo (mismo criterio que voltsReliable para el re-snap, eje corriente).
+        if (iReliable && dt_s > 0.0f && dt_s < 5.0f) {  // descarta saltos raros
             // descarga (I>0) baja SOC; carga (I<0) sube.
             _soc -= (packCurrentA * dt_s) / (_capAh * 3600.0f) * 100.0f;
         }
