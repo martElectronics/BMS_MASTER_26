@@ -380,17 +380,23 @@ bool CAN_BUS::rebootBusFromError()
 
     return false; // no recuperado
 #elif defined(STM32G4xx)
-    uint32_t state = HAL_FDCAN_GetError(&hfdcan);
-    if ((state & FDCAN_PSR_BO) == 0) {
-        return true; // Not in bus-off
+    // El estado bus-off vive en el Protocol Status Register, NO en el ErrorCode
+    // del HAL. HAL_FDCAN_GetError() devuelve los HAL_FDCAN_ERROR_* (otro dominio):
+    // enmascararlo con FDCAN_PSR_BO daba 0 casi siempre → la recuperación nunca
+    // se ejecutaba. La fuente correcta es GetProtocolStatus().BusOff.
+    FDCAN_ProtocolStatusTypeDef psr;
+    HAL_FDCAN_GetProtocolStatus(&hfdcan, &psr);
+    if (psr.BusOff == 0) {
+        return true; // No estamos en bus-off
     }
 
-    // Recover from bus-off
+    // Recuperar de bus-off: limpiar INIT y esperar la resincronización (11 bits
+    // recesivos × 128). El periférico sale de bus-off solo tras esa secuencia.
     CLEAR_BIT(hfdcan.Instance->CCCR, FDCAN_CCCR_INIT);
     delay(10);
 
-    state = HAL_FDCAN_GetError(&hfdcan);
-    if ((state & FDCAN_PSR_BO) == 0) {
+    HAL_FDCAN_GetProtocolStatus(&hfdcan, &psr);
+    if (psr.BusOff == 0) {
         return true;
     }
 
