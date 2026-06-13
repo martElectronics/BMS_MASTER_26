@@ -885,13 +885,18 @@ public:
      *
      * @param id       Dirección del IC.
      * @param addr     Dirección del registro de inicio.
-     * @param buf      Buffer donde se almacena la respuesta completa.
+     * @param buf      Buffer (ARRAY) donde se almacena la respuesta completa.
+     *                 Su tamaño N se deduce solo y se valida contra la longitud
+     *                 esperada → imposible desbordarlo (incl. STK_R/ALL_R).
      * @param len      Número de bytes de datos a leer.
      * @param timeout  Timeout en ms (0 = usar default de 10ms).
      * @param type     Tipo de frame: FRMWRT_SGL_R, FRMWRT_ALL_R, etc.
-     * @return Bytes leídos, o ≤0 si error.
+     * @return Bytes leídos, o ≤0 si error (-2 = buffer demasiado pequeño).
      */
-    int readReg(byte id, uint16_t addr, byte* buf, byte len, uint32_t timeout, byte type);
+    template<size_t N>
+    int readReg(byte id, uint16_t addr, byte (&buf)[N], byte len, uint32_t timeout, byte type) {
+        return _readRegImpl(id, addr, buf, N, len, timeout, type);  // N = tamaño real del buffer
+    }
 
     /**
      * @brief Verifica el CRC-16 de una trama recibida.
@@ -978,6 +983,7 @@ private:
 
     int      _writeFrame(byte id, uint16_t addr, byte* data, byte len, byte type); ///< Construye y envía una trama completa con CRC
     int      _readFrameReq(byte id, uint16_t addr, byte bytesToReturn, byte type); ///< Envía la petición de lectura y limpia el buffer
+    int      _readRegImpl(byte id, uint16_t addr, byte* buf, size_t bufSize, byte len, uint32_t timeout, byte type); ///< Impl real de readReg: valida la longitud esperada contra bufSize (no contra _pFrame)
     uint16_t _crc16(byte* buf, int len);            ///< Calcula CRC-16 ITU-T (tabla de 256 entradas)
     float    _complement(uint16_t raw, float mult); ///< Convierte valor ADC raw (complemento a 2) a voltios
     float    _voltToTemp(float voltage);            ///< Convierte voltaje de NTC a temperatura en °C (curva del PCB)
