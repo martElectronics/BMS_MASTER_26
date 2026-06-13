@@ -313,6 +313,12 @@ void setup()
     } else {
         gCan->configurePacketTimersByPriority();   // BMS_DEBUG (todos los fallos por bits)
         gCan->setPacketTimer(16, 500);             // ID 16 contadores de fallo: 500 ms
+        // 13/14/15 NO están en configurePacketTimersByPriority() (la lista salta de
+        // 12 a 33); sin timer, send() los emitiría cada loop (kHz) y saturaría el bus
+        // (ademas son IDs bajos = alta prioridad CAN → inanición de VCU/PDM).
+        gCan->setPacketTimer(13, 500);             // ID 13 diagnóstico
+        gCan->setPacketTimer(14, 500);             // ID 14 tiempos/contadores de comms
+        gCan->setPacketTimer(15, 500);             // ID 15 BMS_DEBUG
         Serial.println(F("[CAN] FDCAN listo (125k, IDs 10-16, 386-392)."));
     }
 
