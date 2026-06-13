@@ -29,7 +29,11 @@
 #ifndef SOC_ESTIMATOR_H
 #define SOC_ESTIMATOR_H
 
-#include <Arduino.h>
+// El tiempo se INYECTA (begin/update reciben `now`=millis()) en vez de leer el
+// reloj, así la clase no depende de Arduino y es testeable en nativo
+// (test/test_socestimator/). Solo necesita math/stdint.
+#include <math.h>     // fabsf, lroundf
+#include <stdint.h>   // uint8_t
 
 // Capacidad del PACK (Ah). El SOC% depende del ratio ∫I·dt / Q, con
 // I = corriente de pack (Hall) y Q = capacidad de pack. La celda 40T
@@ -51,11 +55,12 @@ public:
     /**
      * @brief Inicializa el SOC desde la OCV (coche en REPOSO al arrancar).
      * @param minCellV  Tensión de la celda más baja (≈OCV si I≈0).
+     * @param now       Tiempo actual (millis()). Se inyecta para testabilidad.
      */
-    void begin(float minCellV)
+    void begin(float minCellV, unsigned long now)
     {
         _soc      = _ocvToSoc(minCellV);
-        _lastMs   = millis();
+        _lastMs   = now;
         _restMs   = 0;
         _restSince = 0;
         _initDone = true;
@@ -66,11 +71,11 @@ public:
      * @param packCurrentA  Corriente de pack (Hall). + = descarga, - = carga.
      * @param minCellV      Celda más baja (para re-snap OCV en reposo).
      * @param voltsReliable bms.isVoltageReadingReliable() (false si balanceo HW).
+     * @param now           Tiempo actual (millis()). Se inyecta para testabilidad.
      */
-    void update(float packCurrentA, float minCellV, bool voltsReliable)
+    void update(float packCurrentA, float minCellV, bool voltsReliable, unsigned long now)
     {
-        unsigned long now = millis();
-        if (!_initDone) { begin(minCellV); return; }
+        if (!_initDone) { begin(minCellV, now); return; }
 
         // ── Coulomb counting ────────────────────────────────────────────────
         float dt_s = (now - _lastMs) / 1000.0f;

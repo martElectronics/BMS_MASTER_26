@@ -33,7 +33,14 @@
 #ifndef FAN_CONTROLLER_H
 #define FAN_CONTROLLER_H
 
+// El cálculo del duty (update) es lógica pura → testeable en nativo. Las
+// llamadas a hardware (begin/_apply) van bajo #ifdef ARDUINO; en nativo son
+// no-op. Fuera de Arduino solo necesita math/stdint.
+#include <math.h>     // fabsf, lroundf
+#include <stdint.h>   // uint8_t, uint32_t
+#ifdef ARDUINO
 #include <Arduino.h>
+#endif
 
 #ifndef FAN_T_OFF
 #define FAN_T_OFF        32.0f   ///< °C: histéresis apagado
@@ -63,12 +70,14 @@ public:
 
     void begin()
     {
+#ifdef ARDUINO
         pinMode(_pin, OUTPUT);
 #if defined(STM32G4xx) || defined(ARDUINO_ARCH_STM32)
         analogWriteFrequency(FAN_PWM_HZ);   // STM32 core: setter global
 #endif
         analogWriteResolution(8);
         _apply(0);
+#endif
     }
 
     /**
@@ -121,7 +130,11 @@ private:
 
     void _apply(uint8_t pct)
     {
+#ifdef ARDUINO
         analogWrite(_pin, (int)lroundf(pct * 255.0f / 100.0f));
+#else
+        (void)pct;   // nativo: sin hardware (update() sigue devolviendo el duty)
+#endif
     }
 };
 
