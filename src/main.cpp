@@ -298,7 +298,7 @@ void setup()
 
     // SOC: init desde OCV (se asume coche EN REPOSO al arrancar).
     if (bms.readVoltages() == BQResult::OK) {
-        soc.begin(bms.getMinVoltage());
+        soc.begin(bms.getMinVoltage(), millis());
         Serial.printf("[SOC] init = %u%% (OCV)\n", soc.soc());
     }
 
@@ -342,7 +342,7 @@ void loop()
     // inicializado Y la última lectura de tensión fue OK. Si no, getMinVoltage()
     // devuelve 0/rancio y en reposo arrastraría el SOC hacia un valor falso.
     bool vReliable = bmsInitOk && (lastResV == BQResult::OK);
-    soc.update(hall.getCurrent(), bms.getMinVoltage(), vReliable);   // coulomb + OCV
+    soc.update(hall.getCurrent(), bms.getMinVoltage(), vReliable, millis());   // coulomb + OCV
     // Fail-safe de refrigeración: T no fresca/fiable (lectura T fallida,
     // comms o NTC abierto) → ventiladores 100 % (no fiarse de Tmax rancia).
     bool fanFS = (lastResT != BQResult::OK) || fComm.cond || fNtc.cond;
