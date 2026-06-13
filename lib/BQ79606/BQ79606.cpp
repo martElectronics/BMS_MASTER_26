@@ -84,14 +84,10 @@ bool BQ79606::begin()
     // Solo pines que pertenecen al BQ79606:
     // Wake, Fault y BMS_OK son señales directas del IC.
     // PWM_FANS, AMP_PIN, etc. son responsabilidad del main.
-    Serial.println(F("  [begin] antes pinMode WAKE")); Serial.flush();
     pinMode(BQ_DPIN(_cfg.pinWake),  OUTPUT); digitalWrite(BQ_DPIN(_cfg.pinWake),  HIGH);
-    Serial.println(F("  [begin] WAKE OK")); Serial.flush();
     pinMode(BQ_DPIN(_cfg.pinBmsOk), OUTPUT); digitalWrite(BQ_DPIN(_cfg.pinBmsOk), LOW);
     _bmsOkState = false;  // BMS_OK arranca en LOW (fallo) hasta init OK
-    Serial.println(F("  [begin] BMS_OK OK")); Serial.flush();
     pinMode(BQ_DPIN(_cfg.pinFault), INPUT);
-    Serial.println(F("  [begin] pinMode trio OK")); Serial.flush();
 
     // Level shifter TX enable — solo si está configurado
     if (_cfg.pinTxEnable >= 0) {
@@ -100,9 +96,7 @@ bool BQ79606::begin()
     }
 
     // Abrir UART
-    Serial.println(F("  [begin] antes _uart.begin()")); Serial.flush();
     _uart.begin(_cfg.baudrate);
-    Serial.println(F("  [begin] _uart.begin() OK")); Serial.flush();
     delay(20);
 
     bool ok = false;
@@ -715,8 +709,8 @@ int BQ79606::writeReg(byte id, uint16_t addr, uint64_t data, byte len, byte type
     return res;
 }
 
-int BQ79606::readReg(byte id, uint16_t addr, byte* buf, byte len,
-                     uint32_t timeout, byte type)
+int BQ79606::_readRegImpl(byte id, uint16_t addr, byte* buf, size_t bufSize,
+                          byte len, uint32_t timeout, byte type)
 {
     const uint32_t DEFAULT_TIMEOUT_MS = 10;
     int expectedLen = 0;
@@ -726,8 +720,10 @@ int BQ79606::readReg(byte id, uint16_t addr, byte* buf, byte len,
     else if (type == FRMWRT_ALL_R) expectedLen = (len + 6) * TOTALBOARDS;
     else return 0;
 
-    if (expectedLen > (int)sizeof(_pFrame)) {
-        Serial.println(F("[BQ] readReg: longitud excede buffer."));
+    // Validar contra el buffer DESTINO real (no contra _pFrame): se escribe en
+    // buf, así que un STK_R/ALL_R con buf pequeño desbordaría si no se vigila aquí.
+    if (expectedLen > (int)bufSize) {
+        Serial.println(F("[BQ] readReg: respuesta excede el buffer destino."));
         return -2;
     }
 
@@ -826,7 +822,6 @@ void BQ79606::_commSleepToWake()
 
 void BQ79606::_commReset(int baud)
 {
-    Serial.printf("  [commReset] inicio, baud objetivo=%d\n", baud); Serial.flush();
     _uart.end();
     pinMode(BQ_DPIN(_cfg.pinTx), OUTPUT);
     digitalWrite(BQ_DPIN(_cfg.pinTx), LOW);
@@ -834,7 +829,6 @@ void BQ79606::_commReset(int baud)
     digitalWrite(BQ_DPIN(_cfg.pinTx), HIGH);
 
     _uart.begin(250000);
-    Serial.println(F("  [commReset] host a 250000 (post pulso reset)")); Serial.flush();
     delay(10);
 
     const int delayUs = 10000;
@@ -849,7 +843,6 @@ void BQ79606::_commReset(int baud)
         baud = 1000000;
     }
 
-    Serial.printf("  [commReset] COMM_CTRL=0x%04X -> cadena a %d baud\n", commCtrlVal, baud); Serial.flush();
     writeReg(0, COMM_CTRL, commCtrlVal, 2, FRMWRT_ALL_NR);
     delayMicroseconds(delayUs);
     // STM32duino: begin() NO reconfigura el baud si la UART ya esta iniciada
@@ -858,7 +851,6 @@ void BQ79606::_commReset(int baud)
     // la cadena (sintoma: TODOS los boards ERROR comm, incluido el base).
     _uart.end();
     _uart.begin(baud);
-    Serial.printf("  [commReset] host UART reabierta a %d baud\n", baud); Serial.flush();
     delayMicroseconds(100);
 }
 
