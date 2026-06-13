@@ -342,7 +342,8 @@ void loop()
     // inicializado Y la última lectura de tensión fue OK. Si no, getMinVoltage()
     // devuelve 0/rancio y en reposo arrastraría el SOC hacia un valor falso.
     bool vReliable = bmsInitOk && (lastResV == BQResult::OK);
-    soc.update(hall.getCurrent(), bms.getMinVoltage(), vReliable, millis());   // coulomb + OCV
+    bool iReliable = hall.isOK();   // no integrar corriente railada si el Hall falla
+    soc.update(hall.getCurrent(), bms.getMinVoltage(), vReliable, iReliable, millis());   // coulomb + OCV
     // Fail-safe de refrigeración: T no fresca/fiable (lectura T fallida,
     // comms o NTC abierto) → ventiladores 100 % (no fiarse de Tmax rancia).
     bool fanFS = (lastResT != BQResult::OK) || fComm.cond || fNtc.cond;

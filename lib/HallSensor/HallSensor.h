@@ -75,12 +75,16 @@
 #define HALL_CALIB_SAMPLES    500
 #define HALL_CALIB_DELAY_US   2000
 
-// Corrección dinámica de offset (se aplica solo cuando |I| < ZERO_THRESHOLD)
-#define HALL_ZERO_ALPHA      0.001f  ///< Velocidad de adaptación del offset dinámico
+// Corrección dinámica de offset (se aplica solo cuando |I| < ZERO_THRESHOLD).
+// tau normalizada por dt dentro de update() → independiente de la cadencia del
+// loop (antes era alpha=0.001 por llamada asumiendo update cada 20ms ≈ tau 20s).
+#define HALL_ZERO_TAU_S      20.0f   ///< Constante de tiempo del offset dinámico (s)
 #define HALL_ZERO_THRESHOLD  2.0f    ///< Umbral (A) por debajo del cual se ajusta el offset
 
-// Filtro EMA — constante de tiempo ~130ms con update cada 20ms
-#define HALL_FILTER_ALPHA    0.15f
+// Filtro EMA de la corriente de salida (display/telemetría). tau normalizada por
+// dt → independiente de la frecuencia del loop. Antes alpha=0.15 @ 20ms (≈130ms),
+// pero el loop gira a ~kHz sin gate → el filtro casi no filtraba.
+#define HALL_FILTER_TAU_S    0.13f   ///< Constante de tiempo del filtro de corriente (s)
 
 // Protección ADC — margen de saturación
 #define HALL_ADC_SAT_MARGIN  50     ///< Margen antes del rail para considerar saturación
@@ -206,6 +210,7 @@ private:
     float _currentRaw      = 0.0f;  ///< Corriente del canal activo sin filtrar
     bool  _usingLowRange   = true;  ///< true = rango 30A activo
     bool  _rangeJustChanged = false;///< true el ciclo en que cambia el rango
+    unsigned long _lastUpdateUs = 0;///< micros() de la última update() (normalización dt de los EMA)
 
     // ─── ADC ─────────────────────────────────────────────────────────────────
     bool _adcSat30  = false;
