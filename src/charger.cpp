@@ -110,6 +110,8 @@ bool   chargeAllowed(bool readOk);
 void   sendMessage1(bool allow);
 void   pollMessage2();
 void   printChgStatus();
+void   printVoltages();
+void   printTemps();
 void   handleSerial();
 
 // ============================================================================
@@ -135,7 +137,7 @@ void setup()
 
     Serial.printf("Vmax: %.1f V (fijo)  I_inicio: %.1f A (tope %.1f A)\n",
                   CHG_TERM_VOLT_V, CHG_START_CURRENT_A, CHG_MAX_CURRENT_A);
-    Serial.println(F("ARRANCA SIN CARGAR. Comandos: g=start x=stop c,<I>=corriente d=datos r=restart"));
+    Serial.println(F("ARRANCA SIN CARGAR. Comandos: g=start x=stop c,<I>=corriente v=voltajes t=temps d=datos r=restart"));
 
     IWatchdog.begin(WDG_TIMEOUT_US);
     tLastChgRx = millis();
@@ -291,10 +293,49 @@ void printChgStatus()
 }
 
 // ============================================================================
+//  Volcado de la tabla completa de V/T (comandos 'v' / 't')
+//  Hacen una lectura fresca del BQ y vuelcan board por board.
+// ============================================================================
+void printVoltages()
+{
+    if (bms.readVoltages() != BQResult::OK) {
+        Serial.println(F("[V] lectura BQ fallida."));
+        return;
+    }
+    Serial.println(F("\n--- VOLTAJES por celda (V) ---"));
+    for (uint8_t b = 0; b < TOTALBOARDS; b++) {
+        Serial.printf("Board %2u:", b);
+        for (uint8_t c = 0; c < CELLS_FOR_BOARD(b); c++)
+            Serial.printf(" %.3f", bms.getVoltage(b, c));
+        Serial.println();
+    }
+    Serial.printf("Vmin=%.3f  Vmax=%.3f  dV=%.0f mV\n",
+                  bms.getMinVoltage(), bms.getMaxVoltage(), bms.getVoltageDelta());
+}
+
+void printTemps()
+{
+    if (bms.readTemperatures() != BQResult::OK) {
+        Serial.println(F("[T] lectura BQ fallida."));
+        return;
+    }
+    Serial.println(F("\n--- TEMPERATURAS por NTC (C) ---"));
+    for (uint8_t b = 0; b < TOTALBOARDS; b++) {
+        Serial.printf("Board %2u:", b);
+        for (uint8_t k = 0; k < NTCS_PER_BOARD[b % 2]; k++)
+            Serial.printf(" %.1f", bms.getTemperature(b, k));
+        Serial.println();
+    }
+    Serial.printf("Tmin=%.1f  Tmax=%.1f\n", bms.getMinTemp(), bms.getMaxTemp());
+}
+
+// ============================================================================
 //  COMANDOS SERIE
 //    g       → solicitar START de carga
 //    x       → STOP
 //    c,<I>   → fijar corriente DC (A), capada a CHG_MAX_CURRENT_A
+//    v       → tabla de voltajes por celda
+//    t       → tabla de temperaturas por NTC
 //    d       → volcar estado
 //    r       → reiniciar MCU
 // ============================================================================
@@ -332,6 +373,12 @@ void handleSerial()
     case 'x':
         chargeRequested = false;
         Serial.println(F("[CHG] STOP."));
+        break;
+    case 'v':
+        printVoltages();
+        break;
+    case 't':
+        printTemps();
         break;
     case 'd':
         printChgStatus();
