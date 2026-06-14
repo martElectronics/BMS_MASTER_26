@@ -7,6 +7,11 @@ on:
   push:
   pull_request:
 
+env:
+  # Opta ya por Node 24 en las actions (checkout/setup-python aún traen Node 20,
+  # deprecado). Silencia el warning sin cambiar de versión de action.
+  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
+
 jobs:
   native-tests:
     name: Tests nativos
