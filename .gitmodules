@@ -1,0 +1,3 @@
+[submodule "tools/registro_modulos"]
+	path = tools/registro_modulos
+	url = https://github.com/martElectronics/APP_Registro_Modulos.git
