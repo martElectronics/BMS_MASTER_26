@@ -88,22 +88,18 @@ bool CAN_BUS::send()
 
     DataOUT.forEachPacket([this, &success, currentTime](CanPacketRawData &packet)
                           {
-        // Initially assume the packet does not have a timer and is ready to send
-        bool readyToSend = true;
-
-        // Check for a timer associated with this packet
+        // Intervalo efectivo de este paquete: el del timer si está en la lista;
+        // si NO tiene timer, un DEFAULT seguro (no "enviar siempre"). Antes, un
+        // ID sin timer se emitía a la frecuencia del loop (kHz) y saturaba el bus
+        // -> aquí se le pone un piso de cadencia. Los IDs con timer no cambian.
+        const unsigned long DEFAULT_PACKET_INTERVAL_MS = 100; // 10 Hz de respaldo
+        unsigned long interval = DEFAULT_PACKET_INTERVAL_MS;
         for (const auto& timer : packetTimers) {
-            if (timer.packetID == packet.id) {
-                // Check if the current time is past the next scheduled send time
-                if (currentTime < packet.nextSendTime) {
-                    readyToSend = false; // Not yet time to send this packet
-                }
-                break; // Timer found, no need to check further
-            }
+            if (timer.packetID == packet.id) { interval = timer.interval; break; }
         }
+        // Listo para enviar cuando ya toca según nextSendTime (con o sin timer).
+        bool readyToSend = (currentTime >= packet.nextSendTime);
 
-       
-         
         if (readyToSend) {
 
             //Store the packet ID before the possible ID change if the packet is a RRF
@@ -134,13 +130,8 @@ bool CAN_BUS::send()
                 {
                     DEBUG_PRINTLN((String)"Packet sent ID = " + packet.id);
                     packet.id=idAux;
-                    // Update the next send time for this packet if it has a timer
-                    for (auto& timer : packetTimers) {
-                        if (timer.packetID == packet.id) {
-                            packet.nextSendTime = currentTime + timer.interval;
-                            break;
-                        }
-                    }
+                    // Programar el próximo envío: timer o default (ver arriba).
+                    packet.nextSendTime = currentTime + interval;
                     numTXPaqOK++;
                 }
 #elif defined(STM32G4xx)
@@ -176,12 +167,8 @@ bool CAN_BUS::send()
                 {
                     DEBUG_PRINTLN((String)"Packet sent ID = " + packet.id);
                     packet.id=idAux;
-                    for (auto& timer : packetTimers) {
-                        if (timer.packetID == packet.id) {
-                            packet.nextSendTime = currentTime + timer.interval;
-                            break;
-                        }
-                    }
+                    // Programar el próximo envío: timer o default (ver arriba).
+                    packet.nextSendTime = currentTime + interval;
                     numTXPaqOK++;
                 }
 #endif
