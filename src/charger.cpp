@@ -51,12 +51,12 @@
 // eran [12][11]=132 puntos, pero indicaste 5S/módulo). ⚠ CONFIRMAR con
 // multímetro la tensión del pack al 100 %.
 #define CHG_TERM_VOLT_V      456.0f     ///< ⚠ Vmax fin de carga (valor del FW antiguo). FIJO: nunca por serial.
-#define CHG_START_CURRENT_A  3.0f       ///< corriente DC al arrancar (la que ya sabes que funciona)
-#define CHG_MAX_CURRENT_A    4.0f       ///< ⚠ TOPE duro: el serial no puede pedir más (atado al límite AC/plomos)
+#define CHG_START_CURRENT_A  7.0f       ///< corriente DC al arrancar (la que ya sabes que funciona)
+#define CHG_MAX_CURRENT_A    8.0f       ///< ⚠ TOPE duro: el serial no puede pedir más (atado al límite AC/plomos)
 
 #define CELL_VMAX_HARD_V     4.25f      ///< corte DURO por celda (seguridad independiente de Vmax)
-#define CELL_TMAX_CHG_C      45.0f      ///< ⚠ T máx para cargar (el FW antiguo usaba 40)
-#define CELL_TMIN_CHG_C      0.0f       ///< ⚠ T mín para cargar (Li-ion NO carga en frío)
+#define CELL_TMAX_CHG_C      45.0f      ///< ⚠ T máx para cargar 
+#define CELL_TMIN_CHG_C      20.0f       ///< ⚠ T mín para cargar (Li-ion NO carga en frío)
 
 #define MSG1_PERIOD_MS       1000UL     ///< cadencia de envío Message 1 (cargador corta a los 5 s sin él)
 #define RX_TIMEOUT_MS        5000UL     ///< si no llega Message 2 en este tiempo → cargador mudo
