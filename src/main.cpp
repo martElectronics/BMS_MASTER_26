@@ -31,8 +31,8 @@
  *   Este main deriva NUM_MODULES de TOTALBOARDS → se auto-adapta.
  *
  * ── COMANDOS SERIE ──────────────────────────────────────────────────────────
- *   v=voltajes  t=temps  a=amperimetro  s=status  f=fallos
- *   c=limpiar fallos BQ  i=re-init BQ  r=restart MCU
+ *   v=voltajes  t=temps  g=CSV módulos (app registro)  a=amperimetro
+ *   s=status  f=fallos  c=limpiar fallos BQ  i=re-init BQ  r=restart MCU
  *   d=volcar log FRAM  D=reset índice log  C=reset contadores fallo (ID 16)
  *
  * ── PENDIENTE ───────────────────────────────────────────────────────────────
@@ -848,6 +848,36 @@ void updateCanTx()
 }
 
 // ============================================================================
+//  VOLCADO CSV POR MÓDULO (para APP_Registro_Modulos → Google Sheet)
+// ============================================================================
+// Emite por Serial el formato EXACTO que espera make_dataset.py:
+//   Modulo;V1;…;V11;T1;…;T9   (separador ';', punto decimal, una fila por
+//   módulo M01…M{NUM_MODULES}). El bloque va entre marcadores para que un
+//   capturador serie en el PC lo detecte sin ambigüedad y lo postee al Apps
+//   Script. Hace lecturas FRESCAS de V y T antes de volcar.
+static void dumpModulesCsv()
+{
+    bool vOk = (bms.readVoltages()     == BQResult::OK);
+    bool tOk = (bms.readTemperatures() == BQResult::OK);
+    if (!vOk || !tOk)
+        Serial.printf("[CSV] aviso: fallo lectura %s%s (valores pueden ser viejos)\n",
+                      vOk ? "" : "V ", tOk ? "" : "T");
+
+    Serial.println(F("<<<CSV_BEGIN>>>"));
+    Serial.print(F("Modulo"));
+    for (int n = 1; n <= 11; n++) Serial.printf(";V%d", n);
+    for (int k = 1; k <= 9;  k++) Serial.printf(";T%d", k);
+    Serial.println();
+    for (int m = 0; m < NUM_MODULES; m++) {
+        Serial.printf("M%02d", m + 1);
+        for (int n = 1; n <= 11; n++) Serial.printf(";%.3f", modCellV(m, n));
+        for (int k = 1; k <= 9;  k++) Serial.printf(";%.1f", modCellT(m, k));
+        Serial.println();
+    }
+    Serial.println(F("<<<CSV_END>>>"));
+}
+
+// ============================================================================
 //  COMANDOS SERIE
 // ============================================================================
 void handleSerial()
@@ -884,6 +914,11 @@ void handleSerial()
                           bms.getMinTemp(), bms.getMaxTemp(),
                           bms.getOpenNtcCount());
         } else Serial.println(F("[ERROR] lectura T"));
+        break;
+
+    case 'g':
+        // Volcado CSV por módulo (para APP_Registro_Modulos / Google Sheet).
+        dumpModulesCsv();
         break;
 
     case 'a':
