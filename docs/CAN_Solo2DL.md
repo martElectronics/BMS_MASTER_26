@@ -47,7 +47,7 @@
 |---|---|---|---|---|
 | 10 | 0x0A | 1  | 800 ms | Estado general (8 flags) |
 | 11 | 0x0B | 8  | 799 ms | MaxT, MaxV, MinV, MinT |
-| 12 | 0x0C | 4  | 799 ms | Status V / Status T (bitmap por módulo) |
+| 12 | 0x0C | 6  | 799 ms | Status V / Status T (bitmap por módulo) + V_DELTA (mV) |
 | 13 | 0x0D | 4  | 798 ms | maxFailTime, numTriesReset |
 | 14 | 0x0E | 8  | 200 ms | lastFailTime, contadores comm/CRC/reset |
 | **15** | **0x0F** | **8** | **200 ms** | **BMS_DEBUG — granularidad por bit** |
@@ -115,18 +115,20 @@ Bytes 6-7: MinT (int16 BE, °C)
 
 ---
 
-## 6. ID 12 (0x0C) — Status V/T por módulo (BITMAP) · 4 bytes · 799 ms
+## 6. ID 12 (0x0C) — Status V/T por módulo (BITMAP) + V_DELTA · 6 bytes · 799 ms
 
 **Bitmap por módulo** (alineado con el Excel CAN): cada bit i = estado del
 módulo i, `0=OK 1=FAIL`. Los `NUM_MODULES` bits menos significativos son
-válidos (resto = 0).
+válidos (resto = 0). Bytes 4-5: delta de tensión de celda (máx−mín) en mV,
+indicador de desbalanceo del pack.
 
 ```
 Bytes 0-1: GEN_STATUS_VOLT (uint16 BE) — bit i = módulo i con algún paralelo fuera de [UV,OV]
 Bytes 2-3: GEN_STATUS_TEMP (uint16 BE) — bit i = módulo i con algún NTC fuera de [UT,OT]
+Bytes 4-5: V_DELTA         (uint16 BE) — (celda máx − celda mín) en mV
 ```
 
-Dos formas de configurarlo en RaceStudio:
+Dos formas de configurar los bitmaps en RaceStudio:
 - **Como número** (ver el bitmap en hex): un canal uint16 por campo.
 - **Bit a bit** (un canal de 1 bit por módulo): más visual para ver *qué* módulo falla.
 
@@ -134,10 +136,15 @@ Dos formas de configurarlo en RaceStudio:
 |---|---|---|---|---|---|---|
 | BMS_StatusV   | GSV_ | 0 | 0 | 16 | uint16 BE | bitmap volt por módulo |
 | BMS_StatusT   | GST_ | 2 | 0 | 16 | uint16 BE | bitmap temp por módulo |
+| BMS_VDelta    | VDLT | 4 | 0 | 16 | uint16 BE | delta de celda máx−mín (mV) |
 | BMS_VFail_M01 | VM01 | 0 | 0 | 1  | bool      | módulo 1 fallo de tensión |
 | …             |      |   |   |    |           | (bit i = módulo i+1, hasta NUM_MODULES) |
 | BMS_TFail_M01 | TM01 | 2 | 0 | 1  | bool      | módulo 1 fallo de temperatura |
 
+> V_DELTA solo es fiable cuando la lectura de celdas lo es: una celda abierta
+> (0 V) lo dispara. Léelo junto al bit de comms/medida válida del ID 10/15 para
+> no asustarte con un pico espurio.
+>
 > El detalle CELDA a celda (qué paralelo/NTC concreto) sigue en los frames
 > paginados 386-391 (campos por módulo) y en el snapshot del ID 15 (B2).
 
