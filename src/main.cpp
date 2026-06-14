@@ -709,11 +709,13 @@ void updateCanTx()
     };
     gCan->setPacket((uint32_t)11, d11, 4);
 
-    // ── ID 12 (0xC) — GEN_STATUS_VOLT, GEN_STATUS_TEMP UINT16×2 ────────────
+    // ── ID 12 (0xC) — GEN_STATUS_VOLT, GEN_STATUS_TEMP, V_DELTA UINT16×3 ────
     // Bitmap POR MÓDULO (alineado con el Excel CAN): cada bit i = módulo i.
     //   VOLT bit i = 1 si algún paralelo del módulo i fuera de [UV,OV].
     //   TEMP bit i = 1 si algún NTC del módulo i fuera de [UT,OT].
     // Los NUM_MODULES bits menos significativos son válidos (resto = 0).
+    // Slot 3 (V_DELTA): delta de tensión de celda (máx−mín) en mV → indicador de
+    // desbalanceo del pack. ⚠ DLC ahora 6 B (antes 4): ACTUALIZAR el Excel/receptor.
     uint16_t gsV = 0, gsT = 0;
     for (int m = 0; m < NUM_MODULES; m++) {
         bool vFail = false;
@@ -729,8 +731,14 @@ void updateCanTx()
         if (vFail) gsV |= (1u << m);
         if (tFail) gsT |= (1u << m);
     }
-    uint16_t d12[2] = { gsV, gsT };
-    gCan->setPacket((uint32_t)12, d12, 2);
+    // getVoltageDelta() ya devuelve (vMax−vMin) en mV. Clamp a u16 por si una celda
+    // abierta (0 V) dispara el delta; el valor real nunca pasa de unos pocos miles.
+    float vDeltaMv = bms.getVoltageDelta();
+    uint16_t vDelta = (vDeltaMv <= 0.0f) ? 0
+                    : (vDeltaMv >= 65535.0f) ? 65535
+                    : (uint16_t)lroundf(vDeltaMv);
+    uint16_t d12[3] = { gsV, gsT, vDelta };
+    gCan->setPacket((uint32_t)12, d12, 3);
 
     // ── ID 13 (0xD) — maxTotalFailTime(ms), numTriesResetComm UINT16×2 ─────
     uint16_t d13[2] = { canMaxFailMs, canNumTriesReset };
