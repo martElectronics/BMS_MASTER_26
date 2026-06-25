@@ -85,8 +85,7 @@ bool BQ79606::begin()
     // Wake, Fault y BMS_OK son señales directas del IC.
     // PWM_FANS, AMP_PIN, etc. son responsabilidad del main.
     pinMode(BQ_DPIN(_cfg.pinWake),  OUTPUT); digitalWrite(BQ_DPIN(_cfg.pinWake),  HIGH);
-    pinMode(BQ_DPIN(_cfg.pinBmsOk), OUTPUT); digitalWrite(BQ_DPIN(_cfg.pinBmsOk), HIGH);
-    _bmsOkState = false;  // BMS_OK arranca en HIGH (fallo) hasta init OK
+    _bmsOkState = true;
     pinMode(BQ_DPIN(_cfg.pinFault), INPUT);
 
     // Level shifter TX enable — solo si está configurado
@@ -129,7 +128,6 @@ bool BQ79606::begin()
     clearAllFaults();
 
     _initialized = true;
-    setBmsOk(true);  // pack sano tras init -> BMS_OK HIGH (señaliza OK al SDC)
     Serial.println("[BQ] Inicializado OK (faults de arranque limpiados).");
     return true;
 }
@@ -346,8 +344,7 @@ void BQ79606::clearAllFaults()
 
 void BQ79606::setBmsOk(bool ok)
 {
-    if (ok == _bmsOkState) return;          // escribir solo en los cambios
-    digitalWrite(BQ_DPIN(_cfg.pinBmsOk), ok ? LOW : HIGH);  // OK=LOW, fallo=HIGH
+    digitalWrite(BQ_DPIN(_cfg.pinBmsOk), ok ? LOW : HIGH);
     _bmsOkState = ok;
 }
 

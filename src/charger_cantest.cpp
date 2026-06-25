@@ -23,13 +23,15 @@
 
 // ── Config CAN (idéntica a charger.cpp) ─────────────────────────────────────
 #define CHG_CAN_BAUD     500          ///< kbps — baud del cargador
-#define CHG_NODE_ID      3            ///< perfil de filtro MART_CAN (acepta todo)
+#define CHG_NODE_ID      4            ///< perfil de filtro MART_CAN (acepta todo)
 
 #define ID_BMS_TO_CHG    0x1806E5F4UL ///< Message 1 (BMS → cargador), extendido
 #define ID_CHG_TO_BMS    0x18FF50E5UL ///< Message 2 (cargador → BMS), extendido
 
-#define TX_PERIOD_MS     1000UL       ///< cadencia del keep-alive
+#define TX_PERIOD_MS     100UL       ///< cadencia del keep-alive
 #define RX_TIMEOUT_MS    5000UL       ///< sin Message 2 en este tiempo → "mudo"
+
+#define PIN_BMS_OK PA_4   ///< LOW = SDC cerrado (el OBC ve el pack conectado)
 
 // Bits del byte STATUS (B4 del Message 2)
 #define ST_HW_FAIL    (1 << 0)
@@ -66,6 +68,16 @@ void setup()
                   CHG_CAN_BAUD, ID_BMS_TO_CHG, ID_CHG_TO_BMS);
     Serial.println(F("Keep-alive SEGURO (V=0 I=0 PARAR). No ordena cargar."));
     Serial.println(F("Comandos: t=TX on/off  d=datos  r=reset\n"));
+
+    // justo antes de "static CAN_BUS canBus..."
+    Serial.println(F("Keep-alive SEGURO (V=0 I=0 PARAR). No ordena cargar."));
+    Serial.println(F("Comandos: t=TX on/off  d=datos  r=reset\n"));
+
+    // ── Forzar BMS_OK = LOW para que el OBC vea el SDC cerrado ──────────────
+    pinMode(PIN_BMS_OK, OUTPUT);
+    digitalWrite(PIN_BMS_OK, LOW);
+    Serial.println(F("[HW] BMS_OK -> LOW (SDC cerrado para el OBC)"));
+    // ─────────────────────────────────────────────────────────────────────────
 
     static CAN_BUS canBus(HardwareType::Transciever, CHG_CAN_BAUD, CHG_NODE_ID);
     gCan   = &canBus;

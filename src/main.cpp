@@ -67,10 +67,9 @@
 #define PIN_BMS_OK      PB_5    ///< Señal al SDC. La gestiona el driver (setBmsOk).
 
 // Control SDC / estado (gestionados por el main)
-#define PIN_PRE_FAIL        PA_7   ///< HIGH si la precarga no termina a tiempo
+///< HIGH si la precarga no termina a tiempo
 #define PIN_OE_TXS          PB_10  ///< OE del level shifter (gated por VIO_3V3)
-#define PIN_VIO_3V3         PB_0   ///< HIGH → activar OE_TXS
-#define PIN_PRECHARGE_DONE  PA_5   ///< HIGH = precarga finalizada
+#define PIN_VIO_3V3         PB_0   ///< HIGH → activar OE_TXS  ///< HIGH = precarga finalizada
 #define PIN_SDC_3V3         PC_7   ///< HIGH = precarga iniciada (SDC cerrado)
 
 // Amperímetro DHAB S/118
@@ -125,7 +124,7 @@ static constexpr int NUM_MODULES = TOTALBOARDS / 2;
 #define CELL_OT_C     60.0f     ///< Overtemperature (°C) — EV5.8.4: ≤60
 
 // Debounce por normativa FS EV5.8
-#define FAULT_V_MS     500UL    ///< V debe persistir ≥500 ms
+#define FAULT_V_MS    5000UL    ///< V debe persistir ≥500 ms
 #define FAULT_T_MS    1000UL    ///< T debe persistir ≥1000 ms
 #define FAULT_NTC_MS  1000UL    ///< NTC abierto (pérdida de medida, clase T)
 #define FAULT_COMM_MS  500UL    ///< Comms BQ caídas sin recuperar
@@ -177,9 +176,7 @@ static unsigned long tLastReinit  = 0;       ///< ms del último intento de reIn
 // Lecturas
 static BQResult lastResV = BQResult::OK, lastResT = BQResult::OK;
 
-// Precarga
-static bool          prechargeStarted = false;
-static bool          prechargeOk      = false;
+
 
 // ============================================================================
 //  TELEMETRÍA CAN (resumen IDs 10-14; ver docs/Mapa_CAN.txt)
@@ -223,7 +220,6 @@ static FaultLogger   logger;
 void updateVio();
 void sampleAndEvaluate();
 void updateBmsOk();
-void updatePrecharge();
 void updateCanTx();
 void handleSerial();
 void printStatus();
@@ -261,10 +257,8 @@ void setup()
         Serial.println(F("[WDG] *** Reset previo causado por el WATCHDOG ***"));
 
     // Estado seguro inicial: BMS_OK lo pone el driver (LOW hasta init OK).
-    pinMode(PIN_PRE_FAIL,OUTPUT); digitalWrite(PIN_PRE_FAIL, LOW);
     pinMode(PIN_OE_TXS,  OUTPUT); digitalWrite(PIN_OE_TXS,  LOW);
     pinMode(PIN_VIO_3V3,        INPUT);
-    pinMode(PIN_PRECHARGE_DONE, INPUT);
     pinMode(PIN_SDC_3V3,        INPUT);
 
     Serial.println(F("========================================"));
@@ -357,7 +351,6 @@ void loop()
     bool fanFS = (lastResT != BQResult::OK) || fComm.cond || fNtc.cond;
     fan.update(bms.getMaxTemp(), hall.getCurrent(), fanFS);  // curva + FF
     updateBmsOk();         // BMS_OK no-latching (auto-rearma)
-    updatePrecharge();
     updateCanTx();         // telemetría CAN IDs 10-14 (throttled por timer)
     handleSerial();
 
@@ -466,7 +459,10 @@ void updateBmsOk()
     bool faultNtc  = fNtc.confirmed(now, FAULT_NTC_MS);
     bool faultComm = fComm.confirmed(now, FAULT_COMM_MS);
     bool faultHall = !hall.isOK();      // HallSensor ya debounced 500 ms
-    bool faultInit = !bmsInitOk;
+    static FaultTimer fInit;
+    fInit.sample(!bmsInitOk, now);
+    bool faultInit = fInit.confirmed(now, FAULT_COMM_MS);
+
 
     // Contadores por causa (ID 16): incrementar en el FLANCO de subida de
     // cada fallo confirmado (0→1). Capta episodios cortos aunque ya se hayan
@@ -526,28 +522,7 @@ void updateBmsOk()
 // ============================================================================
 //  PRECARGA
 // ============================================================================
-void updatePrecharge()
-{
-    bool sdcActive     = digitalRead(PIN_SDC_3V3);
-    bool prechargeDone = digitalRead(PIN_PRECHARGE_DONE);
 
-    if (sdcActive && !prechargeStarted && !prechargeOk) {
-        prechargeStarted = true;
-        Serial.println(F("[PRE] Precarga iniciada."));
-    }
-    if (prechargeStarted && !prechargeOk) {
-        if (prechargeDone) {
-            prechargeOk = true;
-            digitalWrite(PIN_PRE_FAIL, LOW);
-            Serial.println(F("[PRE] Precarga OK."));
-        }
-    }
-    if (!sdcActive) {
-        prechargeStarted = false;
-        prechargeOk      = false;
-        digitalWrite(PIN_PRE_FAIL, LOW);
-    }
-}
 
 // ============================================================================
 //  Helpers de mapeo módulo → celdas/NTC del driver
@@ -615,8 +590,6 @@ static void buildDebugFlags(uint8_t out[4])
     if (bms.isOK())                        out[3] |= (1 << 0);
     if (bmsInitOk)                         out[3] |= (1 << 1);
     if (gCanOk)                            out[3] |= (1 << 2);
-    if (prechargeStarted)                  out[3] |= (1 << 3);
-    if (prechargeOk)                       out[3] |= (1 << 4);
     if (digitalRead(PIN_SDC_3V3))          out[3] |= (1 << 6);
     if (digitalRead(PIN_VIO_3V3))          out[3] |= (1 << 7);
 }
@@ -984,9 +957,5 @@ void printStatus()
                   !hall.isOK());
     Serial.printf("Cnt(ID16): V=%u T=%u NTC=%u COMM=%u HALL=%u INIT=%u  [C=reset]\n",
                   cntFltV, cntFltT, cntFltNtc, cntFltComm, cntFltHall, cntFltInit);
-    Serial.printf("PRE_FAIL=%s  VIO=%s  SDC=%s\n",
-                  digitalRead(PIN_PRE_FAIL) ? "HIGH" : "LOW",
-                  digitalRead(PIN_VIO_3V3)  ? "HIGH" : "LOW",
-                  digitalRead(PIN_SDC_3V3)  ? "HIGH" : "LOW");
-    Serial.println(F("=================="));
+    
 }

@@ -29,6 +29,7 @@
 #include <IWatchdog.h>
 #include "BQ79606.h"
 #include "MART_CAN.h"
+#include "HallSensor.h"
 
 // ============================================================================
 //  PINES BQ79606 — idénticos a src/main.cpp (mismo hardware)
@@ -37,7 +38,11 @@
 #define PIN_BQ_FAULT  PB_2
 #define PIN_BQ_RX     PC_5
 #define PIN_BQ_TX     PC_4
-#define PIN_BMS_OK    PB_5
+#define PIN_BMS_OK    PA_4
+
+// Amperímetro DHAB S/118
+#define PIN_AMP_30A     PA_1   ///< Canal alta resolución (±30A)
+#define PIN_AMP_350A    PA_0   ///< Canal baja resolución (±350A)
 
 // ============================================================================
 //  CONFIG DE CARGA  — ⚠ CONFIRMAR TODO antes de usar
@@ -50,9 +55,9 @@
 // PROBADO en vez de calcularlo por nº de serie (no quedó claro: los arrays
 // eran [12][11]=132 puntos, pero indicaste 5S/módulo). ⚠ CONFIRMAR con
 // multímetro la tensión del pack al 100 %.
-#define CHG_TERM_VOLT_V      456.0f     ///< ⚠ Vmax fin de carga (valor del FW antiguo). FIJO: nunca por serial.
-#define CHG_START_CURRENT_A  7.0f       ///< corriente DC al arrancar (la que ya sabes que funciona)
-#define CHG_MAX_CURRENT_A    8.0f       ///< ⚠ TOPE duro: el serial no puede pedir más (atado al límite AC/plomos)
+#define CHG_TERM_VOLT_V      440.0f     ///< ⚠ Vmax fin de carga (valor del FW antiguo). FIJO: nunca por serial.
+#define CHG_START_CURRENT_A  1.0f       ///< corriente DC al arrancar (la que ya sabes que funciona)
+#define CHG_MAX_CURRENT_A    1.2f       ///< ⚠ TOPE duro: el serial no puede pedir más (atado al límite AC/plomos)
 
 #define CELL_VMAX_HARD_V     4.25f      ///< corte DURO por celda (seguridad independiente de Vmax)
 #define CELL_TMAX_CHG_C      45.0f      ///< ⚠ T máx para cargar 
@@ -84,14 +89,22 @@ static const BQConfig bqCfg = {
     .pinBmsOk    = PIN_BMS_OK,
     .pinRx       = PIN_BQ_RX,
     .pinTx       = PIN_BQ_TX,
-    .pinTxEnable = -1,
+    .pinTxEnable = -1,    
     .baudrate    = 125000
 };
 static BQ79606  bms(bqCfg);
 
+static HallSensor hall(PIN_AMP_30A, PIN_AMP_350A);
+
+static bool hallInitOk = false;
+
+
 static CAN_BUS* gCan   = nullptr;
 static bool     gCanOk = false;
 static bool     bmsInitOk = false;
+static FaultTimer fComm;
+static FaultTimer fInit;
+
 
 // Estado de carga
 static bool          chargeRequested = false;  ///< orden start/stop por serial (ARRANCA SIN cargar)
@@ -128,7 +141,9 @@ void setup()
     bmsInitOk = bms.begin();
     Serial.println(bmsInitOk ? F("[OK] BQ79606 listo.")
                              : F("[WARN] BQ init FALLO."));
-
+    Serial.println(hallInitOk ? F("[OK] Hall listo.")
+                          : F("[WARN] Hall calibración fuera de rango."));
+                          
     static CAN_BUS canBus(HardwareType::Transciever, CHG_CAN_BAUD, CHG_NODE_ID);
     gCan   = &canBus;
     gCanOk = (gCan->SetupState() == 0);
@@ -163,7 +178,7 @@ void loop()
         bool safe   = chargeAllowed(readOk);
 
         // Un fallo CANCELA la orden de carga: hay que re-armar con 'g'.
-        // (Igual que el FW antiguo, que ponía cmdCharge=0 ante fallo.)
+        // (Il.begin();gual que el FW antiguo, que ponía cmdCharge=0 ante fallo.)
         if (!safe) chargeRequested = false;
 
         bool allow = chargeRequested && safe;
@@ -186,15 +201,28 @@ void loop()
 // ============================================================================
 bool readPack()
 {
+    unsigned long now = millis();
+
+    // Debounce de INIT
+    fInit.sample(!bmsInitOk, now);
+
     if (!bmsInitOk) {
-        // Reintento simple de init (sin rate-limit elaborado: carga no es pista).
         bmsInitOk = bms.reInit();
+        fInit.sample(!bmsInitOk, now);
         if (!bmsInitOk) return false;
     }
+
     bool okV = (bms.readVoltages()     == BQResult::OK);
     bool okT = (bms.readTemperatures() == BQResult::OK);
-    return okV && okT;
+
+    bool readOk = okV && okT;
+
+    // Debounce de COMM
+    fComm.sample(!readOk, now);
+
+    return fComm.confirmed(now, 500);   // 500 ms como en el BMS
 }
+
 
 // ============================================================================
 //  ¿Se permite cargar?  (corte por celda/temperatura/lectura)
