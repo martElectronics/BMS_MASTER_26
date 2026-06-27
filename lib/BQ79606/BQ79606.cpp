@@ -85,6 +85,8 @@ bool BQ79606::begin()
     // Wake, Fault y BMS_OK son señales directas del IC.
     // PWM_FANS, AMP_PIN, etc. son responsabilidad del main.
     pinMode(BQ_DPIN(_cfg.pinWake),  OUTPUT); digitalWrite(BQ_DPIN(_cfg.pinWake),  HIGH);
+    // Configurar BMS_OK como OUTPUT pero sin fijar nivel: el main lo gobierna
+    pinMode(BQ_DPIN(_cfg.pinBmsOk), OUTPUT);
     _bmsOkState = true;
     pinMode(BQ_DPIN(_cfg.pinFault), INPUT);
 

@@ -124,10 +124,10 @@ static constexpr int NUM_MODULES = TOTALBOARDS / 2;
 #define CELL_OT_C     60.0f     ///< Overtemperature (°C) — EV5.8.4: ≤60
 
 // Debounce por normativa FS EV5.8
-#define FAULT_V_MS    5000UL    ///< V debe persistir ≥500 ms
+#define FAULT_V_MS    1000UL    ///< V debe persistir ≥500 ms
 #define FAULT_T_MS    1000UL    ///< T debe persistir ≥1000 ms
 #define FAULT_NTC_MS  1000UL    ///< NTC abierto (pérdida de medida, clase T)
-#define FAULT_COMM_MS  500UL    ///< Comms BQ caídas sin recuperar
+#define FAULT_COMM_MS  10UL    ///< Comms BQ caídas sin recuperar
 
 // ⚠⚠ BANCO — relaja las ventanas de fallo para que un glitch del BQ no abra el
 // SDC mientras se prueban otros subsistemas. SOLO en el build de banco
@@ -163,7 +163,7 @@ static constexpr int NUM_MODULES = TOTALBOARDS / 2;
 //  La clase FaultTimer vive en lib/FaultTimer/FaultTimer.h (testeable en
 //  nativo: test/test_faulttimer/, `pio test -e native`).
 // ============================================================================
-static FaultTimer fV, fT, fNtc, fComm;
+static FaultTimer fV, fT, fNtc, fComm, fInit;
 static bool bmsFault = false;     ///< fallo confirmado AHORA (no latcheado)
 
 // Estado de inicialización del BQ (#3, opción B: init/reInit no bloqueantes
@@ -284,6 +284,8 @@ void setup()
     // (HIGH) mientras !bmsInitOk (ver updateBmsOk: bmsFault |= !bmsInitOk).
     Serial.println(F("Iniciando BQ79606..."));
     bmsInitOk = bms.begin();
+    // Estado inicial del pin: fallo hasta que el primer loop() lo decida
+    digitalWrite(PIN_BMS_OK, HIGH);  // HIGH = fallo en esta rama
     if (bmsInitOk) {
         Serial.println(F("[OK] BQ79606 listo."));
     } else {
@@ -379,33 +381,50 @@ void sampleAndEvaluate()
     static unsigned long tV = 0, tT = 0;
     unsigned long now = millis();
 
-    // Si el BQ no está inicializado, NO leer (driver no configurado).
-    // Reintentar reInit() rate-limited y forzar fComm (BMS_OK en fallo
-    // queda garantizado por updateBmsOk vía !bmsInitOk).
+    // ───────────────────────────────────────────────
+    // 1) INIT FALLIDO (driver no inicializado)
+    //    → NO leer V/T
+    //    → reintentar con rate-limit
+    //    → aplicar debounce de INIT
+    // ───────────────────────────────────────────────
     if (!bmsInitOk) {
+
+        // Debounce de INIT (fallo mientras !bmsInitOk)
+        fInit.sample(true, now);
+
+        // También consideramos fallo de COMM mientras no hay init
         fComm.sample(true, now);
+
+        // Reintento rate-limited
         if ((now - tLastReinit) >= BMS_REINIT_RETRY_MS) {
             tLastReinit = now;
             canNumTriesReset++;
-            // FRAM: persistir el intento (útil para ver cuánto le costó
-            // recuperar la cadena tras un episodio comm).
-            logger.log(buildFaultRecord(FaultLogger::EVT_REINIT_TRY, 4));
+
             if (bms.reInit()) {
                 bmsInitOk = true;
+
+                // 🔥 LÍNEA CRÍTICA: limpiar debounce de INIT al recuperarse
+                fInit.sample(false, now);
+
                 Serial.println(F("[OK] BQ recuperado."));
             }
         }
         return;
     }
 
-    // ── Voltaje: cada SAMPLE_V_MS. Cadencia 2× sobre la ventana FS para
-    //    que el debounce K-de-N del FaultTimer exija ≥2 muestras malas
-    //    consecutivas (filtra una muestra ruidosa aislada). ─────────────
+    // Si estamos aquí, INIT está OK → limpiar debounce de INIT
+    fInit.sample(false, now);
+
+    // ───────────────────────────────────────────────
+    // 2) LECTURA DE VOLTAJE (cada SAMPLE_V_MS)
+    // ───────────────────────────────────────────────
     if ((now - tV) >= SAMPLE_V_MS) {
         tV = now;
         lastResV = bms.readVoltages();
+
         if      (lastResV == BQResult::COMM_ERROR) canNumCommFails++;
         else if (lastResV == BQResult::CRC_ERROR)  canNumCrcFails++;
+
         if (lastResV == BQResult::OK) {
             bool badV = (bms.getMinVoltage() < CELL_UV_V) ||
                         (bms.getMaxVoltage() > CELL_OV_V);
@@ -413,39 +432,41 @@ void sampleAndEvaluate()
         }
     }
 
-    // ── T + NTC abierto: cada SAMPLE_T_MS, idem ─────────────────────────
+    // ───────────────────────────────────────────────
+    // 3) LECTURA DE TEMPERATURA (cada SAMPLE_T_MS)
+    // ───────────────────────────────────────────────
     if ((now - tT) >= SAMPLE_T_MS) {
         tT = now;
         lastResT = bms.readTemperatures();
+
         if      (lastResT == BQResult::COMM_ERROR) canNumCommFails++;
         else if (lastResT == BQResult::CRC_ERROR)  canNumCrcFails++;
+
         if (lastResT == BQResult::OK) {
             bool badT = (bms.getMinTemp() < CELL_UT_C) ||
                         (bms.getMaxTemp() > CELL_OT_C);
             fT.sample(badT, now);
-            // Pérdida de medida térmica (EV5.8.13): NTC abierto/inválido.
+
+            // NTC abierto
             fNtc.sample(bms.hasOpenNtc(), now);
         }
     }
 
-    // ── Pérdida de comunicación BQ ──────────────────────────────────────
-    // sample() cada loop: el FaultTimer pinea tStart al primer error y
-    // confirma tras FAULT_COMM_MS de wall-time (sustituye al
-    // commLost/tCommLost manual; mismo efecto, código uniforme).
+    // ───────────────────────────────────────────────
+    // 4) DEBOUNCE DE COMM (fallo si V o T fallan)
+    // ───────────────────────────────────────────────
     bool readErr = (lastResV != BQResult::OK) || (lastResT != BQResult::OK);
     fComm.sample(readErr, now);
+
     if (readErr) {
-        // Reintento con rate-limit (#3, opción B): reInit() bloquea
-        // unos segundos; lo limitamos a uno cada BMS_REINIT_RETRY_MS
-        // (NO en cada flanco, NO en cada loop).
         if ((now - tLastReinit) >= BMS_REINIT_RETRY_MS) {
             tLastReinit = now;
             canNumTriesReset++;
             bms.reInit();
         }
     }
-    // (else: fComm.sample(false) ya reseteó badRun/tStart arriba)
 }
+
 
 // ============================================================================
 //  BMS_OK — no-latching, auto-rearma (el latch que abre el SDC es HW)

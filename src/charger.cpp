@@ -30,6 +30,7 @@
 #include "BQ79606.h"
 #include "MART_CAN.h"
 #include "HallSensor.h"
+#include "FaultTimer.h"
 
 // ============================================================================
 //  PINES BQ79606 — idénticos a src/main.cpp (mismo hardware)
@@ -220,7 +221,7 @@ bool readPack()
     // Debounce de COMM
     fComm.sample(!readOk, now);
 
-    return fComm.confirmed(now, 500);   // 500 ms como en el BMS
+    return fComm.confirmed(now, 1000);   // 500 ms como en el BMS
 }
 
 
@@ -248,6 +249,8 @@ bool chargeAllowed(bool readOk)
                       bms.getMinTemp(), CELL_TMIN_CHG_C);
         return false;
     }
+    Serial.printf("[SAFE] pack OK: Vmax=%.3f V  Tmin=%.1f C  Tmax=%.1f C\n",
+                  bms.getMaxVoltage(), bms.getMinTemp(), bms.getMaxTemp());
     return true;
 }
 
