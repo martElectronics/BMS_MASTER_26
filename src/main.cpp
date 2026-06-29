@@ -124,10 +124,10 @@ static constexpr int NUM_MODULES = TOTALBOARDS / 2;
 #define CELL_OT_C     60.0f     ///< Overtemperature (°C) — EV5.8.4: ≤60
 
 // Debounce por normativa FS EV5.8
-#define FAULT_V_MS    1000UL    ///< V debe persistir ≥500 ms
-#define FAULT_T_MS    1000UL    ///< T debe persistir ≥1000 ms
-#define FAULT_NTC_MS  1000UL    ///< NTC abierto (pérdida de medida, clase T)
-#define FAULT_COMM_MS  10UL    ///< Comms BQ caídas sin recuperar
+#define FAULT_V_MS    100000UL    ///< V debe persistir ≥500 ms
+#define FAULT_T_MS    100000UL    ///< T debe persistir ≥1000 ms
+#define FAULT_NTC_MS  10000000UL    ///< NTC abierto (pérdida de medida, clase T)
+#define FAULT_COMM_MS  100000UL    ///< Comms BQ caídas sin recuperar
 
 // ⚠⚠ BANCO — relaja las ventanas de fallo para que un glitch del BQ no abra el
 // SDC mientras se prueban otros subsistemas. SOLO en el build de banco

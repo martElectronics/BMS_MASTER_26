@@ -221,7 +221,7 @@ bool readPack()
     // Debounce de COMM
     fComm.sample(!readOk, now);
 
-    return fComm.confirmed(now, 1000);   // 500 ms como en el BMS
+    return !fComm.confirmed(now, 1000);   // 500 ms como en el BMS
 }
 
 
