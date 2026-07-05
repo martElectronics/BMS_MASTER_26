@@ -19,8 +19,8 @@
 // ============================================================================
 bool FaultLogger::begin()
 {
-    Wire.setSCL(PB8);
-    Wire.setSDA(PB9);
+    Wire.setSCL(PB9);
+    Wire.setSDA(PB8);
     Wire.begin();
     Wire.setClock(400000);    // Fast Mode (la chip aguanta hasta 1 MHz)
 

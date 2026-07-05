@@ -346,7 +346,10 @@ void BQ79606::clearAllFaults()
 
 void BQ79606::setBmsOk(bool ok)
 {
-    digitalWrite(BQ_DPIN(_cfg.pinBmsOk), ok ? LOW : HIGH);
+    uint32_t pin = BQ_DPIN(_cfg.pinBmsOk);
+    Serial.printf("[BMSOK] pin=%lu ok=%d -> %s\n",
+                  pin, (int)ok, ok ? "LOW" : "HIGH");
+    digitalWrite(pin, ok ? LOW : HIGH);
     _bmsOkState = ok;
 }
 

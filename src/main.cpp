@@ -124,9 +124,9 @@ static constexpr int NUM_MODULES = TOTALBOARDS / 2;
 #define CELL_OT_C     60.0f     ///< Overtemperature (°C) — EV5.8.4: ≤60
 
 // Debounce por normativa FS EV5.8
-#define FAULT_V_MS    100000UL    ///< V debe persistir ≥500 ms
-#define FAULT_T_MS    100000UL    ///< T debe persistir ≥1000 ms
-#define FAULT_NTC_MS  10000000UL    ///< NTC abierto (pérdida de medida, clase T)
+#define FAULT_V_MS    5000UL    ///< V debe persistir ≥500 ms
+#define FAULT_T_MS    10000UL    ///< T debe persistir ≥1000 ms
+#define FAULT_NTC_MS  5000UL    ///< NTC abierto (pérdida de medida, clase T)
 #define FAULT_COMM_MS  100000UL    ///< Comms BQ caídas sin recuperar
 
 // ⚠⚠ BANCO — relaja las ventanas de fallo para que un glitch del BQ no abra el
@@ -148,9 +148,9 @@ static constexpr int NUM_MODULES = TOTALBOARDS / 2;
 // Cadencias de muestreo: 2× respecto al mínimo FS para tener ≥2 muestras
 // dentro de cada ventana de debounce → mejor filtrado de ruido transitorio.
 // Las ventanas FAULT_V_MS / FAULT_T_MS NO se tocan (las marca FS EV5.8).
-#define SAMPLE_V_MS    250UL
-#define SAMPLE_T_MS    500UL
-#define PRINT_MS      2000UL
+#define SAMPLE_V_MS    200UL
+#define SAMPLE_T_MS    400UL
+#define PRINT_MS      1000UL
 
 // Watchdog HW independiente: si el loop() se cuelga y no se refresca,
 // el IWDG resetea el MCU → BMS_OK pasa a fallo (HIGH en esta rama). 8 s: por encima
@@ -171,7 +171,7 @@ static bool bmsFault = false;     ///< fallo confirmado AHORA (no latcheado)
 // reintenta reInit() con rate-limit (no en cada flanco).
 static bool          bmsInitOk    = false;   ///< true tras begin()/reInit() OK
 static unsigned long tLastReinit  = 0;       ///< ms del último intento de reInit
-#define BMS_REINIT_RETRY_MS  2000UL          ///< cadencia mín. entre reintentos
+#define BMS_REINIT_RETRY_MS  500UL          ///< cadencia mín. entre reintentos
 
 // Lecturas
 static BQResult lastResV = BQResult::OK, lastResT = BQResult::OK;
@@ -458,15 +458,49 @@ void sampleAndEvaluate()
     bool readErr = (lastResV != BQResult::OK) || (lastResT != BQResult::OK);
     fComm.sample(readErr, now);
 
-    if (readErr) {
+    // Log de diagnóstico SOLO en el primer fallo del episodio
+    static bool faultLogged = false;
+    if (readErr && !faultLogged) {
+        faultLogged = true;
+        Serial.println(F("[BQ] Primer fallo comms — fallos internos:"));
+        for (int b = 0; b < TOTALBOARDS; b++) {
+            BQFaultStatus fs;
+            if (bms.getFaultStatus(b, fs) != BQResult::OK) {
+                Serial.printf("  B%d: no responde\n", b);
+            } else if (fs.hasAnyFault()) {
+                Serial.printf("  B%d: SUM=0x%02X UV=0x%02X OV=0x%02X "
+                              "UT=0x%02X OT=0x%02X SYS1=0x%02X\n",
+                              b, fs.summary, fs.uvFault, fs.ovFault,
+                              fs.utFault, fs.otFault, fs.sysFault1);
+            } else {
+                Serial.printf("  B%d: comms puro\n", b);
+            }
+        }
+    }
+
+    // Si la condición de comms se despeja, preparamos el próximo episodio
+    if (!readErr) {
+        faultLogged = false;
+    }
+
+    // Autodressing SOLO si el fallo de comms está confirmado por FaultTimer
+    // (persistente durante FAULT_COMM_MS) y respetando el cooldown BMS_REINIT_RETRY_MS.
+    if (fComm.confirmed(now, FAULT_COMM_MS)) {
         if ((now - tLastReinit) >= BMS_REINIT_RETRY_MS) {
+            Serial.println(F("[BQ] Fallo persistente de comms — reInit()"));
             tLastReinit = now;
             canNumTriesReset++;
-            bms.reInit();
+            if (bms.reInit()) {
+                bmsInitOk = true;
+                fInit.sample(false, now);
+                // al recuperar, limpiamos el debounce de INIT en sampleAndEvaluate()
+                Serial.println(F("[OK] BQ recuperado tras fallo de comms."));
+            } else {
+                Serial.println(F("[ERROR] reInit tras fallo de comms."));
+            }
         }
     }
 }
-
 
 // ============================================================================
 //  BMS_OK — no-latching, auto-rearma (el latch que abre el SDC es HW)

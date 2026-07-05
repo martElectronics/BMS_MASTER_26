@@ -29,7 +29,6 @@
 #include <IWatchdog.h>
 #include "BQ79606.h"
 #include "MART_CAN.h"
-#include "HallSensor.h"
 #include "FaultTimer.h"
 
 // ============================================================================
@@ -39,7 +38,7 @@
 #define PIN_BQ_FAULT  PB_2
 #define PIN_BQ_RX     PC_5
 #define PIN_BQ_TX     PC_4
-#define PIN_BMS_OK    PA_4
+#define PIN_BMS_OK    PB_5
 
 // Amperímetro DHAB S/118
 #define PIN_AMP_30A     PA_1   ///< Canal alta resolución (±30A)
@@ -95,10 +94,6 @@ static const BQConfig bqCfg = {
 };
 static BQ79606  bms(bqCfg);
 
-static HallSensor hall(PIN_AMP_30A, PIN_AMP_350A);
-
-static bool hallInitOk = false;
-
 
 static CAN_BUS* gCan   = nullptr;
 static bool     gCanOk = false;
@@ -142,8 +137,6 @@ void setup()
     bmsInitOk = bms.begin();
     Serial.println(bmsInitOk ? F("[OK] BQ79606 listo.")
                              : F("[WARN] BQ init FALLO."));
-    Serial.println(hallInitOk ? F("[OK] Hall listo.")
-                          : F("[WARN] Hall calibración fuera de rango."));
                           
     static CAN_BUS canBus(HardwareType::Transciever, CHG_CAN_BAUD, CHG_NODE_ID);
     gCan   = &canBus;
@@ -177,7 +170,10 @@ void loop()
 
         bool readOk = readPack();
         bool safe   = chargeAllowed(readOk);
-
+        Serial.printf("[DBG] readOk=%d safe=%d bmsInit=%d\n",
+              readOk, safe, bmsInitOk);
+        bms.setBmsOk(safe);
+Serial.printf("[PIN] PA4 real=%d (safe=%d)\n", digitalRead(PIN_BMS_OK), safe);
         // Un fallo CANCELA la orden de carga: hay que re-armar con 'g'.
         // (Il.begin();gual que el FW antiguo, que ponía cmdCharge=0 ante fallo.)
         if (!safe) chargeRequested = false;
@@ -189,8 +185,6 @@ void loop()
         // BMS_OK refleja la SEGURIDAD del pack (no si cargamos o no).
         // ⚠ Polaridad heredada del driver (rama testing: OK=LOW). Verificar
         //   que coincide con lo que espera el hardware de habilitación de carga.
-        bms.setBmsOk(safe);
-
         printChgStatus();
     }
 
