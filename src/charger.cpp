@@ -30,6 +30,7 @@
 #include "BQ79606.h"
 #include "MART_CAN.h"
 #include "FaultTimer.h"
+#include "HallSensor.h"
 
 // ============================================================================
 //  PINES BQ79606 — idénticos a src/main.cpp (mismo hardware)
@@ -94,13 +95,16 @@ static const BQConfig bqCfg = {
 };
 static BQ79606  bms(bqCfg);
 
+static HallSensor hall(PIN_AMP_30A, PIN_AMP_350A);
+static bool hallInitOk = false;
 
 static CAN_BUS* gCan   = nullptr;
 static bool     gCanOk = false;
 static bool     bmsInitOk = false;
 static FaultTimer fComm;
 static FaultTimer fInit;
-
+static bool moduleStreamOn = false;
+static unsigned long tModStream = 0;
 
 // Estado de carga
 static bool          chargeRequested = false;  ///< orden start/stop por serial (ARRANCA SIN cargar)
@@ -121,6 +125,7 @@ void   pollMessage2();
 void   printChgStatus();
 void   printVoltages();
 void   printTemps();
+static void   printModules();
 void   handleSerial();
 
 // ============================================================================
@@ -137,15 +142,16 @@ void setup()
     bmsInitOk = bms.begin();
     Serial.println(bmsInitOk ? F("[OK] BQ79606 listo.")
                              : F("[WARN] BQ init FALLO."));
+    hall.begin();
+    hallInitOk = hall.isOK();
+    Serial.println(hallInitOk ? F("[OK] Hall listo.")
+                              : F("[WARN] Hall calibración fuera de rango."));
                           
     static CAN_BUS canBus(HardwareType::Transciever, CHG_CAN_BAUD, CHG_NODE_ID);
     gCan   = &canBus;
     gCanOk = (gCan->SetupState() == 0);
     Serial.println(gCanOk ? F("[CAN] FDCAN listo.")
                           : F("[CAN] FDCAN init FALLO."));
-
-    Serial.printf("Vmax: %.1f V (fijo)  I_inicio: %.1f A (tope %.1f A)\n",
-                  CHG_TERM_VOLT_V, CHG_START_CURRENT_A, CHG_MAX_CURRENT_A);
     Serial.println(F("ARRANCA SIN CARGAR. Comandos: g=start x=stop c,<I>=corriente v=voltajes t=temps d=datos r=restart"));
 
     IWatchdog.begin(WDG_TIMEOUT_US);
@@ -163,17 +169,15 @@ void loop()
     // RX continua (el cargador emite Message 2 cada 1 s).
     pollMessage2();
 
+    hall.update();
+
     // TX Message 1 cada 1 s — el cargador corta si no lo recibe en 5 s.
     static unsigned long tMsg1 = 0;
     if (millis() - tMsg1 >= MSG1_PERIOD_MS) {
         tMsg1 = millis();
-
         bool readOk = readPack();
         bool safe   = chargeAllowed(readOk);
-        Serial.printf("[DBG] readOk=%d safe=%d bmsInit=%d\n",
-              readOk, safe, bmsInitOk);
         bms.setBmsOk(safe);
-Serial.printf("[PIN] PA4 real=%d (safe=%d)\n", digitalRead(PIN_BMS_OK), safe);
         // Un fallo CANCELA la orden de carga: hay que re-armar con 'g'.
         // (Il.begin();gual que el FW antiguo, que ponía cmdCharge=0 ante fallo.)
         if (!safe) chargeRequested = false;
@@ -187,7 +191,15 @@ Serial.printf("[PIN] PA4 real=%d (safe=%d)\n", digitalRead(PIN_BMS_OK), safe);
         //   que coincide con lo que espera el hardware de habilitación de carga.
         printChgStatus();
     }
-
+if (moduleStreamOn && (millis() - tModStream >= 1000)) {
+    tModStream = millis();
+    // solo leer si readPack() no lo hizo ya (bmsInitOk garantiza que el BQ responde)
+    if (bmsInitOk) {
+        bms.readVoltages();
+        bms.readTemperatures();
+    }
+    printModules();
+}
     IWatchdog.reload();
 }
 
@@ -299,12 +311,17 @@ void printChgStatus()
 {
     bool rxAlive = (millis() - tLastChgRx) < RX_TIMEOUT_MS;
     Serial.println(F("\n--- CHARGER ---"));
-    Serial.printf("Pack: Vmin=%.3f Vmax=%.3f  Tmin=%.1f Tmax=%.1f\n",
-                  bms.getMinVoltage(), bms.getMaxVoltage(),
-                  bms.getMinTemp(), bms.getMaxTemp());
-    Serial.printf("Solicitado: %s  I_cmd=%.1f A  →  Cargando: %s (control=%d)\n",
-                  chargeRequested ? "SI" : "NO", chgCurrentA,
-                  charging ? "SI" : "NO", charging ? 0 : 1);
+    Serial.printf("Pack: Vmin=%.3f Vmax=%.3f dV=%.1fmV  Tmin=%.1f Tmax=%.1f\n",
+              bms.getMinVoltage(), bms.getMaxVoltage(), bms.getVoltageDelta(),
+              bms.getMinTemp(), bms.getMaxTemp());
+    Serial.printf("Solicitado: %s  I_cmd=%.1f A  →  Cargando: %s\n",
+              chargeRequested ? "SI" : "NO", chgCurrentA,
+              charging ? "SI" : "NO");
+    // y la corriente del Hall:
+    Serial.printf("Hall: %.2f A (%s)  %s\n",
+              hall.getCurrent(),
+              hall.isLowRange() ? "30A" : "350A",
+              hall.isOK() ? "OK" : "FALLO");
     if (rxAlive) {
         Serial.printf("OBC: Vout=%.1f V  Iout=%.1f A  st=0x%02X%s%s%s%s%s\n",
                       chgOutV, chgOutI, chgStatus,
@@ -414,7 +431,33 @@ void handleSerial()
         delay(100);
         NVIC_SystemReset();
         break;
+    case 'm':
+    moduleStreamOn = !moduleStreamOn;
+        Serial.printf("[MOD] stream %s\n", moduleStreamOn ? "ON" : "OFF");
+        break;
     default:
         break;
     }
+}
+
+static void printModules()
+{
+    Serial.println(F("\n--- MODULOS ---"));
+    for (int m = 0; m < TOTALBOARDS / 2; m++) {
+        Serial.printf("M%02d V:", m + 1);
+        for (int n = 1; n <= 11; n++) {
+            int ev = 2 * m, od = 2 * m + 1;
+            float v = (n <= 6) ? bms.getVoltage(ev, n-1) : bms.getVoltage(od, n-7);
+            Serial.printf(" %.3f", v);
+        }
+        Serial.printf("  T:");
+        for (int k = 1; k <= 9; k++) {
+            int ev = 2 * m, od = 2 * m + 1;
+            float t = (k <= 6) ? bms.getTemperature(ev, k-1) : bms.getTemperature(od, k-7);
+            Serial.printf(" %.1f", t);
+        }
+        Serial.println();
+    }
+    Serial.printf("Vmin=%.3f Vmax=%.3f dV=%.1fmV\n",
+                  bms.getMinVoltage(), bms.getMaxVoltage(), bms.getVoltageDelta());
 }
