@@ -26,6 +26,8 @@
  * ── COMANDOS SERIE ──────────────────────────────────────────────────────────
  *   1 = BMS_OK HIGH   0 = BMS_OK LOW   b = toggle BMS_OK
  *   s = status (pines)   r = reset del MCU (unica via de limpiar PRE_FAIL)
+ *   u/p/n = diag entradas: pull-up / pull-down / sin pull (config real). Sirve
+ *           para ver si una entrada "clavada" la drive el aislador o esta al aire.
  *
  * Lanzar con:  pio run -e pcb_bench -t upload
  * Monitor:     pio device monitor -e pcb_bench
@@ -69,10 +71,20 @@ static bool          prechargeRunning = false;  ///< temporizador de precarga en
 static bool          prechargeFail    = false;  ///< latch HIGH si timeout 5 s (se quita con reset)
 static unsigned long tPrechargeStart  = 0;
 
+// ── Diagnostico de entradas (comandos u/p/n) ────────────────────────────────
+// Las 6 entradas, para reconfigurar su pull de golpe y decidir si el aislador
+// esta drivando el pin o no (ver setInputPull / comentario en handleSerial).
+static const int INPUT_PINS[] = {
+    PIN_TSON_FAIL, PIN_TSON_BTN, PIN_PRECHARGE_DONE,
+    PIN_SDC_3V3, PIN_IMD_OK, PIN_HV_ACCU_VIL
+};
+static const int NUM_INPUTS = sizeof(INPUT_PINS) / sizeof(INPUT_PINS[0]);
+
 void updateTson();
 void handleSerial();
 void printStatus();
 static void setBmsOk(bool ok);
+static void setInputPull(int mode, const char* nombre);
 
 // ============================================================================
 //  SETUP
@@ -112,6 +124,7 @@ void setup()
     Serial.println(F("  (BMS_OK MANUAL — no es firmware de seguridad)"));
     Serial.println(F("========================================"));
     Serial.println(F("Cmd: 1=BMS_OK HIGH  0=BMS_OK LOW  b=toggle  s=status  r=reset"));
+    Serial.println(F("Diag entradas: u=pull-up  p=pull-down  n=sin pull (real)"));
     Serial.printf("BMS_OK arranca en HIGH. Precarga: timeout %lu ms.\n",
                   PRECHARGE_TIMEOUT_MS);
     printStatus();
@@ -138,6 +151,24 @@ static void setBmsOk(bool ok)
     bmsOk = ok;
     digitalWrite(PIN_BMS_OK, ok ? HIGH : LOW);   // OK=HIGH, fallo=LOW
     Serial.printf("[BMS_OK] -> %s\n", ok ? "HIGH (OK)" : "LOW (FALLO)");
+}
+
+// ============================================================================
+//  DIAGNOSTICO DE ENTRADAS — reconfigura el pull de las 6 entradas de golpe.
+//  Sirve para saber si una entrada "clavada" la esta drivando el aislador o
+//  esta al aire:
+//    · pull-down (p): si el pin lee 0 -> nadie lo drive (la senal NO llega).
+//    · pull-up   (u): si el pin lee 1 -> nadie lo drive (la senal NO llega).
+//    · si la lectura NO cambia con el pull -> algo lo drive fuerte (llega OK).
+//  'n' vuelve a la config REAL (INPUT sin pull, como en el coche via ISO7742).
+// ============================================================================
+static void setInputPull(int mode, const char* nombre)
+{
+    for (int i = 0; i < NUM_INPUTS; i++) pinMode(INPUT_PINS[i], mode);
+    Serial.printf("[DIAG] entradas -> %s. Mira el status: si el pin sigue al pull,\n"
+                  "       nadie lo drive (senal no llega); si no cambia, el aislador llega OK.\n",
+                  nombre);
+    printStatus();
 }
 
 // ============================================================================
@@ -229,6 +260,12 @@ void handleSerial()
     case 'b': setBmsOk(!bmsOk); break;
 
     case 's': printStatus(); break;
+
+    // Diagnostico de entradas: fuerza pull interno para ver si el aislador
+    // esta drivando el pin o esta al aire (ver setInputPull).
+    case 'u': setInputPull(INPUT_PULLUP,   "PULL-UP");   break;
+    case 'p': setInputPull(INPUT_PULLDOWN, "PULL-DOWN"); break;
+    case 'n': setInputPull(INPUT,          "SIN PULL (config real)"); break;
 
     case 'r':
         // Unica via honesta de limpiar el latch de PRECHARGE_FAIL: equivale al
