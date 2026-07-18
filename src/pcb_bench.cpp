@@ -7,27 +7,19 @@
  * del pack. Sirve para verificar el cableado y los aisladores de la placa
  * SIN bateria ni cadena BQ conectada.
  *
- * ── QUE LLEVA ───────────────────────────────────────────────────────────────
- *   · BMS_OK: arranca en HIGH y se cambia con comando serie (1/0/b).
- *   · Maquina de estados del TSON: IDENTICA a main.cpp::updateTson().
- *   · Latch de PRECHARGE_FAIL: IDENTICO a main.cpp (timeout 5 s, enclavado).
- *   · Volcado periodico de TODOS los pines usados (2 s) + eventos por flanco.
- *
- * ── QUE NO LLEVA (a proposito) ──────────────────────────────────────────────
- *   BQ79606, HallSensor, CAN, FRAM, SOC, ventiladores y watchdog. En una PCB
- *   sin cadena BQ, main.cpp deja BMS_OK LOW para siempre (bmsFault |=
- *   !bmsInitOk) y el TSON NUNCA armaria -> no se podria probar la placa.
- *   Ese es el motivo de que este banco exista.
- *
- * ⚠ NO MEZCLAR EN main.cpp: forzar BMS_OK=HIGH salta toda la vigilancia del
- *   pack (EV5.8). Este env es solo de banco, con el HV DESCONECTADO. Para
- *   probar la placa de verdad, flashear el env nucleo_g474re.
+ * ── PINES (PCB nueva — CONFIRMADOS con pin_walker / pin_out_walker) ───────────
+ *   BMS_OK = PA4 (no PB5 como la placa vieja), boton TSON = PB9,
+ *   SDC_TSON = PA6. El resto (TSON_FAIL, PRECHARGE_*, SDC_3V3, IMD_OK,
+ *   HV_ACCU) siguen SIN confirmar contra el esquematico de la placa nueva.
  *
  * ── COMANDOS SERIE ──────────────────────────────────────────────────────────
  *   1 = BMS_OK HIGH   0 = BMS_OK LOW   b = toggle BMS_OK
+ *   F = forzar SDC_TSON (prueba la SALIDA sola, sin logica ni boton)
+ *   u/p/n = diag entradas: pull-up / pull-down / sin pull
  *   s = status (pines)   r = reset del MCU (unica via de limpiar PRE_FAIL)
- *   u/p/n = diag entradas: pull-up / pull-down / sin pull (config real). Sirve
- *           para ver si una entrada "clavada" la drive el aislador o esta al aire.
+ *
+ * ⚠ NO MEZCLAR EN main.cpp: forzar BMS_OK salta la vigilancia del pack (EV5.8).
+ *   Banco con HV DESCONECTADO. Para la placa de verdad, flashear nucleo_g474re.
  *
  * Lanzar con:  pio run -e pcb_bench -t upload
  * Monitor:     pio device monitor -e pcb_bench
@@ -36,34 +28,30 @@
 #include <Arduino.h>
 
 // ============================================================================
-//  PINES — STM32G474RE (PCB BMS Master, rev. nueva). Espejo de main.cpp:65-86.
-//  Si la PCB nueva remapea algo, cambiarlo AQUI y en main.cpp (o sacarlo a
-//  lib/COMMON/common.h para no tenerlo en dos sitios).
+//  PINES — STM32G474RE (PCB nueva). ⚠ pinout DISTINTO al de main.cpp.
 // ============================================================================
-#define PIN_BMS_OK          PB_5   ///< BMS_OK_STM (out) -> SDC. OK=HIGH. Aqui manual.
+// ⚠ SIN guion bajo (PA6, no PA_6): son nº de pin Arduino. Con PA_6 (PinName)
+//   digitalWrite/pinMode apuntan a OTRA pata (lo interpreta como indice).
+#define PIN_BMS_OK          PA_4    ///< BMS_OK_STM (out). CONFIRMADO PA4 (no PB5).
 
 // SDC / TSON / precarga
-#define PIN_TSON_FAIL       PB_8   ///< TSON_FAIL_STM (in). HIGH = fallo TSON
-#define PIN_TSON_BTN        PB_9   ///< TSON_STM (in). Pulsador de arranque del TSON
-#define PIN_SDC_TSON        PA_6   ///< SDC_TSON_STM (out). Latch del TSON
-#define PIN_PRECHARGE_DONE  PA_7   ///< PRECHARGE_DONE_STM (in). HIGH = precarga OK
-#define PIN_PRECHARGE_FAIL  PB_6   ///< PRECHARGE_FAIL_STM (out). HIGH enclavado si timeout 5 s
-#define PIN_SDC_3V3         PC_7   ///< SDC_3V3_STM (in). HIGH = SDC presente
-#define PIN_IMD_OK          PA_8   ///< IMD_OK_STM (in). Solo telemetria (aqui, solo print)
-#define PIN_HV_ACCU_VIL     PB_4   ///< HV_ACCU_VIL_STM (in). Condicion de armado del TSON
+#define PIN_TSON_FAIL       PB8    ///< TSON_FAIL_STM (in). HIGH = fallo TSON
+#define PIN_TSON_BTN        PB9    ///< TSON_STM (in). Boton de arranque. CONFIRMADO PB9.
+#define PIN_SDC_TSON        PA6    ///< SDC_TSON_STM (out). Latch del TSON. CONFIRMADO PA6.
+#define PIN_PRECHARGE_DONE  PA7    ///< PRECHARGE_DONE_STM (in). HIGH = precarga OK
+#define PIN_PRECHARGE_FAIL  PB6    ///< PRECHARGE_FAIL_STM (out). HIGH enclavado si timeout 5 s
+#define PIN_SDC_3V3         PC7    ///< SDC_3V3_STM (in). HIGH = SDC presente
+#define PIN_IMD_OK          PA8    ///< IMD_OK_STM (in). Solo print
+#define PIN_HV_ACCU_VIL     PB4    ///< HV_ACCU_VIL_STM (in). Condicion de armado del TSON
 
-// Igual que main.cpp: PRECHARGE_DONE debe llegar antes de esto o PRECHARGE_FAIL
-// se enclava HIGH (solo se quita con reset de alimentacion / MCU).
-#define PRECHARGE_TIMEOUT_MS  5000UL
-
+#define PRECHARGE_TIMEOUT_MS  500000UL
 #define PRINT_MS              2000UL
 
 // ============================================================================
 //  ESTADO
 // ============================================================================
-// bmsOk sustituye a !bmsFault de main.cpp: aqui NO lo decide el pack, lo
-// decides tu por Serial. Arranca en HIGH para poder armar el TSON de entrada.
-static bool          bmsOk            = true;
+static bool          bmsOk            = true;   ///< OK manual (sustituye a !bmsFault)
+static bool          forceTson        = false;  ///< 'F': fuerza SDC_TSON HIGH (test de salida)
 
 static bool          sdcTson          = false;  ///< estado del latch TSON (= nivel de PIN_SDC_TSON)
 static bool          tsonBtnPrev      = false;  ///< nivel previo del boton (flanco de subida)
@@ -71,9 +59,7 @@ static bool          prechargeRunning = false;  ///< temporizador de precarga en
 static bool          prechargeFail    = false;  ///< latch HIGH si timeout 5 s (se quita con reset)
 static unsigned long tPrechargeStart  = 0;
 
-// ── Diagnostico de entradas (comandos u/p/n) ────────────────────────────────
-// Las 6 entradas, para reconfigurar su pull de golpe y decidir si el aislador
-// esta drivando el pin o no (ver setInputPull / comentario en handleSerial).
+// Las 6 entradas, para reconfigurar su pull de golpe (comandos u/p/n).
 static const int INPUT_PINS[] = {
     PIN_TSON_FAIL, PIN_TSON_BTN, PIN_PRECHARGE_DONE,
     PIN_SDC_3V3, PIN_IMD_OK, PIN_HV_ACCU_VIL
@@ -94,39 +80,31 @@ void setup()
     Serial.begin(115200);
     delay(500);
 
-    // Salidas en estado seguro ANTES de nada: SDC_TSON abierto, sin fallo de
-    // precarga. BMS_OK se pone HIGH abajo (es lo que diferencia este banco).
+    // Salidas en estado seguro: SDC_TSON abierto (LOW), sin fallo de precarga.
     pinMode(PIN_SDC_TSON,       OUTPUT); digitalWrite(PIN_SDC_TSON,       LOW);
     pinMode(PIN_PRECHARGE_FAIL, OUTPUT); digitalWrite(PIN_PRECHARGE_FAIL, LOW);
 
-    // Entradas SIN pull: vienen drivadas por el aislador ISO7742 (push-pull,
-    // inactivo=LOW) y el boton pasa por un comparador -> flanco limpio. NO anadir
-    // INPUT_PULLUP/DOWN (seria redundante y pelearia con el driver).
-    pinMode(PIN_TSON_FAIL,      INPUT);
-    pinMode(PIN_TSON_BTN,       INPUT);
-    pinMode(PIN_PRECHARGE_DONE, INPUT);
-    pinMode(PIN_SDC_3V3,        INPUT);
-    pinMode(PIN_IMD_OK,         INPUT);
-    pinMode(PIN_HV_ACCU_VIL,    INPUT);
+    // Entradas con PULL-DOWN: en la PCB nueva el boton (y probablemente las
+    // demas) no vienen drivadas push-pull en el banco -> flotarian sin pull.
+    // Confirmado con pin_walker: PB9 solo se detecta con pull-down. u/p/n en
+    // caliente para diagnosticar cada una.
+    for (int i = 0; i < NUM_INPUTS; i++) pinMode(INPUT_PINS[i], INPUT_PULLDOWN);
 
-    // BMS_OK arranca HIGH (banco). En main.cpp lo pone el driver del BQ en LOW
-    // hasta que el init de la cadena va OK — aqui no hay cadena que esperar.
+    // BMS_OK arranca HIGH (banco). Manual, no lo decide ningun pack.
     pinMode(PIN_BMS_OK, OUTPUT);
     digitalWrite(PIN_BMS_OK, HIGH);
     bmsOk = true;
 
-    // Estado real del boton al arrancar -> un boton pegado en HIGH al boot NO
-    // se interpreta como flanco de subida (no auto-arma el TSON).
+    // Nivel real del boton al arrancar -> no interpretar un boton ya pulsado
+    // como flanco de subida.
     tsonBtnPrev = digitalRead(PIN_TSON_BTN);
 
     Serial.println(F("========================================"));
-    Serial.println(F("  BANCO PCB — TSON / PRECARGA / SDC"));
+    Serial.println(F("  BANCO PCB — TSON / PRECARGA / SDC (PCB nueva)"));
     Serial.println(F("  (BMS_OK MANUAL — no es firmware de seguridad)"));
     Serial.println(F("========================================"));
-    Serial.println(F("Cmd: 1=BMS_OK HIGH  0=BMS_OK LOW  b=toggle  s=status  r=reset"));
-    Serial.println(F("Diag entradas: u=pull-up  p=pull-down  n=sin pull (real)"));
-    Serial.printf("BMS_OK arranca en HIGH. Precarga: timeout %lu ms.\n",
-                  PRECHARGE_TIMEOUT_MS);
+    Serial.println(F("Cmd: 1=BMS_OK HIGH  0=BMS_OK LOW  b=toggle  F=forzar SDC_TSON"));
+    Serial.println(F("     u=pull-up  p=pull-down  n=sin pull  s=status  r=reset"));
     printStatus();
 }
 
@@ -135,8 +113,12 @@ void setup()
 // ============================================================================
 void loop()
 {
-    updateTson();
     handleSerial();
+
+    // 'F' fuerza la SALIDA a HIGH para probarla sola (mide PA6). Si no, corre
+    // la maquina TSON normal, que ya escribe SDC_TSON segun su estado.
+    if (forceTson) digitalWrite(PIN_SDC_TSON, HIGH);
+    else           updateTson();
 
     static unsigned long tPrint = 0;
     if (millis() - tPrint >= PRINT_MS) { tPrint = millis(); printStatus(); }
@@ -147,7 +129,6 @@ void loop()
 // ============================================================================
 static void setBmsOk(bool ok)
 {
-    if (ok == bmsOk) return;              // escribir solo en los cambios
     bmsOk = ok;
     digitalWrite(PIN_BMS_OK, ok ? HIGH : LOW);   // OK=HIGH, fallo=LOW
     Serial.printf("[BMS_OK] -> %s\n", ok ? "HIGH (OK)" : "LOW (FALLO)");
@@ -155,36 +136,23 @@ static void setBmsOk(bool ok)
 
 // ============================================================================
 //  DIAGNOSTICO DE ENTRADAS — reconfigura el pull de las 6 entradas de golpe.
-//  Sirve para saber si una entrada "clavada" la esta drivando el aislador o
-//  esta al aire:
-//    · pull-down (p): si el pin lee 0 -> nadie lo drive (la senal NO llega).
-//    · pull-up   (u): si el pin lee 1 -> nadie lo drive (la senal NO llega).
-//    · si la lectura NO cambia con el pull -> algo lo drive fuerte (llega OK).
-//  'n' vuelve a la config REAL (INPUT sin pull, como en el coche via ISO7742).
+//  pull-down (p): si el pin lee 0 -> nadie lo drive (senal no llega).
+//  pull-up   (u): si el pin lee 1 -> nadie lo drive.
+//  si NO cambia con el pull -> algo lo drive fuerte (llega OK).
 // ============================================================================
 static void setInputPull(int mode, const char* nombre)
 {
     for (int i = 0; i < NUM_INPUTS; i++) pinMode(INPUT_PINS[i], mode);
-    Serial.printf("[DIAG] entradas -> %s. Mira el status: si el pin sigue al pull,\n"
-                  "       nadie lo drive (senal no llega); si no cambia, el aislador llega OK.\n",
-                  nombre);
+    delay(2);
+    tsonBtnPrev = digitalRead(PIN_TSON_BTN);   // re-sync: no soltar flanco falso
+    Serial.printf("[DIAG] entradas -> %s.\n", nombre);
     printStatus();
 }
 
 // ============================================================================
 //  TSON — maquina del Tractive System ON + precarga
-//  COPIA FIEL de main.cpp::updateTson(). Unico cambio: la condicion de armado
-//  usa !bmsOk (manual) donde main.cpp usa bmsFault (derivado del pack).
-// ============================================================================
-//  SDC_TSON (salida, latch):
-//    · ARMA (LOW->HIGH) con el FLANCO DE SUBIDA del boton TSON, solo si en ese
-//      instante: BMS_OK=HIGH Y HV_ACCU_VIL=LOW Y SDC_3V3=HIGH Y TSON_FAIL=LOW.
-//    · SE MANTIENE mientras SDC_3V3=HIGH y TSON_FAIL=LOW.
-//    · Si SDC_3V3 cae o TSON_FAIL sube -> desarma (hay que re-pulsar el boton).
-//  PRECHARGE_FAIL (salida, latch DURO):
-//    · Al armar SDC_TSON arranca un temporizador de 5 s.
-//    · Si PRECHARGE_DONE no llega en 5 s -> HIGH ENCLAVADO (solo se quita con
-//      reset de alimentacion / MCU; re-armar NO lo limpia).
+//  COPIA FIEL de main.cpp::updateTson(). Unico cambio: usa bmsOk (manual)
+//  donde main.cpp usa !bmsFault.
 // ============================================================================
 void updateTson()
 {
@@ -203,9 +171,7 @@ void updateTson()
         sdcTson = true;
         Serial.println(F("[TSON] armado."));
     } else if (!sdcTson && btnRising) {
-        // Banco: si el boton llega pero NO arma, decir por que. En main.cpp esto
-        // no existe (alli el motivo se deduce del CAN/status); aqui es lo que
-        // hace util la placa en la mesa.
+        // Banco: si el boton llega pero NO arma, decir por que.
         Serial.printf("[TSON] boton IGNORADO: BMS_OK=%d HV_ACCU=%d SDC_3V3=%d TSON_FAIL=%d"
                       "  (arma con BMS_OK=1 HV_ACCU=0 SDC_3V3=1 TSON_FAIL=0)\n",
                       bmsOk, hvAccu, sdc3v3, tsonFail);
@@ -216,9 +182,6 @@ void updateTson()
     // ── Precarga: temporizador de 5 s desde el flanco SDC_TSON ↑ ──
     static bool sdcTsonPrev = false;
     if (sdcTson && !sdcTsonPrev) {               // flanco de armado
-        // PRECHARGE_DONE NO puede estar HIGH antes de cerrar el TSON: si lo
-        // esta, la entrada esta atascada (aislador/soldadura) -> no fiarse y
-        // enclavar fallo, en vez de dar la precarga por hecha al instante.
         if (digitalRead(PIN_PRECHARGE_DONE)) {
             prechargeFail = true;
             Serial.println(F("[PRE] FALLO: PRECHARGE_DONE ya HIGH al armar (entrada atascada)."));
@@ -238,7 +201,6 @@ void updateTson()
         } else if ((millis() - tPrechargeStart) >= PRECHARGE_TIMEOUT_MS) {
             prechargeFail = true;                // LATCH duro -> reset de alimentacion
             Serial.println(F("[PRE] FALLO: precarga no completada en 5 s (enclavado)."));
-            Serial.println(F("[PRE] Solo se limpia con reset ('r') o quitando alimentacion."));
         }
     }
     digitalWrite(PIN_PRECHARGE_FAIL, prechargeFail ? HIGH : LOW);
@@ -259,18 +221,19 @@ void handleSerial()
     case '0': setBmsOk(false);  break;
     case 'b': setBmsOk(!bmsOk); break;
 
+    case 'F':   // fuerza la SALIDA SDC_TSON HIGH (test de pin, sin logica)
+        forceTson = !forceTson;
+        if (!forceTson) { sdcTson = false; digitalWrite(PIN_SDC_TSON, LOW); }
+        Serial.printf("[FORCE] SDC_TSON forzado %s\n", forceTson ? "HIGH" : "OFF (vuelve la logica)");
+        break;
+
     case 's': printStatus(); break;
 
-    // Diagnostico de entradas: fuerza pull interno para ver si el aislador
-    // esta drivando el pin o esta al aire (ver setInputPull).
     case 'u': setInputPull(INPUT_PULLUP,   "PULL-UP");   break;
     case 'p': setInputPull(INPUT_PULLDOWN, "PULL-DOWN"); break;
-    case 'n': setInputPull(INPUT,          "SIN PULL (config real)"); break;
+    case 'n': setInputPull(INPUT,          "SIN PULL");  break;
 
     case 'r':
-        // Unica via honesta de limpiar el latch de PRECHARGE_FAIL: equivale al
-        // reset de alimentacion que exige main.cpp. NO se anade un comando que
-        // lo baje "a mano" — eso probaria una logica que no es la de verdad.
         Serial.println(F("Restart..."));
         delay(100);
         NVIC_SystemReset();
@@ -286,10 +249,11 @@ void handleSerial()
 void printStatus()
 {
     Serial.println(F("\n=== BANCO PCB — PINES ==="));
-    Serial.printf("BMS_OK_STM       PB5  (out) = %d  %s\n",
+    Serial.printf("BMS_OK_STM       PA4  (out) = %d  %s\n",
                   bmsOk, bmsOk ? "HIGH (OK)" : "LOW (FALLO)");
-    Serial.printf("SDC_TSON_STM     PA6  (out) = %d  %s\n",
-                  sdcTson, sdcTson ? "TSON ARMADO" : "abierto");
+    Serial.printf("SDC_TSON_STM     PA6  (out) = %d  %s%s\n",
+                  digitalRead(PIN_SDC_TSON), sdcTson ? "TSON ARMADO" : "abierto",
+                  forceTson ? "  [FORZADO]" : "");
     Serial.printf("PRECHARGE_FAIL   PB6  (out) = %d  %s\n",
                   prechargeFail, prechargeFail ? "ENCLAVADO (reset para limpiar)" : "sin fallo");
     Serial.printf("TSON_STM (boton) PB9  (in)  = %d\n", digitalRead(PIN_TSON_BTN));
