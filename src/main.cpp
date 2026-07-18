@@ -133,7 +133,13 @@ static constexpr int NUM_MODULES = TOTALBOARDS / 2;
 #define FAULT_V_MS     500UL    ///< V debe persistir ≥500 ms
 #define FAULT_T_MS    1000UL    ///< T debe persistir ≥1000 ms
 #define FAULT_NTC_MS  1000UL    ///< NTC abierto (pérdida de medida, clase T)
-#define FAULT_COMM_MS  500UL    ///< Comms BQ caídas sin recuperar
+// COMM/INIT: ventanas "medias" (2-3 s) para tolerar glitches de ruido del BQ
+// sin abrir el SDC ni relanzar el auto-address a la primera. NO son fallos de
+// celda FS (esos son V/T/NTC arriba, sin tocar). El reInit ahora se dispara
+// SOLO cuando fComm lleva confirmado FAULT_COMM_MS (ver sampleAndEvaluate) →
+// ante ruido se vuelve a pedir datos, no se re-inicializa la cadena.
+#define FAULT_COMM_MS 2000UL    ///< Comms BQ caídas sin recuperar (antes 500)
+#define FAULT_INIT_MS 3000UL    ///< Init BQ fallido persistente (antes: inmediato)
 
 // Cadencias de muestreo: 2× respecto al mínimo FS para tener ≥2 muestras
 // dentro de cada ventana de debounce → mejor filtrado de ruido transitorio.
@@ -157,7 +163,7 @@ static constexpr int NUM_MODULES = TOTALBOARDS / 2;
 //  La clase FaultTimer vive en lib/FaultTimer/FaultTimer.h (testeable en
 //  nativo: test/test_faulttimer/, `pio test -e native`).
 // ============================================================================
-static FaultTimer fV, fT, fNtc, fComm;
+static FaultTimer fV, fT, fNtc, fComm, fInit;
 static bool bmsFault = false;     ///< fallo confirmado AHORA (no latcheado)
 
 // Estado de inicialización del BQ (#3, opción B: init/reInit no bloqueantes
@@ -377,9 +383,11 @@ void sampleAndEvaluate()
     unsigned long now = millis();
 
     // Si el BQ no está inicializado, NO leer (driver no configurado).
-    // Reintentar reInit() rate-limited y forzar fComm (BMS_OK en fallo
-    // queda garantizado por updateBmsOk vía !bmsInitOk).
+    // Reintentar reInit() rate-limited. El fallo de init se debouncea con
+    // fInit (FAULT_INIT_MS) → BMS_OK solo cae tras esa ventana, no al primer
+    // glitch de arranque (ver updateBmsOk: faultInit = fInit.confirmed).
     if (!bmsInitOk) {
+        fInit.sample(true, now);
         fComm.sample(true, now);
         if ((now - tLastReinit) >= BMS_REINIT_RETRY_MS) {
             tLastReinit = now;
@@ -389,11 +397,15 @@ void sampleAndEvaluate()
             logger.log(buildFaultRecord(FaultLogger::EVT_REINIT_TRY, 4));
             if (bms.reInit()) {
                 bmsInitOk = true;
+                fInit.sample(false, now);   // recuperado: limpia el debounce de init
                 Serial.println(F("[OK] BQ recuperado."));
             }
         }
         return;
     }
+
+    // Init OK en esta iteración → mantener limpio el debounce de init.
+    fInit.sample(false, now);
 
     // ── Voltaje: cada SAMPLE_V_MS. Cadencia 2× sobre la ventana FS para
     //    que el debounce K-de-N del FaultTimer exija ≥2 muestras malas
@@ -431,14 +443,24 @@ void sampleAndEvaluate()
     // commLost/tCommLost manual; mismo efecto, código uniforme).
     bool readErr = (lastResV != BQResult::OK) || (lastResT != BQResult::OK);
     fComm.sample(readErr, now);
-    if (readErr) {
+
+    // Auto-address (reInit) SOLO si el fallo de comms está CONFIRMADO por el
+    // debounce (persistente FAULT_COMM_MS), no ante un error de lectura suelto.
+    // Antes bastaba un readErr aislado (ruido) para relanzar el auto-address;
+    // ahora ante ruido las lecturas periódicas siguen pidiendo datos y solo se
+    // re-inicializa la cadena si las comms siguen caídas toda la ventana.
+    if (fComm.confirmed(now, FAULT_COMM_MS)) {
         // Reintento con rate-limit (#3, opción B): reInit() bloquea
         // unos segundos; lo limitamos a uno cada BMS_REINIT_RETRY_MS
         // (NO en cada flanco, NO en cada loop).
         if ((now - tLastReinit) >= BMS_REINIT_RETRY_MS) {
             tLastReinit = now;
             canNumTriesReset++;
-            bms.reInit();
+            if (bms.reInit()) {
+                bmsInitOk = true;
+                fInit.sample(false, now);
+                Serial.println(F("[OK] BQ recuperado tras fallo de comms."));
+            }
         }
     }
     // (else: fComm.sample(false) ya reseteó badRun/tStart arriba)
@@ -456,7 +478,7 @@ void updateBmsOk()
     bool faultNtc  = fNtc.confirmed(now, FAULT_NTC_MS);
     bool faultComm = fComm.confirmed(now, FAULT_COMM_MS);
     bool faultHall = !hall.isOK();      // HallSensor ya debounced 500 ms
-    bool faultInit = !bmsInitOk;
+    bool faultInit = fInit.confirmed(now, FAULT_INIT_MS);  // init fallido persistente
 
     // Contadores por causa (ID 16): incrementar en el FLANCO de subida de
     // cada fallo confirmado (0→1). Capta episodios cortos aunque ya se hayan
@@ -472,8 +494,10 @@ void updateBmsOk()
     pV = faultV; pT = faultT; pNtc = faultNtc;
     pComm = faultComm; pHall = faultHall; pInit = faultInit;
 
-    // !bmsInitOk fuerza fault para que BMS_OK quede LOW sin
-    // ventana de debounce al arrancar con init fallido (#3, opción B).
+    // Init fallido dispara fault vía fInit debounced (FAULT_INIT_MS): un glitch
+    // de init al arrancar ya NO baja BMS_OK al instante; debe persistir. Nota:
+    // durante !bmsInitOk también se muestrea fComm, que confirma antes
+    // (FAULT_COMM_MS < FAULT_INIT_MS) → BMS_OK cae por la vía comm.
     bmsFault = faultV || faultT || faultNtc || faultComm || faultHall || faultInit;
 
     // Telemetría: duración del episodio (IDs 13/14) + primer trigger (ID 15 B4).
@@ -488,7 +512,7 @@ void updateBmsOk()
             else if (faultNtc)   firstFaultTrigger = 3;
             else if (faultComm)  firstFaultTrigger = 4;
             else if (faultHall)  firstFaultTrigger = 5;
-            else if (!bmsInitOk) firstFaultTrigger = 6;
+            else if (faultInit)  firstFaultTrigger = 6;
             else                 firstFaultTrigger = 0;
             // Persistir en FRAM la transición BMS_OK ↓ (causa raíz + snapshot)
             logger.log(buildFaultRecord(FaultLogger::EVT_BMS_OK_FALL,
