@@ -53,7 +53,7 @@
 // ============================================================================
 
 /** Número total de ICs BQ79606 en la cadena daisy-chain. Ajustar según diseño. */
-#define TOTALBOARDS   20  ///< Nº de ICs BQ79606 en la cadena (= chips, NO módulos). Debe coincidir EXACTO con el HW conectado. Recompilar+reflashear al cambiar.
+#define TOTALBOARDS   2  ///< Nº de ICs BQ79606 en la cadena (= chips, NO módulos). Debe coincidir EXACTO con el HW conectado. Recompilar+reflashear al cambiar.
 
 /**
  * Bytes de datos por lectura de voltaje.
