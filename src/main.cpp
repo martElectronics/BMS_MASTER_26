@@ -69,14 +69,16 @@
 #define PIN_BMS_OK      PB_5    ///< BMS_OK_STM → SDC. OK=HIGH (la gestiona el driver).
 
 // SDC / TSON / precarga (gestionados por el main) — PCB nueva
-#define PIN_TSON_FAIL       PB_8   ///< TSON_FAIL_STM (in). HIGH = fallo TSON
-#define PIN_TSON_BTN        PB_9   ///< TSON_STM (in). Pulsador de arranque del TSON
-#define PIN_SDC_TSON        PA_6   ///< SDC_TSON_STM (out). Latch del TSON
-#define PIN_PRECHARGE_DONE  PA_7   ///< PRECHARGE_DONE_STM (in). HIGH = precarga OK
-#define PIN_PRECHARGE_FAIL  PB_6   ///< PRECHARGE_FAIL_STM (out). HIGH enclavado si timeout 5 s
-#define PIN_SDC_3V3         PC_7   ///< SDC_3V3_STM (in). HIGH = SDC presente
-#define PIN_IMD_OK          PA_8   ///< IMD_OK_STM (in). Solo telemetría CAN
-#define PIN_HV_ACCU_VIL     PB_4   ///< HV_ACCU_VIL_STM (in). Condición de armado del TSON
+// ⚠ FORMATO SIN guion bajo (PA6, no PA_6): se usan con digitalRead/digitalWrite/
+//   pinMode DIRECTOS (sin BQ_DPIN). Con PA_6 (PinName) apuntarían a OTRA pata.
+#define PIN_TSON_FAIL       PB8    ///< TSON_FAIL_STM (in). HIGH = fallo TSON
+#define PIN_TSON_BTN        PB9    ///< TSON_STM (in). Pulsador de arranque del TSON
+#define PIN_SDC_TSON        PA6    ///< SDC_TSON_STM (out). Latch del TSON
+#define PIN_PRECHARGE_DONE  PA7    ///< PRECHARGE_DONE_STM (in). HIGH = precarga OK
+#define PIN_PRECHARGE_FAIL  PB6    ///< PRECHARGE_FAIL_STM (out). HIGH enclavado si timeout 5 s
+#define PIN_SDC_3V3         PC7    ///< SDC_3V3_STM (in). HIGH = SDC presente
+#define PIN_IMD_OK          PA8    ///< IMD_OK_STM (in). Solo telemetría CAN
+#define PIN_HV_ACCU_VIL     PB4    ///< HV_ACCU_VIL_STM (in). Condición de armado del TSON
 
 // Amperímetro DHAB S/118
 #define PIN_AMP_30A     PA_1   ///< Canal alta resolución (±30A)
@@ -265,15 +267,15 @@ void setup()
     // Salidas en estado seguro: SDC_TSON abierto, PRECHARGE_FAIL sin fallo.
     pinMode(PIN_SDC_TSON,      OUTPUT); digitalWrite(PIN_SDC_TSON,      LOW);
     pinMode(PIN_PRECHARGE_FAIL,OUTPUT); digitalWrite(PIN_PRECHARGE_FAIL, LOW);
-    // Entradas SIN pull: vienen drivadas por el aislador ISO7742 (push-pull,
-    // inactivo=LOW) y el botón pasa por un comparador → flanco limpio. NO añadir
-    // INPUT_PULLUP/DOWN (sería redundante y pelearía con el driver).
-    pinMode(PIN_TSON_FAIL,      INPUT);
-    pinMode(PIN_TSON_BTN,       INPUT);
-    pinMode(PIN_PRECHARGE_DONE, INPUT);
-    pinMode(PIN_SDC_3V3,        INPUT);
-    pinMode(PIN_IMD_OK,         INPUT);
-    pinMode(PIN_HV_ACCU_VIL,    INPUT);
+    // Entradas con PULL-DOWN: en la PCB nueva el botón (confirmado con
+    // pin_walker) sólo se detecta con pull-down; sin él la pata flota. Se aplica
+    // a las 6 por coherencia (el push-pull del aislador gana al pull interno).
+    pinMode(PIN_TSON_FAIL,      INPUT_PULLDOWN);
+    pinMode(PIN_TSON_BTN,       INPUT_PULLDOWN);
+    pinMode(PIN_PRECHARGE_DONE, INPUT_PULLDOWN);
+    pinMode(PIN_SDC_3V3,        INPUT_PULLDOWN);
+    pinMode(PIN_IMD_OK,         INPUT_PULLDOWN);
+    pinMode(PIN_HV_ACCU_VIL,    INPUT_PULLDOWN);
     // Estado real del botón al arrancar → un botón pegado en HIGH al boot NO
     // se interpreta como flanco de subida (no auto-arma el TSON).
     tsonBtnPrev = digitalRead(PIN_TSON_BTN);
