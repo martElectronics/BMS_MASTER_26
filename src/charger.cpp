@@ -29,15 +29,34 @@
 #include <IWatchdog.h>
 #include "BQ79606.h"
 #include "MART_CAN.h"
+#include "FaultTimer.h"         // debounce K-de-N (mismo que main.cpp)
 
 // ============================================================================
-//  PINES BQ79606 — idénticos a src/main.cpp (mismo hardware)
+//  PINES BQ79606 — idénticos a src/main.cpp (mismo hardware).
+//  Estos van dentro de BQConfig y el DRIVER los convierte con BQ_DPIN() →
+//  aquí SÍ es correcto el formato PA_x (PinName).
 // ============================================================================
 #define PIN_BQ_WAKE   PB_7
 #define PIN_BQ_FAULT  PB_2
 #define PIN_BQ_RX     PC_5
 #define PIN_BQ_TX     PC_4
 #define PIN_BMS_OK    PB_5
+
+// ============================================================================
+//  SDC / TSON / precarga (gestionados por el charger, como en main.cpp)
+//  ⚠ FORMATO SIN guion bajo (PA6, no PA_6): estos pines se usan con
+//    digitalRead/digitalWrite/pinMode DIRECTOS (sin BQ_DPIN). Con PA_6
+//    (PinName) apuntarían a OTRA pata. Confirmados con pin_walker: boton=PB9,
+//    SDC_TSON=PA6. El resto AÚN sin verificar contra el esquemático de la PCB.
+// ============================================================================
+#define PIN_TSON_FAIL       PB8    ///< TSON_FAIL_STM (in). HIGH = fallo TSON
+#define PIN_TSON_BTN        PB9    ///< TSON_STM (in). Boton de arranque. CONFIRMADO PB9.
+#define PIN_SDC_TSON        PA6    ///< SDC_TSON_STM (out). Latch del TSON. CONFIRMADO PA6.
+#define PIN_PRECHARGE_DONE  PA7    ///< PRECHARGE_DONE_STM (in). HIGH = precarga OK
+#define PIN_PRECHARGE_FAIL  PB6    ///< PRECHARGE_FAIL_STM (out). HIGH enclavado si timeout 5 s
+#define PIN_SDC_3V3         PC7    ///< SDC_3V3_STM (in). HIGH = SDC presente
+#define PIN_IMD_OK          PA8    ///< IMD_OK_STM (in). Solo print
+#define PIN_HV_ACCU_VIL     PB4    ///< HV_ACCU_VIL_STM (in). Condicion de armado del TSON
 
 // ============================================================================
 //  CONFIG DE CARGA  — ⚠ CONFIRMAR TODO antes de usar
@@ -62,6 +81,14 @@
 #define RX_TIMEOUT_MS        5000UL     ///< si no llega Message 2 en este tiempo → cargador mudo
 
 #define WDG_TIMEOUT_US       8000000UL  ///< IWDG 8 s (igual que el BMS)
+
+// Debounce de comms del BQ: un error de lectura suelto (ruido) NO cuenta como
+// fallo; debe persistir esta ventana. Mismo criterio que main.cpp (2 s).
+#define FAULT_COMM_MS        2000UL
+
+// Tras armar SDC_TSON, PRECHARGE_DONE debe llegar antes de esto o
+// PRECHARGE_FAIL se enclava HIGH (solo se quita con reset de alimentación/MCU).
+#define PRECHARGE_TIMEOUT_MS 5000UL
 
 // IDs J1939 extendidos
 #define ID_BMS_TO_CHG        0x1806E5F4UL   ///< Message 1 (BMS → cargador)
@@ -93,6 +120,17 @@ static CAN_BUS* gCan   = nullptr;
 static bool     gCanOk = false;
 static bool     bmsInitOk = false;
 
+// Debounce de comms (mismo FaultTimer que main.cpp).
+static FaultTimer fComm;
+
+// SDC / TSON / precarga (misma máquina que main.cpp::updateTson).
+static bool          bmsSafe          = false;  ///< última evaluación de seguridad (= safe del loop)
+static bool          sdcTson          = false;  ///< estado del latch TSON (= nivel de PIN_SDC_TSON)
+static bool          tsonBtnPrev      = false;  ///< nivel previo del botón (flanco de subida)
+static bool          prechargeRunning = false;  ///< temporizador de precarga en marcha
+static bool          prechargeFail    = false;  ///< latch HIGH si timeout 5 s (se quita con reset)
+static unsigned long tPrechargeStart  = 0;
+
 // Estado de carga
 static bool          chargeRequested = false;  ///< orden start/stop por serial (ARRANCA SIN cargar)
 static float         chgCurrentA     = CHG_START_CURRENT_A;  ///< corriente DC comandada (ajustable, capada)
@@ -107,6 +145,7 @@ static float         chgOutI         = 0.0f;    ///< I de salida reportada
 // ============================================================================
 bool   readPack();
 bool   chargeAllowed(bool readOk);
+void   updateTson();
 void   sendMessage1(bool allow);
 void   pollMessage2();
 void   printChgStatus();
@@ -128,6 +167,19 @@ void setup()
     bmsInitOk = bms.begin();
     Serial.println(bmsInitOk ? F("[OK] BQ79606 listo.")
                              : F("[WARN] BQ init FALLO."));
+
+    // Cadena TSON/precarga en estado seguro: SDC_TSON abierto, sin fallo de
+    // precarga. Entradas con PULL-DOWN (en la PCB nueva el botón lo necesita;
+    // confirmado con pin_walker). Salidas y entradas usan formato PAx.
+    pinMode(PIN_SDC_TSON,       OUTPUT); digitalWrite(PIN_SDC_TSON,       LOW);
+    pinMode(PIN_PRECHARGE_FAIL, OUTPUT); digitalWrite(PIN_PRECHARGE_FAIL, LOW);
+    pinMode(PIN_TSON_FAIL,      INPUT_PULLDOWN);
+    pinMode(PIN_TSON_BTN,       INPUT_PULLDOWN);
+    pinMode(PIN_PRECHARGE_DONE, INPUT_PULLDOWN);
+    pinMode(PIN_SDC_3V3,        INPUT_PULLDOWN);
+    pinMode(PIN_IMD_OK,         INPUT_PULLDOWN);
+    pinMode(PIN_HV_ACCU_VIL,    INPUT_PULLDOWN);
+    tsonBtnPrev = digitalRead(PIN_TSON_BTN);   // no interpretar botón ya pulsado como flanco
 
     static CAN_BUS canBus(HardwareType::Transciever, CHG_CAN_BAUD, CHG_NODE_ID);
     gCan   = &canBus;
@@ -154,6 +206,10 @@ void loop()
     // RX continua (el cargador emite Message 2 cada 1 s).
     pollMessage2();
 
+    // Máquina TSON + precarga: cada vuelta (flanco del botón, timing precarga).
+    // Usa bmsSafe, que se refresca en el bloque de 1 s de abajo.
+    updateTson();
+
     // TX Message 1 cada 1 s — el cargador corta si no lo recibe en 5 s.
     static unsigned long tMsg1 = 0;
     if (millis() - tMsg1 >= MSG1_PERIOD_MS) {
@@ -161,6 +217,7 @@ void loop()
 
         bool readOk = readPack();
         bool safe   = chargeAllowed(readOk);
+        bmsSafe     = safe;   // lo consume updateTson() como condición de armado
 
         // Un fallo CANCELA la orden de carga: hay que re-armar con 'g'.
         // (Igual que el FW antiguo, que ponía cmdCharge=0 ante fallo.)
@@ -185,14 +242,21 @@ void loop()
 // ============================================================================
 bool readPack()
 {
+    unsigned long now = millis();
+
     if (!bmsInitOk) {
-        // Reintento simple de init (sin rate-limit elaborado: carga no es pista).
+        // Sin init NO hay datos válidos → no se puede cargar (no se debouncea).
         bmsInitOk = bms.reInit();
         if (!bmsInitOk) return false;
     }
     bool okV = (bms.readVoltages()     == BQResult::OK);
     bool okT = (bms.readTemperatures() == BQResult::OK);
-    return okV && okT;
+
+    // Debounce de comms (mismo criterio que main.cpp): un error de lectura
+    // suelto (ruido) NO cuenta como fallo; solo si persiste FAULT_COMM_MS.
+    // Ante un glitch se sigue con la última medida buena durante la ventana.
+    fComm.sample(!(okV && okT), now);
+    return !fComm.confirmed(now, FAULT_COMM_MS);
 }
 
 // ============================================================================
@@ -220,6 +284,65 @@ bool chargeAllowed(bool readOk)
         return false;
     }
     return true;
+}
+
+// ============================================================================
+//  TSON — máquina del Tractive System ON + precarga (copia de main.cpp).
+//  Único cambio: usa bmsSafe (seguridad del pack) donde main usa !bmsFault, y
+//  no persiste en FRAM (el charger no lleva FaultLogger).
+//    SDC_TSON (out, latch): ARMA con el flanco del botón solo si bmsSafe Y
+//      HV_ACCU=LOW Y SDC_3V3=HIGH Y TSON_FAIL=LOW; se mantiene mientras
+//      SDC_3V3 y !TSON_FAIL. PRECHARGE_FAIL (latch duro): si PRECHARGE_DONE no
+//      llega en 5 s tras armar → HIGH enclavado (solo reset de alimentación).
+// ============================================================================
+void updateTson()
+{
+    bool sdc3v3   = digitalRead(PIN_SDC_3V3);
+    bool tsonFail = digitalRead(PIN_TSON_FAIL);
+    bool hvAccu   = digitalRead(PIN_HV_ACCU_VIL);
+    bool tsonBtn  = digitalRead(PIN_TSON_BTN);
+
+    // ── Latch SDC_TSON ──
+    if (sdcTson && (!sdc3v3 || tsonFail)) {     // pierde condición de mantenimiento
+        sdcTson = false;
+        Serial.println(F("[TSON] desarmado (SDC_3V3 bajo o TSON_FAIL)."));
+    }
+    bool btnRising = tsonBtn && !tsonBtnPrev;   // flanco de subida del botón
+    if (!sdcTson && btnRising && bmsSafe && !hvAccu && sdc3v3 && !tsonFail) {
+        sdcTson = true;
+        Serial.println(F("[TSON] armado."));
+    } else if (!sdcTson && btnRising) {
+        Serial.printf("[TSON] boton IGNORADO: SAFE=%d HV_ACCU=%d SDC_3V3=%d TSON_FAIL=%d\n",
+                      bmsSafe, hvAccu, sdc3v3, tsonFail);
+    }
+    tsonBtnPrev = tsonBtn;
+    digitalWrite(PIN_SDC_TSON, sdcTson ? HIGH : LOW);
+
+    // ── Precarga: temporizador de 5 s desde el flanco SDC_TSON ↑ ──
+    static bool sdcTsonPrev = false;
+    if (sdcTson && !sdcTsonPrev) {               // flanco de armado
+        if (digitalRead(PIN_PRECHARGE_DONE)) {
+            prechargeFail = true;
+            Serial.println(F("[PRE] FALLO: PRECHARGE_DONE ya HIGH al armar (entrada atascada)."));
+        } else {
+            prechargeRunning = true;
+            tPrechargeStart  = millis();
+            Serial.println(F("[PRE] Precarga iniciada (5 s)."));
+        }
+    }
+    if (!sdcTson) prechargeRunning = false;      // se cancela al desarmar (si no falló)
+    sdcTsonPrev = sdcTson;
+
+    if (prechargeRunning && !prechargeFail) {
+        if (digitalRead(PIN_PRECHARGE_DONE)) {
+            prechargeRunning = false;            // precarga completada a tiempo
+            Serial.println(F("[PRE] Precarga OK."));
+        } else if ((millis() - tPrechargeStart) >= PRECHARGE_TIMEOUT_MS) {
+            prechargeFail = true;                // LATCH duro → reset de alimentación
+            Serial.println(F("[PRE] FALLO: precarga no completada en 5 s (enclavado)."));
+        }
+    }
+    digitalWrite(PIN_PRECHARGE_FAIL, prechargeFail ? HIGH : LOW);
 }
 
 // ============================================================================
@@ -279,6 +402,10 @@ void printChgStatus()
     Serial.printf("Solicitado: %s  I_cmd=%.1f A  →  Cargando: %s (control=%d)\n",
                   chargeRequested ? "SI" : "NO", chgCurrentA,
                   charging ? "SI" : "NO", charging ? 0 : 1);
+    Serial.printf("TSON: SDC_TSON=%d PRE_FAIL=%d | SDC_3V3=%d TSON_FAIL=%d HV_ACCU=%d IMD_OK=%d\n",
+                  sdcTson, prechargeFail,
+                  digitalRead(PIN_SDC_3V3), digitalRead(PIN_TSON_FAIL),
+                  digitalRead(PIN_HV_ACCU_VIL), digitalRead(PIN_IMD_OK));
     if (rxAlive) {
         Serial.printf("OBC: Vout=%.1f V  Iout=%.1f A  st=0x%02X%s%s%s%s%s\n",
                       chgOutV, chgOutI, chgStatus,
