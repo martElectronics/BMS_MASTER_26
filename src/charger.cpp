@@ -30,6 +30,7 @@
 #include "BQ79606.h"
 #include "MART_CAN.h"
 #include "FaultTimer.h"         // debounce K-de-N (mismo que main.cpp)
+#include "HallSensor.h"         // amperímetro DHAB S/118 (mide corriente de carga)
 
 // ============================================================================
 //  PINES BQ79606 — idénticos a src/main.cpp (mismo hardware).
@@ -46,8 +47,8 @@
 //  SDC / TSON / precarga (gestionados por el charger, como en main.cpp)
 //  ⚠ FORMATO SIN guion bajo (PA6, no PA_6): estos pines se usan con
 //    digitalRead/digitalWrite/pinMode DIRECTOS (sin BQ_DPIN). Con PA_6
-//    (PinName) apuntarían a OTRA pata. Confirmados con pin_walker: boton=PB9,
-//    SDC_TSON=PA6. El resto AÚN sin verificar contra el esquemático de la PCB.
+//    (PinName) apuntarían a OTRA pata. Pines CONFIRMADOS contra el esquemático
+//    de la PCB nueva (boton=PB9 y SDC_TSON=PA6 además con pin_walker).
 // ============================================================================
 #define PIN_TSON_FAIL       PB8    ///< TSON_FAIL_STM (in). HIGH = fallo TSON
 #define PIN_TSON_BTN        PB9    ///< TSON_STM (in). Boton de arranque. CONFIRMADO PB9.
@@ -57,6 +58,11 @@
 #define PIN_SDC_3V3         PC7    ///< SDC_3V3_STM (in). HIGH = SDC presente
 #define PIN_IMD_OK          PA8    ///< IMD_OK_STM (in). Solo print
 #define PIN_HV_ACCU_VIL     PB4    ///< HV_ACCU_VIL_STM (in). Condicion de armado del TSON
+
+// Amperímetro DHAB S/118 — idéntico a main.cpp (validado en HW). Formato PA_x:
+// lo consume analogRead dentro de HallSensor, que SÍ funciona con PinName.
+#define PIN_AMP_30A     PA_1   ///< Canal alta resolución (±30A)
+#define PIN_AMP_350A    PA_0   ///< Canal baja resolución (±350A)
 
 // ============================================================================
 //  CONFIG DE CARGA  — ⚠ CONFIRMAR TODO antes de usar
@@ -116,6 +122,10 @@ static const BQConfig bqCfg = {
 };
 static BQ79606  bms(bqCfg);
 
+// Amperímetro: mide la corriente de carga; sus fallos (desconexión, stuck,
+// ruido, sobre-I, ADC saturado) cortan la carga vía chargeAllowed().
+static HallSensor hall(PIN_AMP_30A, PIN_AMP_350A);
+
 static CAN_BUS* gCan   = nullptr;
 static bool     gCanOk = false;
 static bool     bmsInitOk = false;
@@ -168,6 +178,11 @@ void setup()
     Serial.println(bmsInitOk ? F("[OK] BQ79606 listo.")
                              : F("[WARN] BQ init FALLO."));
 
+    // Hall: autocalibración de offset (~1 s, con corriente ~0 → aún sin cargar).
+    hall.begin();
+    Serial.println(hall.isOK() ? F("[OK] Hall listo.")
+                               : F("[WARN] Hall calibración fuera de rango."));
+
     // Cadena TSON/precarga en estado seguro: SDC_TSON abierto, sin fallo de
     // precarga. Entradas con PULL-DOWN (en la PCB nueva el botón lo necesita;
     // confirmado con pin_walker). Salidas y entradas usan formato PAx.
@@ -205,6 +220,9 @@ void loop()
 
     // RX continua (el cargador emite Message 2 cada 1 s).
     pollMessage2();
+
+    // Amperímetro cada vuelta (máxima resolución + debounce interno de fallos).
+    hall.update();
 
     // Máquina TSON + precarga: cada vuelta (flanco del botón, timing precarga).
     // Usa bmsSafe, que se refresca en el bloque de 1 s de abajo.
@@ -281,6 +299,18 @@ bool chargeAllowed(bool readOk)
     if (bms.getMinTemp() <= CELL_TMIN_CHG_C) {
         Serial.printf("[SAFE] T %.1f C <= %.1f (frío) → parar.\n",
                       bms.getMinTemp(), CELL_TMIN_CHG_C);
+        return false;
+    }
+    // Amperímetro: fallo confirmado (desconexión, stuck, ruido, sobre-I, ADC
+    // saturado) → no fiarse de la medida de corriente de carga → parar.
+    // isOK() ya viene con el debounce propio del HallSensor.
+    if (!hall.isOK()) {
+        Serial.printf("[SAFE] Hall FALLO (%s%s%s%s%s) → parar.\n",
+                      hall.isDisconnected() ? "desc "   : "",
+                      hall.isStuck()        ? "stuck "  : "",
+                      hall.isNoisy()        ? "noisy "  : "",
+                      hall.isOverCurrent()  ? "sobreI " : "",
+                      hall.isAdcSaturated() ? "adcSat"  : "");
         return false;
     }
     return true;
@@ -406,6 +436,9 @@ void printChgStatus()
                   sdcTson, prechargeFail,
                   digitalRead(PIN_SDC_3V3), digitalRead(PIN_TSON_FAIL),
                   digitalRead(PIN_HV_ACCU_VIL), digitalRead(PIN_IMD_OK));
+    Serial.printf("Hall: %.2f A (%s)  %s\n",
+                  hall.getCurrent(), hall.isLowRange() ? "30A" : "350A",
+                  hall.isOK() ? "OK" : "FALLO");
     if (rxAlive) {
         Serial.printf("OBC: Vout=%.1f V  Iout=%.1f A  st=0x%02X%s%s%s%s%s\n",
                       chgOutV, chgOutI, chgStatus,
