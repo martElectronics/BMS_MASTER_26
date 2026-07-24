@@ -155,6 +155,25 @@ void BQ79606::shutdown()
 //  LECTURA DE DATOS
 // ============================================================
 
+// Lee un board por single-read con reintentos ante ruido. En cuanto una
+// respuesta pasa CRC, deja el frame válido en buf y devuelve OK. Si agota
+// BQ_READ_ATTEMPTS, devuelve COMM_ERROR (no respondió nunca) o CRC_ERROR
+// (respondió pero siempre corrupto) — misma semántica que el camino anterior,
+// solo que ahora un glitch aislado se re-pide en vez de tumbar la lectura.
+BQResult BQ79606::_readBoardRetry(byte board, uint16_t addr, byte* buf,
+                                  size_t bufSize, byte len)
+{
+    BQResult last = BQResult::COMM_ERROR;
+    for (uint8_t attempt = 0; attempt < BQ_READ_ATTEMPTS; attempt++) {
+        memset(buf, 0, bufSize);
+        int res = _readRegImpl(board, addr, buf, bufSize, len, 0, FRMWRT_SGL_R);
+        if (res <= 0)            { last = BQResult::COMM_ERROR; continue; }
+        if (!checkCRC(buf, res)) { last = BQResult::CRC_ERROR;  continue; }
+        return BQResult::OK;     // frame válido: buf ya tiene los datos buenos
+    }
+    return last;                 // agotados los reintentos: último tipo de fallo
+}
+
 BQResult BQ79606::readVoltages()
 {
     byte buf[MAXBYTES + 6];
@@ -173,11 +192,8 @@ BQResult BQ79606::readVoltages()
     }
 
     for (uint8_t board = 0; board < TOTALBOARDS; board++) {
-        memset(buf, 0, sizeof(buf));
-
-        int res = readReg(board, VCELL1H, buf, MAXBYTES, 0, FRMWRT_SGL_R);
-        if (res <= 0) return BQResult::COMM_ERROR;
-        if (!checkCRC(buf, res)) return BQResult::CRC_ERROR;
+        BQResult r = _readBoardRetry(board, VCELL1H, buf, sizeof(buf), MAXBYTES);
+        if (r != BQResult::OK) return r;
 
         for (uint8_t c = 0; c < 6; c++) {
             uint16_t raw = ((uint16_t)buf[4 + c * 2] << 8) | buf[5 + c * 2];
@@ -231,11 +247,8 @@ BQResult BQ79606::readTemperatures()
     }
 
     for (uint8_t board = 0; board < TOTALBOARDS; board++) {
-        memset(buf, 0, sizeof(buf));
-
-        int res = readReg(board, AUX_GPIO1H, buf, MAXBYTES, 0, FRMWRT_SGL_R);
-        if (res <= 0) return BQResult::COMM_ERROR;
-        if (!checkCRC(buf, res)) return BQResult::CRC_ERROR;
+        BQResult r = _readBoardRetry(board, AUX_GPIO1H, buf, sizeof(buf), MAXBYTES);
+        if (r != BQResult::OK) return r;
 
         uint8_t ntcs = NTCS_PER_BOARD[board % 2];
         for (uint8_t c = 0; c < ntcs; c++) {

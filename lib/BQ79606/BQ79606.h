@@ -61,6 +61,13 @@
  */
 #define MAXBYTES      12
 
+// Reintentos por lectura single-read ante COMM/CRC (ruido): una trama corrupta
+// o perdida se re-pide EN EL SITIO (~1 ms, el RX se limpia solo en
+// _readFrameReq) antes de declarar el fallo, en vez de tumbar la lectura
+// entera. Complementa el debounce de main.cpp (recupera el glitch; el debounce
+// solo actúa si el fallo persiste). 3 = 1 intento + 2 reintentos.
+#define BQ_READ_ATTEMPTS  3
+
 /**
  * Número de celdas válidas de un board según su índice.
  * Board par  (0,2,4,...): 6 celdas reales.
@@ -984,6 +991,7 @@ private:
     int      _writeFrame(byte id, uint16_t addr, byte* data, byte len, byte type); ///< Construye y envía una trama completa con CRC
     int      _readFrameReq(byte id, uint16_t addr, byte bytesToReturn, byte type); ///< Envía la petición de lectura y limpia el buffer
     int      _readRegImpl(byte id, uint16_t addr, byte* buf, size_t bufSize, byte len, uint32_t timeout, byte type); ///< Impl real de readReg: valida la longitud esperada contra bufSize (no contra _pFrame)
+    BQResult _readBoardRetry(byte board, uint16_t addr, byte* buf, size_t bufSize, byte len); ///< single-read de un board con reintentos ante COMM/CRC (ruido); deja frame válido en buf
     uint16_t _crc16(byte* buf, int len);            ///< Calcula CRC-16 ITU-T (tabla de 256 entradas)
     float    _complement(uint16_t raw, float mult); ///< Convierte valor ADC raw (complemento a 2) a voltios
     float    _voltToTemp(float voltage);            ///< Convierte voltaje de NTC a temperatura en °C (curva del PCB)
