@@ -53,7 +53,7 @@
 // ============================================================================
 
 /** Número total de ICs BQ79606 en la cadena daisy-chain. Ajustar según diseño. */
-#define TOTALBOARDS   2  ///< Nº de ICs BQ79606 en la cadena (= chips, NO módulos). Debe coincidir EXACTO con el HW conectado. Recompilar+reflashear al cambiar.
+#define TOTALBOARDS   20  ///< Nº de ICs BQ79606 en la cadena (= chips, NO módulos). Debe coincidir EXACTO con el HW conectado. Recompilar+reflashear al cambiar.
 
 /**
  * Bytes de datos por lectura de voltaje.
@@ -633,6 +633,8 @@ public:
      */
     float getTemperature(uint8_t board, uint8_t ntc) const;
 
+    int  getLastReadFailBoard() const { return _lastReadFailBoard; }      ///< Board donde falló la última lectura V/T (-1 = ninguna). Diagnóstico de comms.
+
     // Estadísticas globales — se calculan automáticamente en cada readVoltages/readTemperatures
     float getMinVoltage()   const { return _vMin; }                       ///< Voltaje mínimo de todas las celdas (V)
     float getMaxVoltage()   const { return _vMax; }                       ///< Voltaje máximo de todas las celdas (V)
@@ -971,6 +973,7 @@ private:
     uint8_t  _ntcOpenCount = 0;           ///< Nº de NTCs configurados con lectura inválida (último readTemperatures)
     int8_t   _ntcOpenBoard = -1;          ///< Primer board con NTC abierto (para el mensaje)
     int8_t   _ntcOpenCell  = -1;          ///< Primer NTC abierto en ese board (índice 0..5)
+    int8_t   _lastReadFailBoard = -1;     ///< Board donde falló la última lectura V/T (diagnóstico)
     bool     _safetyLatched = false;      ///< true tras un trip confirmado; sticky hasta clear
     bool     _bmsOkState    = false;      ///< Último estado escrito en pinBmsOk
 

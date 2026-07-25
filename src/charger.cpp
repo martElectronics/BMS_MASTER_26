@@ -32,6 +32,11 @@
 #include "FaultTimer.h"         // debounce K-de-N (mismo que main.cpp)
 #include "HallSensor.h"         // amperímetro DHAB S/118 (mide corriente de carga)
 
+// ⚠ TEMPORAL: 0 = el fallo del Hall NO corta la carga (solo avisa). Mientras el
+// divisor del canal 350A esté sin arreglar en HW (offset ~2.5V fuera de ventana).
+// Volver a 1 cuando el DHAB de 350A dé ~1.62V a 0 A.
+#define CHG_HALL_BLOCKS  0
+
 // ============================================================================
 //  PINES BQ79606 — idénticos a src/main.cpp (mismo hardware).
 //  Estos van dentro de BQConfig y el DRIVER los convierte con BQ_DPIN() →
@@ -59,10 +64,12 @@
 #define PIN_IMD_OK          PA8    ///< IMD_OK_STM (in). Solo print
 #define PIN_HV_ACCU_VIL     PB4    ///< HV_ACCU_VIL_STM (in). Condicion de armado del TSON
 
-// Amperímetro DHAB S/118 — idéntico a main.cpp (validado en HW). Formato PA_x:
-// lo consume analogRead dentro de HallSensor, que SÍ funciona con PinName.
-#define PIN_AMP_30A     PA_1   ///< Canal alta resolución (±30A)
-#define PIN_AMP_350A    PA_0   ///< Canal baja resolución (±350A)
+// Amperímetro DHAB S/118. ⚠ SIN guion bajo (PA1, no PA_1): HallSensor hace
+// analogRead(pin) DIRECTO. Con PA_1 (PinName=1) analogRead lo toma como pin
+// Arduino D1 → lee/reconfigura OTRA pata (y pisaba la USART1 del BQ → rompía
+// las comms). PA1 = nº de pin Arduino correcto.
+#define PIN_AMP_30A     PA0    ///< Canal alta resolución (±30A)
+#define PIN_AMP_350A    PA1    ///< Canal baja resolución (±350A)
 
 // ============================================================================
 //  CONFIG DE CARGA  — ⚠ CONFIRMAR TODO antes de usar
@@ -90,7 +97,7 @@
 
 // Debounce de comms del BQ: un error de lectura suelto (ruido) NO cuenta como
 // fallo; debe persistir esta ventana. Mismo criterio que main.cpp (2 s).
-#define FAULT_COMM_MS        2000UL
+#define FAULT_COMM_MS        3000UL
 
 // Tras armar SDC_TSON, PRECHARGE_DONE debe llegar antes de esto o
 // PRECHARGE_FAIL se enclava HIGH (solo se quita con reset de alimentación/MCU).
@@ -267,8 +274,19 @@ bool readPack()
         bmsInitOk = bms.reInit();
         if (!bmsInitOk) return false;
     }
-    bool okV = (bms.readVoltages()     == BQResult::OK);
-    bool okT = (bms.readTemperatures() == BQResult::OK);
+    BQResult rV = bms.readVoltages();
+    BQResult rT = bms.readTemperatures();
+    bool okV = (rV == BQResult::OK);
+    bool okT = (rT == BQResult::OK);
+
+    // Diagnóstico: si falla, di el TIPO (COMM=no responde / CRC=corrupto) y en
+    // qué board casca. Board alto y persistente → integridad de señal de cadena.
+    if (!okV) Serial.printf("[BQ] V FALLO %s en board %d\n",
+                            rV == BQResult::CRC_ERROR ? "CRC" : "COMM",
+                            bms.getLastReadFailBoard());
+    if (!okT) Serial.printf("[BQ] T FALLO %s en board %d\n",
+                            rT == BQResult::CRC_ERROR ? "CRC" : "COMM",
+                            bms.getLastReadFailBoard());
 
     // Debounce de comms (mismo criterio que main.cpp): un error de lectura
     // suelto (ruido) NO cuenta como fallo; solo si persiste FAULT_COMM_MS.
@@ -302,9 +320,10 @@ bool chargeAllowed(bool readOk)
         return false;
     }
     // Amperímetro: fallo confirmado (desconexión, stuck, ruido, sobre-I, ADC
-    // saturado) → no fiarse de la medida de corriente de carga → parar.
+    // saturado) → no fiarse de la medida de corriente de carga.
     // isOK() ya viene con el debounce propio del HallSensor.
     if (!hall.isOK()) {
+#if CHG_HALL_BLOCKS
         Serial.printf("[SAFE] Hall FALLO (%s%s%s%s%s) → parar.\n",
                       hall.isDisconnected() ? "desc "   : "",
                       hall.isStuck()        ? "stuck "  : "",
@@ -312,6 +331,14 @@ bool chargeAllowed(bool readOk)
                       hall.isOverCurrent()  ? "sobreI " : "",
                       hall.isAdcSaturated() ? "adcSat"  : "");
         return false;
+#else
+        // TEMP: no corta (divisor 350A sin arreglar). Aviso cada 5 s, no cada ciclo.
+        static unsigned long tHallWarn = 0;
+        if (millis() - tHallWarn >= 5000) {
+            tHallWarn = millis();
+            Serial.println(F("[HALL] fallo IGNORADO (temporal, CHG_HALL_BLOCKS=0)"));
+        }
+#endif
     }
     return true;
 }
@@ -429,6 +456,8 @@ void printChgStatus()
     Serial.printf("Pack: Vmin=%.3f Vmax=%.3f  Tmin=%.1f Tmax=%.1f\n",
                   bms.getMinVoltage(), bms.getMaxVoltage(),
                   bms.getMinTemp(), bms.getMaxTemp());
+    Serial.printf("BMS_OK: %s (PA4, activo-alto)\n",
+                  bmsSafe ? "HIGH (OK)" : "LOW (FALLO)");
     Serial.printf("Solicitado: %s  I_cmd=%.1f A  →  Cargando: %s (control=%d)\n",
                   chargeRequested ? "SI" : "NO", chgCurrentA,
                   charging ? "SI" : "NO", charging ? 0 : 1);

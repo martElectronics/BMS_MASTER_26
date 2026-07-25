@@ -193,7 +193,7 @@ BQResult BQ79606::readVoltages()
 
     for (uint8_t board = 0; board < TOTALBOARDS; board++) {
         BQResult r = _readBoardRetry(board, VCELL1H, buf, sizeof(buf), MAXBYTES);
-        if (r != BQResult::OK) return r;
+        if (r != BQResult::OK) { _lastReadFailBoard = board; return r; }
 
         for (uint8_t c = 0; c < 6; c++) {
             uint16_t raw = ((uint16_t)buf[4 + c * 2] << 8) | buf[5 + c * 2];
@@ -248,7 +248,7 @@ BQResult BQ79606::readTemperatures()
 
     for (uint8_t board = 0; board < TOTALBOARDS; board++) {
         BQResult r = _readBoardRetry(board, AUX_GPIO1H, buf, sizeof(buf), MAXBYTES);
-        if (r != BQResult::OK) return r;
+        if (r != BQResult::OK) { _lastReadFailBoard = board; return r; }
 
         uint8_t ntcs = NTCS_PER_BOARD[board % 2];
         for (uint8_t c = 0; c < ntcs; c++) {

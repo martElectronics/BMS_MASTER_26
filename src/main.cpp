@@ -81,8 +81,11 @@
 #define PIN_HV_ACCU_VIL     PB4    ///< HV_ACCU_VIL_STM (in). Condición de armado del TSON
 
 // Amperímetro DHAB S/118
-#define PIN_AMP_30A     PA_1   ///< Canal alta resolución (±30A)
-#define PIN_AMP_350A    PA_0   ///< Canal baja resolución (±350A)
+// ⚠ SIN guion bajo (PA1, no PA_1): HallSensor hace analogRead(pin) DIRECTO.
+// Con PA_1 (PinName=1) analogRead lo toma como pin Arduino D1 → lee/reconfigura
+// OTRA pata (llegaba a pisar la USART1 del BQ y rompía sus comms). PA1 = pin ok.
+#define PIN_AMP_30A     PA1    ///< Canal alta resolución (±30A)
+#define PIN_AMP_350A    PA0    ///< Canal baja resolución (±350A)
 
 // PWM ventiladores (FanController)
 #define PIN_PWM         PB_10  ///< PWM_STM (out) → FanController
