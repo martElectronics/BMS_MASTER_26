@@ -62,7 +62,7 @@ public:
     // Destructor
     ~CAN_BUS() {}
 
-    void setupCANHardware(unsigned int speed, uint16_t txQueue = 10, uint16_t rxQueue = 10, int timeoutRead = 100)
+    void setupCANHardware(unsigned int speed, uint16_t txQueue = 10, uint16_t rxQueue = 10, int timeoutRead = 100, bool loopback = false)
     {
         error = 0;
         timeout = timeoutRead;
@@ -81,7 +81,7 @@ public:
                 error = 1;
             }
 #elif defined(STM32G4xx)
-            if (initSTM32FDCAN(speed) != HAL_OK)
+            if (initSTM32FDCAN(speed, loopback) != HAL_OK)
             {
                 Serial.println("Error Initializing FDCAN...");
                 error = 1;
@@ -90,7 +90,7 @@ public:
         }
     }
     // Constructor: Initializes the transciever or controller instance and sets up the CAN interface
-    CAN_BUS(HardwareType type, unsigned int speed, int _nodeID,  int8_t TX = 5, int8_t RX = 4, uint16_t txQueue = 30, uint16_t rxQueue = 30)
+    CAN_BUS(HardwareType type, unsigned int speed, int _nodeID,  int8_t TX = 5, int8_t RX = 4, uint16_t txQueue = 30, uint16_t rxQueue = 30, bool loopback = false)
     {
 
         //**CORREGIR3: Sigue sin estar bien. En el caso de que se use el MCP2515 se tendrían que ignorar los argumentos TX y RX y no es posible ya que el pinCs está al final.
@@ -106,7 +106,7 @@ public:
         this->RX = RX;
         this->filterProfile = _nodeID;
         timeout = 100;
-        setupCANHardware(speed, txQueue, rxQueue);
+        setupCANHardware(speed, txQueue, rxQueue, 100, loopback);
         // Default configuration
         config.simulating = false;
         config.autoRemoveStoredFilters = true;
@@ -381,7 +381,7 @@ private:
     */
 
 #if defined(STM32G4xx)
-    HAL_StatusTypeDef initSTM32FDCAN(unsigned int speed);
+    HAL_StatusTypeDef initSTM32FDCAN(unsigned int speed, bool loopback = false);
     void configSTM32FDCANFilter(int profile);
 #endif
 

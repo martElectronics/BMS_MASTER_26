@@ -431,7 +431,7 @@ void CAN_BUS::configurePacketTimersByPriority()
 }
 
 #if defined(STM32G4xx)
-HAL_StatusTypeDef CAN_BUS::initSTM32FDCAN(unsigned int speed)
+HAL_StatusTypeDef CAN_BUS::initSTM32FDCAN(unsigned int speed, bool loopback)
 {
     // Enable GPIO and FDCAN clocks
     __HAL_RCC_GPIOA_CLK_ENABLE();
@@ -458,7 +458,9 @@ HAL_StatusTypeDef CAN_BUS::initSTM32FDCAN(unsigned int speed)
     //   1000k -> Prescaler = 24MHz / (1000k * 16) = 1.5  -> usar BTQ=12 (TimeSeg1=9, TimeSeg2=2), Prescaler=2
     hfdcan.Init.ClockDivider = FDCAN_CLOCK_DIV1;
     hfdcan.Init.FrameFormat = FDCAN_FRAME_CLASSIC;
-    hfdcan.Init.Mode = FDCAN_MODE_NORMAL;
+    // NORMAL = bus real. EXTERNAL_LOOPBACK = transmite en el pin TX y se auto-ACKa
+    // (NO entra en bus-off sin otro nodo) → útil para ver tramas en el osciloscopio.
+    hfdcan.Init.Mode = loopback ? FDCAN_MODE_EXTERNAL_LOOPBACK : FDCAN_MODE_NORMAL;
     hfdcan.Init.AutoRetransmission = ENABLE;
     hfdcan.Init.TransmitPause = DISABLE;
     hfdcan.Init.ProtocolException = DISABLE;
