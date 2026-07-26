@@ -81,7 +81,7 @@
 // sigue reintentando la lectura y se conserva la última medida buena, con
 // BMS_OK en HIGH. Solo si al expirar el fallo SIGUE presente se declara fallo
 // y el pin cae a LOW. Ajustable en caliente por serial con 'f,<ms>'.
-#define FAULT_COMM_MS        5000UL     ///< valor por defecto al arrancar (ms)
+#define FAULT_COMM_MS        1000UL     ///< valor por defecto al arrancar (ms)
 #define FAULT_COMM_MIN_MS     250UL     ///< suelo: < SAMPLE_MS no da ni 2 muestras
 #define FAULT_COMM_MAX_MS   30000UL     ///< tope duro del comando 'f'
 
@@ -98,9 +98,9 @@
 // a SAMPLE_MS (250 ms) → ≥2 lecturas por ventana → un glitch de ruido con CRC
 // válido NO corta la carga; solo un fallo real y persistente. El retry del driver
 // cubre el ruido de transporte (COMM/CRC); esto cubre el valor espurio.
-#define FAULT_V_MS           500UL      ///< OV de celda debe persistir ≥500 ms
-#define FAULT_T_MS           1000UL     ///< OT/UT debe persistir ≥1000 ms
-#define FAULT_NTC_MS         1000UL     ///< NTC abierto debe persistir ≥1000 ms
+#define FAULT_V_MS           200UL      ///< OV de celda debe persistir ≥500 ms
+#define FAULT_T_MS           500UL     ///< OT/UT debe persistir ≥1000 ms
+#define FAULT_NTC_MS         750UL     ///< NTC abierto debe persistir ≥1000 ms
 
 // Tras armar SDC_TSON, PRECHARGE_DONE debe llegar antes de esto o
 // PRECHARGE_FAIL se enclava HIGH (solo se quita con reset de alimentación/MCU).

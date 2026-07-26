@@ -37,8 +37,8 @@
 
 // ── Amperímetro DHAB S/118 — analogRead DIRECTO (SIN guion) ──────────────────
 //   Confirmado contra el cableado: 30A (alta sens.) → PA0 ; 350A (baja) → PA1.
-#define PIN_AMP_30A     PA0    ///< Canal alta resolución (±30A)
-#define PIN_AMP_350A    PA1    ///< Canal baja resolución (±350A)
+#define PIN_AMP_30A     PA1    ///< Canal alta resolución (±30A)
+#define PIN_AMP_350A    PA0    ///< Canal baja resolución (±350A)
 
 // ── PWM ventiladores — pinMode/analogWrite DIRECTO (SIN guion) ───────────────
 #define PIN_PWM         PB10   ///< PWM_STM (out) → FanController
