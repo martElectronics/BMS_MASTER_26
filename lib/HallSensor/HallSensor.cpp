@@ -223,7 +223,8 @@ void HallSensor::_updateWatchdog(int raw30, int raw350, float i30, float i350)
 
 
 // ============================================================================
-//  TIMERS DE FALLO (500ms según norma FS EV 5.8)
+//  TIMERS DE FALLO — ventana _faultMs (default HALL_FAULT_MS = 500 ms;
+//  ajustable por instancia con setFaultWindowMs, ver la nota de EV5.8 en el .h)
 // ============================================================================
 
 void HallSensor::_updateFaultTimers()
@@ -234,7 +235,7 @@ void HallSensor::_updateFaultTimers()
     // ── Desconexión ───────────────────────────────────────────────────────────
     if (_sensorDisconnected) {
         if (_tFaultDisconnected == 0) _tFaultDisconnected = now;
-        if ((now - _tFaultDisconnected) >= HALL_FAULT_MS) _faultConfirmed = true;
+        if ((now - _tFaultDisconnected) >= _faultMs) _faultConfirmed = true;
     } else {
         _tFaultDisconnected = 0;
     }
@@ -242,7 +243,7 @@ void HallSensor::_updateFaultTimers()
     // ── Sensor congelado ──────────────────────────────────────────────────────
     if (_sensorStuck) {
         if (_tFaultStuck == 0) _tFaultStuck = now;
-        if ((now - _tFaultStuck) >= HALL_FAULT_MS) _faultConfirmed = true;
+        if ((now - _tFaultStuck) >= _faultMs) _faultConfirmed = true;
     } else {
         _tFaultStuck = 0;
     }
@@ -250,7 +251,7 @@ void HallSensor::_updateFaultTimers()
     // ── Ruido extremo ─────────────────────────────────────────────────────────
     if (_sensorNoisy) {
         if (_tFaultNoisy == 0) _tFaultNoisy = now;
-        if ((now - _tFaultNoisy) >= HALL_FAULT_MS) _faultConfirmed = true;
+        if ((now - _tFaultNoisy) >= _faultMs) _faultConfirmed = true;
     } else {
         _tFaultNoisy = 0;
     }
@@ -264,7 +265,7 @@ void HallSensor::_updateFaultTimers()
 
     if (overNow) {
         if (_tFaultOverCurrent == 0) _tFaultOverCurrent = now;
-        if ((now - _tFaultOverCurrent) >= HALL_FAULT_MS) {
+        if ((now - _tFaultOverCurrent) >= _faultMs) {
             _faultConfirmed = true;
             _overCurrent    = true;
         }

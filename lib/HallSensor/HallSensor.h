@@ -123,8 +123,9 @@
 #define HALL_I_MAX_DISCHARGE  170.0f  ///< Corriente máxima de descarga (A)
 #define HALL_I_MAX_CHARGE      -7.0f  ///< Corriente máxima de carga (A, negativa = carga)
 
-// Tiempo de fallo según norma FS EV 5.8
-#define HALL_FAULT_MS        500UL    ///< Fallo confirmado si persiste >500ms
+// Ventana de persistencia de fallo POR DEFECTO. Ver setFaultWindowMs(): es un
+// término del presupuesto de EV5.8, no el presupuesto entero.
+#define HALL_FAULT_MS        500UL    ///< Default; sobreescribible por instancia
 
 
 // ============================================================================
@@ -153,6 +154,25 @@ public:
      * @brief Lee, filtra y evalúa watchdog/fallos. Llamar en cada loop().
      */
     void update();
+
+    /**
+     * @brief Ventana de persistencia de los fallos (desconexión, stuck, ruido,
+     *        sobre-I) antes de confirmarlos en isOK().
+     *
+     * ⚠ NO es el presupuesto de EV5.8, es solo UNO de sus términos. El tiempo
+     *   total desde que la corriente se sale de rango hasta que BMS_OK cae es
+     *      ventana + 2 × (mayor hueco entre llamadas a update())
+     *   porque update() solo corre en el loop y este se bloquea durante las
+     *   lecturas del BQ. Con la ventana a 500 ms (el default histórico) el
+     *   presupuesto de 500 ms ya está agotado ANTES de contar esos huecos, así
+     *   que nunca puede cumplirse. Dimensionar contra el hueco real medido.
+     *
+     * @param ms  Ventana en ms. Default HALL_FAULT_MS (500).
+     */
+    void setFaultWindowMs(unsigned long ms) { _faultMs = ms; }
+
+    /** @return Ventana de persistencia de fallo vigente (ms). */
+    unsigned long getFaultWindowMs() const { return _faultMs; }
 
     // ─── Getters de datos ─────────────────────────────────────────────────────
 
@@ -229,6 +249,8 @@ private:
     unsigned long _tFaultStuck        = 0;
     unsigned long _tFaultNoisy        = 0;
     unsigned long _tFaultOverCurrent  = 0;
+
+    unsigned long _faultMs = HALL_FAULT_MS;  ///< ventana viva (ver setFaultWindowMs)
 
     bool _faultConfirmed = false;
     bool _overCurrent    = false;
