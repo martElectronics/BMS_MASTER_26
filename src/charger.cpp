@@ -91,6 +91,7 @@
 #define CELL_TMIN_CHG_C      0.0f       ///< ⚠ T mín para cargar (Li-ion NO carga en frío)
 
 #define MSG1_PERIOD_MS       1000UL     ///< cadencia de envío Message 1 (cargador corta a los 5 s sin él)
+#define SAMPLE_MS            250UL      ///< cadencia de lectura+seguridad del pack (V/T/NTC). Desacoplada del MSG1 → OV/OT/NTC se detectan en <0,5 s, no en ~1 s.
 #define RX_TIMEOUT_MS        5000UL     ///< si no llega Message 2 en este tiempo → cargador mudo
 
 #define WDG_TIMEOUT_US       8000000UL  ///< IWDG 8 s (igual que el BMS)
@@ -98,6 +99,15 @@
 // Debounce de comms del BQ: un error de lectura suelto (ruido) NO cuenta como
 // fallo; debe persistir esta ventana. Mismo criterio que main.cpp (2 s).
 #define FAULT_COMM_MS        3000UL
+
+// Debounce de V/T/NTC (mismo criterio que main.cpp): el fallo debe persistir la
+// ventana Y ≥2 muestras consecutivas (k por defecto del FaultTimer). Muestreamos
+// a SAMPLE_MS (250 ms) → ≥2 lecturas por ventana → un glitch de ruido con CRC
+// válido NO corta la carga; solo un fallo real y persistente. El retry del driver
+// cubre el ruido de transporte (COMM/CRC); esto cubre el valor espurio.
+#define FAULT_V_MS           500UL      ///< OV de celda debe persistir ≥500 ms
+#define FAULT_T_MS           1000UL     ///< OT/UT debe persistir ≥1000 ms
+#define FAULT_NTC_MS         1000UL     ///< NTC abierto debe persistir ≥1000 ms
 
 // Tras armar SDC_TSON, PRECHARGE_DONE debe llegar antes de esto o
 // PRECHARGE_FAIL se enclava HIGH (solo se quita con reset de alimentación/MCU).
@@ -137,8 +147,8 @@ static CAN_BUS* gCan   = nullptr;
 static bool     gCanOk = false;
 static bool     bmsInitOk = false;
 
-// Debounce de comms (mismo FaultTimer que main.cpp).
-static FaultTimer fComm;
+// Debounce (mismo FaultTimer que main.cpp): comms + V/T/NTC.
+static FaultTimer fComm, fV, fT, fNtc;
 
 // SDC / TSON / precarga (misma máquina que main.cpp::updateTson).
 static bool          bmsSafe          = false;  ///< última evaluación de seguridad (= safe del loop)
@@ -228,6 +238,16 @@ void loop()
     // RX continua (el cargador emite Message 2 cada 1 s).
     pollMessage2();
 
+    // Recuperación de bus-off: si el OBC no está en el bus al arrancar (o hay un
+    // glitch), las tramas sin ACK llevan el FDCAN a bus-off y se queda MUERTO
+    // (ni TX ni RX) hasta reset. rebootBusFromError() lo saca de ahí. Barato si
+    // el bus está sano (solo mira GetProtocolStatus().BusOff). Igual que main.cpp.
+    static unsigned long tCanChk = 0;
+    if (gCanOk && (millis() - tCanChk >= 1000)) {
+        tCanChk = millis();
+        gCan->rebootBusFromError();
+    }
+
     // Amperímetro cada vuelta (máxima resolución + debounce interno de fallos).
     hall.update();
 
@@ -235,26 +255,31 @@ void loop()
     // Usa bmsSafe, que se refresca en el bloque de 1 s de abajo.
     updateTson();
 
-    // TX Message 1 cada 1 s — el cargador corta si no lo recibe en 5 s.
+    // ── Seguridad del pack: leer + evaluar RÁPIDO (SAMPLE_MS), desacoplado del
+    //    envío de 1 s. Así un OV/OT/NTC se detecta en <0,5 s, no en ~1 s. ──
+    static unsigned long tSample = 0;
+    if (millis() - tSample >= SAMPLE_MS) {
+        tSample = millis();
+
+        bool readOk = readPack();
+        bmsSafe = chargeAllowed(readOk);   // lo consume updateTson() y el MSG1
+
+        // Un fallo CANCELA la orden de carga: hay que re-armar con 'g'.
+        if (!bmsSafe) chargeRequested = false;
+
+        // BMS_OK refleja la SEGURIDAD del pack (no si cargamos o no).
+        // Polaridad del driver: OK=HIGH, fallo=LOW (fail-safe).
+        bms.setBmsOk(bmsSafe);
+    }
+
+    // ── TX Message 1 cada 1 s — el cargador corta si no lo recibe en 5 s. ──
     static unsigned long tMsg1 = 0;
     if (millis() - tMsg1 >= MSG1_PERIOD_MS) {
         tMsg1 = millis();
 
-        bool readOk = readPack();
-        bool safe   = chargeAllowed(readOk);
-        bmsSafe     = safe;   // lo consume updateTson() como condición de armado
-
-        // Un fallo CANCELA la orden de carga: hay que re-armar con 'g'.
-        // (Igual que el FW antiguo, que ponía cmdCharge=0 ante fallo.)
-        if (!safe) chargeRequested = false;
-
-        bool allow = chargeRequested && safe;
+        bool allow = chargeRequested && bmsSafe;
         sendMessage1(allow);
         charging = allow;
-
-        // BMS_OK refleja la SEGURIDAD del pack (no si cargamos o no).
-        // Polaridad del driver: OK=HIGH, fallo=LOW (fail-safe).
-        bms.setBmsOk(safe);
 
         printChgStatus();
     }
@@ -300,23 +325,40 @@ bool readPack()
 // ============================================================================
 bool chargeAllowed(bool readOk)
 {
+    unsigned long now = millis();
+
     if (!readOk) {
         Serial.println(F("[SAFE] lectura BQ fallida → parar carga."));
         return false;
     }
-    if (bms.getMaxVoltage() >= CELL_VMAX_HARD_V) {
-        Serial.printf("[SAFE] celda %.3f V >= %.2f V (OV) → parar.\n",
+
+    // ── Debounce de celda (como main.cpp): muestrea la condición cada llamada
+    //    (cada SAMPLE_MS) y solo confirma si persiste la ventana + ≥2 muestras.
+    //    Así un valor espurio por ruido (con CRC válido) NO corta la carga; el
+    //    retry del driver ya cubre el ruido de transporte (COMM/CRC). ──
+    bool badV   = (bms.getMaxVoltage() >= CELL_VMAX_HARD_V);
+    bool badT   = (bms.getMaxTemp() >= CELL_TMAX_CHG_C) ||
+                  (bms.getMinTemp() <= CELL_TMIN_CHG_C);
+    bool badNtc = bms.hasOpenNtc();
+    fV.sample(badV, now);
+    fT.sample(badT, now);
+    fNtc.sample(badNtc, now);
+
+    if (fV.confirmed(now, FAULT_V_MS)) {
+        Serial.printf("[SAFE] celda %.3f V >= %.2f V (OV, confirmado) → parar.\n",
                       bms.getMaxVoltage(), CELL_VMAX_HARD_V);
         return false;
     }
-    if (bms.getMaxTemp() >= CELL_TMAX_CHG_C) {
-        Serial.printf("[SAFE] T %.1f C >= %.1f → parar.\n",
-                      bms.getMaxTemp(), CELL_TMAX_CHG_C);
+    if (fT.confirmed(now, FAULT_T_MS)) {
+        Serial.printf("[SAFE] T fuera de rango (min=%.1f max=%.1f, confirmado) → parar.\n",
+                      bms.getMinTemp(), bms.getMaxTemp());
         return false;
     }
-    if (bms.getMinTemp() <= CELL_TMIN_CHG_C) {
-        Serial.printf("[SAFE] T %.1f C <= %.1f (frío) → parar.\n",
-                      bms.getMinTemp(), CELL_TMIN_CHG_C);
+    // NTC abierto/inválido: pérdida de medida térmica. El driver EXCLUYE los NTC
+    // abiertos de get{Min,Max}Temp (centinela -1000) → hay que mirarlo aparte.
+    if (fNtc.confirmed(now, FAULT_NTC_MS)) {
+        Serial.printf("[SAFE] %u NTC abierto(s) (confirmado) → parar.\n",
+                      bms.getOpenNtcCount());
         return false;
     }
     // Amperímetro: fallo confirmado (desconexión, stuck, ruido, sobre-I, ADC
