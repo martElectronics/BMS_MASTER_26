@@ -318,17 +318,20 @@ bool chargeAllowed(bool readOk)
 {
     unsigned long now = millis();
 
-    // Fallo de comms BQ: NO cortar inmediatamente. Esperar a que fComm lo
-    // confirme (ventana FAULT_COMM_MS + ≥2 muestras consecutivas), igual que
-    // el resto de fallos. Mientras tanto se sigue evaluando con la última
-    // medida buena (V/T). Si el fallo se confirma, entonces sí paramos.
+    // Comm confirmado: readPack devuelve false solo cuando fComm ya está
+    // confirmado (readOk = !fComm.confirmed()). → return false directo.
     if (!readOk) {
-        if (fComm.confirmed(now, FAULT_COMM_MS)) {
-            Serial.println(F("[SAFE] comms BQ fallidas (confirmado) → parar carga."));
-            return false;
-        }
-        // Dentro de la ventana de debounce: continuar con la última medida
-        // válida; no imprimir nada aquí (readPack ya lo reportó).
+        Serial.println(F("[SAFE] comms BQ fallidas (confirmado) → parar carga."));
+        return false;
+    }
+
+    // Dentro de la ventana de debounce: el último intento de lectura falló
+    // (fComm.cond == true) pero el fallo AÚN no está confirmado. El driver
+    // puede devolver caché parcial o valores centinela para NTC/T → NO evaluar
+    // V/T/NTC; se asume seguro y se espera a que el debounce confirme o
+    // el BQ se reconecte. La ventana máxima es FAULT_COMM_MS.
+    if (fComm.cond) {
+        return true;
     }
 
     // ── Debounce de celda (como main.cpp): muestrea la condición cada llamada
