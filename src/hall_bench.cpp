@@ -32,11 +32,9 @@
 #include <limits.h>
 #include "HallSensor.h"
 
-// Pines (mismos que producción — ver ARQUITECTURA.md §2)
-// ⚠ SIN guion bajo (PA1, no PA_1): analogRead(pin) directo. PA_1 (PinName=1)
-// lo interpretaría como pin Arduino D1 → pata equivocada. PA1 = nº Arduino ok.
-#define PIN_AMP_30A     PA1
-#define PIN_AMP_350A    PA0
+// Pines: mapa central de la PCB (lib/COMMON/board_pins.h). ÚNICA fuente de
+// verdad, compartida con main.cpp/charger.cpp. 30A→PA0, 350A→PA1.
+#include "board_pins.h"
 
 // Cadencia de la traza periódica
 #define PRINT_MS        200

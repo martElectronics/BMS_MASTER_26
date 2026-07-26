@@ -59,36 +59,10 @@
 #include <IWatchdog.h>          // watchdog HW independiente (STM32 IWDG/LSI)
 
 // ============================================================================
-//  PINES — STM32G474RE (PCB BMS Master, rev. nueva)
+//  PINES — mapa central de la PCB (lib/COMMON/board_pins.h). ÚNICA fuente de
+//  verdad; ver ahí la convención PA_x (BQ/driver) vs PAx (uso directo).
 // ============================================================================
-// BQ79606 (van en BQConfig)
-#define PIN_BQ_WAKE     PB_7
-#define PIN_BQ_FAULT    PB_2
-#define PIN_BQ_RX       PC_5
-#define PIN_BQ_TX       PC_4
-#define PIN_BMS_OK      PB_5    ///< BMS_OK_STM → SDC. OK=HIGH (la gestiona el driver).
-
-// SDC / TSON / precarga (gestionados por el main) — PCB nueva
-// ⚠ FORMATO SIN guion bajo (PA6, no PA_6): se usan con digitalRead/digitalWrite/
-//   pinMode DIRECTOS (sin BQ_DPIN). Con PA_6 (PinName) apuntarían a OTRA pata.
-#define PIN_TSON_FAIL       PB8    ///< TSON_FAIL_STM (in). HIGH = fallo TSON
-#define PIN_TSON_BTN        PB9    ///< TSON_STM (in). Pulsador de arranque del TSON
-#define PIN_SDC_TSON        PA6    ///< SDC_TSON_STM (out). Latch del TSON
-#define PIN_PRECHARGE_DONE  PA7    ///< PRECHARGE_DONE_STM (in). HIGH = precarga OK
-#define PIN_PRECHARGE_FAIL  PB6    ///< PRECHARGE_FAIL_STM (out). HIGH enclavado si timeout 5 s
-#define PIN_SDC_3V3         PC7    ///< SDC_3V3_STM (in). HIGH = SDC presente
-#define PIN_IMD_OK          PA8    ///< IMD_OK_STM (in). Solo telemetría CAN
-#define PIN_HV_ACCU_VIL     PB4    ///< HV_ACCU_VIL_STM (in). Condición de armado del TSON
-
-// Amperímetro DHAB S/118
-// ⚠ SIN guion bajo (PA1, no PA_1): HallSensor hace analogRead(pin) DIRECTO.
-// Con PA_1 (PinName=1) analogRead lo toma como pin Arduino D1 → lee/reconfigura
-// OTRA pata (llegaba a pisar la USART1 del BQ y rompía sus comms). PA1 = pin ok.
-#define PIN_AMP_30A     PA1    ///< Canal alta resolución (±30A)
-#define PIN_AMP_350A    PA0    ///< Canal baja resolución (±350A)
-
-// PWM ventiladores (FanController)
-#define PIN_PWM         PB_10  ///< PWM_STM (out) → FanController
+#include "board_pins.h"
 
 // CAN: FDCAN1 PA12/PA11
 

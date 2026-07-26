@@ -38,38 +38,10 @@
 #define CHG_HALL_BLOCKS  0
 
 // ============================================================================
-//  PINES BQ79606 — idénticos a src/main.cpp (mismo hardware).
-//  Estos van dentro de BQConfig y el DRIVER los convierte con BQ_DPIN() →
-//  aquí SÍ es correcto el formato PA_x (PinName).
+//  PINES — mapa central de la PCB (lib/COMMON/board_pins.h). ÚNICA fuente de
+//  verdad, compartida con main.cpp. Ver ahí la convención PA_x vs PAx.
 // ============================================================================
-#define PIN_BQ_WAKE   PB_7
-#define PIN_BQ_FAULT  PB_2
-#define PIN_BQ_RX     PC_5
-#define PIN_BQ_TX     PC_4
-#define PIN_BMS_OK    PB_5
-
-// ============================================================================
-//  SDC / TSON / precarga (gestionados por el charger, como en main.cpp)
-//  ⚠ FORMATO SIN guion bajo (PA6, no PA_6): estos pines se usan con
-//    digitalRead/digitalWrite/pinMode DIRECTOS (sin BQ_DPIN). Con PA_6
-//    (PinName) apuntarían a OTRA pata. Pines CONFIRMADOS contra el esquemático
-//    de la PCB nueva (boton=PB9 y SDC_TSON=PA6 además con pin_walker).
-// ============================================================================
-#define PIN_TSON_FAIL       PB8    ///< TSON_FAIL_STM (in). HIGH = fallo TSON
-#define PIN_TSON_BTN        PB9    ///< TSON_STM (in). Boton de arranque. CONFIRMADO PB9.
-#define PIN_SDC_TSON        PA6    ///< SDC_TSON_STM (out). Latch del TSON. CONFIRMADO PA6.
-#define PIN_PRECHARGE_DONE  PA7    ///< PRECHARGE_DONE_STM (in). HIGH = precarga OK
-#define PIN_PRECHARGE_FAIL  PB6    ///< PRECHARGE_FAIL_STM (out). HIGH enclavado si timeout 5 s
-#define PIN_SDC_3V3         PC7    ///< SDC_3V3_STM (in). HIGH = SDC presente
-#define PIN_IMD_OK          PA8    ///< IMD_OK_STM (in). Solo print
-#define PIN_HV_ACCU_VIL     PB4    ///< HV_ACCU_VIL_STM (in). Condicion de armado del TSON
-
-// Amperímetro DHAB S/118. ⚠ SIN guion bajo (PA1, no PA_1): HallSensor hace
-// analogRead(pin) DIRECTO. Con PA_1 (PinName=1) analogRead lo toma como pin
-// Arduino D1 → lee/reconfigura OTRA pata (y pisaba la USART1 del BQ → rompía
-// las comms). PA1 = nº de pin Arduino correcto.
-#define PIN_AMP_30A     PA0    ///< Canal alta resolución (±30A)
-#define PIN_AMP_350A    PA1    ///< Canal baja resolución (±350A)
+#include "board_pins.h"
 
 // ============================================================================
 //  CONFIG DE CARGA  — ⚠ CONFIRMAR TODO antes de usar
