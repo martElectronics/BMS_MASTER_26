@@ -318,9 +318,17 @@ bool chargeAllowed(bool readOk)
 {
     unsigned long now = millis();
 
+    // Fallo de comms BQ: NO cortar inmediatamente. Esperar a que fComm lo
+    // confirme (ventana FAULT_COMM_MS + ≥2 muestras consecutivas), igual que
+    // el resto de fallos. Mientras tanto se sigue evaluando con la última
+    // medida buena (V/T). Si el fallo se confirma, entonces sí paramos.
     if (!readOk) {
-        Serial.println(F("[SAFE] lectura BQ fallida → parar carga."));
-        return false;
+        if (fComm.confirmed(now, FAULT_COMM_MS)) {
+            Serial.println(F("[SAFE] comms BQ fallidas (confirmado) → parar carga."));
+            return false;
+        }
+        // Dentro de la ventana de debounce: continuar con la última medida
+        // válida; no imprimir nada aquí (readPack ya lo reportó).
     }
 
     // ── Debounce de celda (como main.cpp): muestrea la condición cada llamada
