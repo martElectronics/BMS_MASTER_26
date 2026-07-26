@@ -35,7 +35,7 @@
 // ⚠ TEMPORAL: 0 = el fallo del Hall NO corta la carga (solo avisa). Mientras el
 // divisor del canal 350A esté sin arreglar en HW (offset ~2.5V fuera de ventana).
 // Volver a 1 cuando el DHAB de 350A dé ~1.62V a 0 A.
-#define CHG_HALL_BLOCKS  0
+#define CHG_HALL_BLOCKS  1
 
 // ============================================================================
 //  PINES — mapa central de la PCB (lib/COMMON/board_pins.h). ÚNICA fuente de
@@ -70,7 +70,11 @@
 
 // Debounce de comms del BQ: un error de lectura suelto (ruido) NO cuenta como
 // fallo; debe persistir esta ventana. Mismo criterio que main.cpp (2 s).
-#define FAULT_COMM_MS        3000UL
+#define FAULT_COMM_MS        5000UL
+
+// Ante fallo de lectura, intentar reconectar el BQ con reInit(). Rate-limit
+// porque reInit() BLOQUEA ~2 s (wake + auto-address): no se llama en cada error.
+#define CHG_REINIT_RETRY_MS  PF_2
 
 // Debounce de V/T/NTC (mismo criterio que main.cpp): el fallo debe persistir la
 // ventana Y ≥2 muestras consecutivas (k por defecto del FaultTimer). Muestreamos
@@ -285,10 +289,25 @@ bool readPack()
                             rT == BQResult::CRC_ERROR ? "CRC" : "COMM",
                             bms.getLastReadFailBoard());
 
+    bool readOk = okV && okT;
+
     // Debounce de comms (mismo criterio que main.cpp): un error de lectura
     // suelto (ruido) NO cuenta como fallo; solo si persiste FAULT_COMM_MS.
     // Ante un glitch se sigue con la última medida buena durante la ventana.
-    fComm.sample(!(okV && okT), now);
+    fComm.sample(!readOk, now);
+
+    // Reconexión: ante fallo de lectura reintenta reInit() para reconectar con
+    // el BQ (el retry del driver ya filtró el ruido de trama, así que un fallo
+    // aquí es una caída real). Rate-limited porque reInit() bloquea ~2 s. La
+    // carga ya está parada mientras (readOk=false → safe=false).
+    static unsigned long tLastReinit = 0;
+    if (!readOk && (now - tLastReinit) >= CHG_REINIT_RETRY_MS) {
+        tLastReinit = now;
+        Serial.println(F("[BQ] fallo de comms → reInit() (reconectando)..."));
+        if (bms.reInit()) Serial.println(F("[OK] BQ reconectado (leerá en el próximo ciclo)."));
+        else              Serial.println(F("[ERROR] reInit falló, reintento en 500 ms."));
+    }
+
     return !fComm.confirmed(now, FAULT_COMM_MS);
 }
 
