@@ -72,7 +72,7 @@ static const uint16_t crc16_table[256] = {
 //  CICLO DE VIDA
 // ============================================================
 
-bool BQ79606::begin()
+bool BQ79606::begin(bool keepBmsOk)
 {
     _initialized = false;
 
@@ -85,9 +85,25 @@ bool BQ79606::begin()
     // Wake, Fault y BMS_OK son señales directas del IC.
     // PWM_FANS, AMP_PIN, etc. son responsabilidad del main.
     pinMode(BQ_DPIN(_cfg.pinWake),  OUTPUT); digitalWrite(BQ_DPIN(_cfg.pinWake),  HIGH);
-    pinMode(BQ_DPIN(_cfg.pinBmsOk), OUTPUT); digitalWrite(BQ_DPIN(_cfg.pinBmsOk), LOW);
-    _bmsOkState = false;  // BMS_OK arranca en LOW (fallo) hasta init OK
     pinMode(BQ_DPIN(_cfg.pinFault), INPUT);
+    pinMode(BQ_DPIN(_cfg.pinBmsOk), OUTPUT);
+
+    // BMS_OK — ver keepBmsOk en el .h.
+    //   Arranque en FRIO (keepBmsOk=false): LOW (fallo) hasta que el init
+    //     confirme que hay cadena. Fail-safe: no se afirma "OK" sin datos.
+    //   Reconexión en CALIENTE (keepBmsOk=true, camino de reInit()): el pin es
+    //     del debounce de la aplicación, NO de esta función. Un reInit() es un
+    //     intento de RECUPERACIÓN, no un veredicto de seguridad: si bajara el
+    //     pin aquí, la ventana de gracia por fallo de comms del main/charger
+    //     quedaría anulada (el pin caería al primer error, no al expirar).
+    if (!keepBmsOk) {
+        digitalWrite(BQ_DPIN(_cfg.pinBmsOk), LOW);
+        _bmsOkState = false;
+    } else {
+        // Re-afirmar el nivel que ya tenía (pinMode no lo cambia, pero lo
+        // dejamos explícito por si el pin venía de otra configuración).
+        digitalWrite(BQ_DPIN(_cfg.pinBmsOk), _bmsOkState ? HIGH : LOW);
+    }
 
     // Level shifter TX enable — solo si está configurado
     if (_cfg.pinTxEnable >= 0) {
@@ -129,18 +145,21 @@ bool BQ79606::begin()
     clearAllFaults();
 
     _initialized = true;
-    setBmsOk(true);  // pack sano tras init -> BMS_OK HIGH (señaliza OK al SDC)
+    // Solo en frío se afirma BMS_OK=HIGH desde aquí. En caliente NO: la
+    // aplicación decide con su debounce (puede haber un fallo de V/T/NTC vivo
+    // que este init no conoce; forzar HIGH lo borraría durante un ciclo).
+    if (!keepBmsOk) setBmsOk(true);
     Serial.println("[BQ] Inicializado OK (faults de arranque limpiados).");
     return true;
 }
 
-bool BQ79606::reInit()
+bool BQ79606::reInit(bool keepBmsOk)
 {
     _initialized  = false;
     _balHwRunning = false;  // el HW se va a resetear — flag siempre a false
     _uart.end();
     delay(10);
-    return begin();
+    return begin(keepBmsOk);
 }
 
 void BQ79606::shutdown()

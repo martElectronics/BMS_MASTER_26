@@ -68,13 +68,23 @@
 
 #define WDG_TIMEOUT_US       8000000UL  ///< IWDG 8 s (igual que el BMS)
 
-// Debounce de comms del BQ: un error de lectura suelto (ruido) NO cuenta como
-// fallo; debe persistir esta ventana. Mismo criterio que main.cpp (2 s).
-#define FAULT_COMM_MS        5000UL
+// ── VENTANA DE GRACIA POR FALLO DE COMMS DEL BQ ─────────────────────────────
+// Un fallo de comunicación (lectura fallida o BQ sin direccionar) NO baja
+// BMS_OK al instante: debe persistir esta ventana ENTERA. Dentro de ella se
+// sigue reintentando la lectura y se conserva la última medida buena, con
+// BMS_OK en HIGH. Solo si al expirar el fallo SIGUE presente se declara fallo
+// y el pin cae a LOW. Ajustable en caliente por serial con 'f,<ms>'.
+#define FAULT_COMM_MS        5000UL     ///< valor por defecto al arrancar (ms)
+#define FAULT_COMM_MIN_MS     250UL     ///< suelo: < SAMPLE_MS no da ni 2 muestras
+#define FAULT_COMM_MAX_MS   30000UL     ///< tope duro del comando 'f'
 
-// Ante fallo de lectura, intentar reconectar el BQ con reInit(). Rate-limit
-// porque reInit() BLOQUEA ~2 s (wake + auto-address): no se llama en cada error.
-#define CHG_REINIT_RETRY_MS  PF_2
+// Ante fallo de comms CONFIRMADO, intentar reconectar el BQ con reInit().
+// Rate-limit porque reInit() BLOQUEA varios segundos (wake + auto-address,
+// hasta 5 intentos): no se llama en cada muestra.
+// ⚠ Aquí ponía `PF_2`, que NO es un tiempo sino un token PinName de STM32
+//   (= 82): el rate-limit era de 82 ms y se relanzaba el auto-address
+//   prácticamente en cada muestra fallida. Mismo valor que main.cpp.
+#define CHG_REINIT_RETRY_MS  2000UL
 
 // Debounce de V/T/NTC (mismo criterio que main.cpp): el fallo debe persistir la
 // ventana Y ≥2 muestras consecutivas (k por defecto del FaultTimer). Muestreamos
@@ -126,6 +136,19 @@ static bool     bmsInitOk = false;
 // Debounce (mismo FaultTimer que main.cpp): comms + V/T/NTC.
 static FaultTimer fComm, fV, fT, fNtc;
 
+// Ventana de gracia de comms VIVA (arranca en FAULT_COMM_MS, editable con
+// 'f,<ms>'). Es la única fuente de verdad: todo confirmed() de fComm la usa.
+static unsigned long commWindowMs = FAULT_COMM_MS;
+
+// ms del último intento de reInit() (rate-limit compartido por los dos caminos
+// que reconectan: BQ sin inicializar y fallo de lectura confirmado).
+static unsigned long tLastReinit = 0;
+
+// ¿Hubo alguna lectura V+T buena desde el reset? La ventana de gracia solo
+// tiene sentido si existe una "última medida buena" que conservar; sin ella
+// (arranque con la cadena muda) BMS_OK debe quedarse LOW desde el principio.
+static bool everRead = false;
+
 // SDC / TSON / precarga (misma máquina que main.cpp::updateTson).
 static bool          bmsSafe          = false;  ///< última evaluación de seguridad (= safe del loop)
 static bool          sdcTson          = false;  ///< estado del latch TSON (= nivel de PIN_SDC_TSON)
@@ -146,6 +169,7 @@ static float         chgOutI         = 0.0f;    ///< I de salida reportada
 // ============================================================================
 //  PROTOTIPOS
 // ============================================================================
+void   tryReinit(unsigned long now);
 bool   readPack();
 bool   chargeAllowed(bool readOk);
 void   updateTson();
@@ -197,7 +221,9 @@ void setup()
 
     Serial.printf("Vmax: %.1f V (fijo)  I_inicio: %.1f A (tope %.1f A)\n",
                   CHG_TERM_VOLT_V, CHG_START_CURRENT_A, CHG_MAX_CURRENT_A);
-    Serial.println(F("ARRANCA SIN CARGAR. Comandos: g=start x=stop c,<I>=corriente v=voltajes t=temps d=datos r=restart"));
+    Serial.printf("Ventana de gracia comms BQ: %lu ms (BMS_OK NO cae antes)\n",
+                  commWindowMs);
+    Serial.println(F("ARRANCA SIN CARGAR. Comandos: g=start x=stop c,<I>=corriente f,<ms>=ventana comms v=voltajes t=temps d=datos r=restart"));
 
     IWatchdog.begin(WDG_TIMEOUT_US);
     tLastChgRx = millis();
@@ -264,17 +290,58 @@ void loop()
 }
 
 // ============================================================================
+//  Reconexión del BQ — rate-limited (reInit() BLOQUEA varios segundos: wake +
+//  auto-address, hasta 5 intentos).
+//
+//  reInit() se llama con keepBmsOk por defecto (true) → NO toca BMS_OK. El
+//  nivel del pin lo decide SOLO el debounce de abajo.
+//
+//  Se refresca el watchdog a ambos lados de la llamada: el loop no llega a su
+//  IWatchdog.reload() mientras reInit() bloquea, y un reset del IWDG durante
+//  la reconexión reiniciaría el MCU → BMS_OK a LOW de inmediato, que es justo
+//  lo que la ventana de gracia trata de evitar.
+// ============================================================================
+void tryReinit(unsigned long now)
+{
+    if ((now - tLastReinit) < CHG_REINIT_RETRY_MS) return;
+    tLastReinit = now;
+
+    Serial.println(F("[BQ] comms caídas (confirmado) → reInit() (reconectando)..."));
+    IWatchdog.reload();
+    bmsInitOk = bms.reInit();
+    IWatchdog.reload();
+    Serial.println(bmsInitOk ? F("[OK] BQ reconectado (leerá en el próximo ciclo).")
+                             : F("[ERROR] reInit falló; se reintentará."));
+}
+
+// ============================================================================
 //  Lectura del pack (V/T de celda vía BQ79606)
+//
+//  ⚠ NUNCA declara fallo a la primera. Todo error de comms —lectura fallida o
+//    BQ sin inicializar— alimenta el debounce fComm; esta función solo
+//    devuelve false (y por tanto BMS_OK solo cae) cuando ese fallo lleva
+//    confirmado commWindowMs. Dentro de la ventana se conserva la última
+//    medida buena y el pin sigue HIGH.
 // ============================================================================
 bool readPack()
 {
     unsigned long now = millis();
 
+    // BQ sin direccionar (begin() falló al arrancar, o un reInit() no recuperó
+    // la cadena): no hay nada que leer, pero es un fallo de comms MÁS → va al
+    // mismo debounce, NO a BMS_OK directo. Antes esto devolvía false sin
+    // debounce y tumbaba el pin al instante.
     if (!bmsInitOk) {
-        // Sin init NO hay datos válidos → no se puede cargar (no se debouncea).
-        bmsInitOk = bms.reInit();
-        if (!bmsInitOk) return false;
+        fComm.sample(true, now);
+        tryReinit(now);
+        // Arranque en frío: si NUNCA hubo una lectura buena no se aplica la
+        // gracia (no hay última medida buena que conservar) → BMS_OK se queda
+        // LOW, fail-safe. La ventana protege una PÉRDIDA de comms en marcha,
+        // no la ausencia total de cadena desde el reset.
+        if (!everRead) return false;
+        return !fComm.confirmed(now, commWindowMs);
     }
+
     BQResult rV = bms.readVoltages();
     BQResult rT = bms.readTemperatures();
     bool okV = (rV == BQResult::OK);
@@ -290,25 +357,27 @@ bool readPack()
                             bms.getLastReadFailBoard());
 
     bool readOk = okV && okT;
+    if (readOk) everRead = true;   // ya hay medida buena que conservar
 
     // Debounce de comms (mismo criterio que main.cpp): un error de lectura
-    // suelto (ruido) NO cuenta como fallo; solo si persiste FAULT_COMM_MS.
+    // suelto (ruido) NO cuenta como fallo; solo si persiste commWindowMs.
     // Ante un glitch se sigue con la última medida buena durante la ventana.
     fComm.sample(!readOk, now);
 
-    // Reconexión: ante fallo de lectura reintenta reInit() para reconectar con
-    // el BQ (el retry del driver ya filtró el ruido de trama, así que un fallo
-    // aquí es una caída real). Rate-limited porque reInit() bloquea ~2 s. La
-    // carga ya está parada mientras (readOk=false → safe=false).
-    static unsigned long tLastReinit = 0;
-    if (!readOk && (now - tLastReinit) >= CHG_REINIT_RETRY_MS) {
-        tLastReinit = now;
-        Serial.println(F("[BQ] fallo de comms → reInit() (reconectando)..."));
-        if (bms.reInit()) Serial.println(F("[OK] BQ reconectado (leerá en el próximo ciclo)."));
-        else              Serial.println(F("[ERROR] reInit falló, reintento en 500 ms."));
-    }
+    bool commFail = !everRead || fComm.confirmed(now, commWindowMs);
 
-    return !fComm.confirmed(now, FAULT_COMM_MS);
+    // Reconexión SOLO con el fallo ya CONFIRMADO (ventana agotada).
+    // ⚠ ESTE ERA EL BUG: antes se llamaba a reInit() al PRIMER error de
+    //   lectura, y reInit() → begin() ponía BMS_OK en LOW nada más entrar
+    //   (BQ79606.cpp), así que el pin caía en el mismo instante del primer
+    //   `[BQ] V FALLO COMM` y la ventana de gracia no pintaba nada. Dentro de
+    //   la ventana ahora NO se toca la cadena: se siguen pidiendo datos cada
+    //   SAMPLE_MS, así un glitch de ruido se recupera solo. Además reInit()
+    //   bloquea segundos: lanzarlo a la primera espaciaba tanto las muestras
+    //   que el propio debounce se quedaba sin muestras dentro de la ventana.
+    if (commFail) tryReinit(now);
+
+    return !commFail;
 }
 
 // ============================================================================
@@ -319,17 +388,28 @@ bool chargeAllowed(bool readOk)
     unsigned long now = millis();
 
     // Comm confirmado: readPack devuelve false solo cuando fComm ya está
-    // confirmado (readOk = !fComm.confirmed()). → return false directo.
+    // confirmado (readOk = !fComm.confirmed()), es decir, cuando la ventana
+    // commWindowMs se agotó con el fallo aún presente. → return false directo.
+    // Se avisa solo en el FLANCO (si no, un mensaje cada SAMPLE_MS ahoga el
+    // serial justo cuando se está diagnosticando la caída).
+    static bool commFailPrev = false;
     if (!readOk) {
-        Serial.println(F("[SAFE] comms BQ fallidas (confirmado) → parar carga."));
+        if (!commFailPrev)
+            Serial.printf("[SAFE] comms BQ caídas > %lu ms (confirmado) → BMS_OK LOW, parar carga.\n",
+                          commWindowMs);
+        commFailPrev = true;
         return false;
     }
+    if (commFailPrev) {
+        Serial.println(F("[SAFE] comms BQ recuperadas → BMS_OK HIGH."));
+        commFailPrev = false;
+    }
 
-    // Dentro de la ventana de debounce: el último intento de lectura falló
+    // Dentro de la ventana de gracia: el último intento de lectura falló
     // (fComm.cond == true) pero el fallo AÚN no está confirmado. El driver
     // puede devolver caché parcial o valores centinela para NTC/T → NO evaluar
     // V/T/NTC; se asume seguro y se espera a que el debounce confirme o
-    // el BQ se reconecte. La ventana máxima es FAULT_COMM_MS.
+    // el BQ se reconecte. La ventana máxima es commWindowMs.
     if (fComm.cond) {
         return true;
     }
@@ -500,8 +580,19 @@ void printChgStatus()
     Serial.printf("Pack: Vmin=%.3f Vmax=%.3f  Tmin=%.1f Tmax=%.1f\n",
                   bms.getMinVoltage(), bms.getMaxVoltage(),
                   bms.getMinTemp(), bms.getMaxTemp());
-    Serial.printf("BMS_OK: %s (PA4, activo-alto)\n",
+    Serial.printf("BMS_OK: %s (PB5, activo-alto)\n",
                   bmsSafe ? "HIGH (OK)" : "LOW (FALLO)");
+    // Estado del debounce de comms: si hay un fallo en curso, cuánto lleva y
+    // cuánto le queda para tumbar BMS_OK.
+    if (fComm.cond || fComm.badRun) {
+        unsigned long held = millis() - fComm.tStart;
+        Serial.printf("COMM: FALLO en curso %lu/%lu ms (n=%u) %s\n",
+                      held, commWindowMs, fComm.badRun,
+                      fComm.confirmed(millis(), commWindowMs) ? "→ CONFIRMADO"
+                                                             : "→ en gracia");
+    } else {
+        Serial.printf("COMM: OK (ventana de gracia %lu ms)\n", commWindowMs);
+    }
     Serial.printf("Solicitado: %s  I_cmd=%.1f A  →  Cargando: %s (control=%d)\n",
                   chargeRequested ? "SI" : "NO", chgCurrentA,
                   charging ? "SI" : "NO", charging ? 0 : 1);
@@ -567,6 +658,7 @@ void printTemps()
 //    g       → solicitar START de carga
 //    x       → STOP
 //    c,<I>   → fijar corriente DC (A), capada a CHG_MAX_CURRENT_A
+//    f,<ms>  → ventana de gracia ante fallo de comms del BQ (antes de BMS_OK LOW)
 //    v       → tabla de voltajes por celda
 //    t       → tabla de temperaturas por NTC
 //    d       → volcar estado
@@ -592,6 +684,20 @@ void handleSerial()
         }
         chgCurrentA = v;
         Serial.printf("[I] corriente comandada = %.1f A\n", chgCurrentA);
+        return;
+    }
+
+    // f,<ms>  → ventana de gracia ante fallo de comms del BQ. Es el tiempo que
+    // debe persistir el fallo ANTES de bajar BMS_OK. Acotada a
+    // [FAULT_COMM_MIN_MS, FAULT_COMM_MAX_MS]: por debajo del periodo de
+    // muestreo no caben 2 muestras y el debounce dejaría de filtrar.
+    if (buf[0] == 'f' && buf[1] == ',') {
+        long ms = atol(buf + 2);
+        if (ms < (long)FAULT_COMM_MIN_MS) ms = FAULT_COMM_MIN_MS;
+        if (ms > (long)FAULT_COMM_MAX_MS) ms = FAULT_COMM_MAX_MS;
+        commWindowMs = (unsigned long)ms;
+        Serial.printf("[COMM] ventana de gracia = %lu ms (rango %lu..%lu)\n",
+                      commWindowMs, FAULT_COMM_MIN_MS, FAULT_COMM_MAX_MS);
         return;
     }
 

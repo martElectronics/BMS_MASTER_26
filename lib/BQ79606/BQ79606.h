@@ -536,7 +536,8 @@ public:
      * @brief Inicializa el BMS: pines, UART, autoadressing y configuración de ADC.
      *
      * Secuencia interna:
-     *   1. Configura pines: Wake (HIGH), BmsOk (LOW), Fault (INPUT), TxEnable (HIGH).
+     *   1. Configura pines: Wake (HIGH), Fault (INPUT), TxEnable (HIGH) y
+     *      BmsOk (LOW solo si keepBmsOk=false — ver el parámetro).
      *   2. Abre la UART al baudrate configurado.
      *   3. Intenta el autoadressing hasta _maxAttempts veces:
      *      - Genera pulso WAKE
@@ -549,9 +550,14 @@ public:
      *      - Configura umbrales UV (2.8V) y OV (4.3V)
      *      - Inicializa registros de balanceo (CB_CONFIG=0xDC, timers=0)
      *
+     * @param keepBmsOk  false (default, arranque en FRÍO): fuerza BMS_OK a LOW
+     *                   al entrar y a HIGH si el init sale bien.
+     *                   true (reconexión en CALIENTE, lo usa reInit): NO toca
+     *                   BMS_OK — el pin lo gobierna el debounce de fallos de la
+     *                   aplicación. Ver la nota de reInit().
      * @return true si todo OK, false si el autoadressing falló.
      */
-    bool begin();
+    bool begin(bool keepBmsOk = false);
 
     /**
      * @brief Re-inicializa el BMS sin reiniciar el microcontrolador.
@@ -560,9 +566,18 @@ public:
      * Cierra la UART limpiamente antes de volver a begin().
      * Resetea _balHwRunning porque el HW se reinicializa.
      *
+     * ⚠ Por defecto NO toca BMS_OK. Un reInit() es un intento de RECUPERACIÓN,
+     *   no un veredicto de seguridad: quien decide el nivel del pin es el
+     *   debounce de la aplicación (setBmsOk()). Antes begin() lo bajaba a LOW
+     *   nada más entrar, así que llamar a reInit() ante un error de comms
+     *   abría el SDC al instante y anulaba la ventana de gracia del main /
+     *   del charger. Pasar keepBmsOk=false solo si se quiere el comportamiento
+     *   fail-safe de arranque en frío.
+     *
+     * @param keepBmsOk  true (default) = conserva el nivel actual de BMS_OK.
      * @return true si OK.
      */
-    bool reInit();
+    bool reInit(bool keepBmsOk = true);
 
     /**
      * @brief Envía la orden de SHUTDOWN a todos los ICs de la cadena.
