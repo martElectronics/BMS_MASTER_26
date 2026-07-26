@@ -25,8 +25,10 @@ regula la corriente para el límite AC: por eso `CHG_*_CURRENT_A` debe dimension
 no pasarse del límite AC ni con el pack lleno. **Arranca SIN cargar** (`g` para empezar).
 
 ## Seguridad (corta la carga si...)
-- Lectura del BQ falla · celda ≥ `CELL_VMAX_HARD_V` (4.25 V) · `Tmax ≥ CELL_TMAX_CHG_C`
-  (45 °C) · `Tmin ≤ CELL_TMIN_CHG_C` (0 °C — Li-ion no carga en frío).
+- Lectura del BQ falla · celda ≥ `CELL_VMAX_HARD_V` (4.25 V, **OV**) · celda ≤
+  `CELL_VMIN_HARD_V` (2.8 V, **UV** — también atrapa un cable de *sense* abierto, que
+  lee ~0 V o negativo) · `Tmax ≥ CELL_TMAX_CHG_C` (45 °C) · `Tmin ≤ CELL_TMIN_CHG_C`
+  (0 °C — Li-ion no carga en frío).
 - Un fallo **cancela** la orden: hay que re-armar con `g`.
 - `BMS_OK` refleja la **seguridad** del pack (OK=HIGH), no si se está cargando.
 
@@ -42,6 +44,7 @@ no pasarse del límite AC ni con el pack lleno. **Arranca SIN cargar** (`g` para
 | `CHG_MAX_CURRENT_A` | 4 A | tope duro (atado al límite AC/plomos) |
 | `CHG_CAN_BAUD` | 500 | baud del cargador |
 | `CELL_TMAX/TMIN_CHG_C` | 45 / 0 °C | ventana térmica de carga |
+| `CELL_VMAX/VMIN_HARD_V` | 4.25 / 2.8 V | ventana de tensión por celda (UV = mismo umbral que `CELL_UV_V` de `main.cpp` y que `UV_THRESH` del BQ) |
 
 > Todos los `#define` marcados **CONFIRMAR** son provisionales — no flashear a un pack
 > real sin validarlos en banco (ver [PRUEBAS_ELECTRONICA.md](../PRUEBAS_ELECTRONICA.md) pasos 1-4).

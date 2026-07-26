@@ -59,6 +59,13 @@
 #define CHG_MAX_CURRENT_A    4.0f       ///< ⚠ TOPE duro: el serial no puede pedir más (atado al límite AC/plomos)
 
 #define CELL_VMAX_HARD_V     4.25f      ///< corte DURO por celda (seguridad independiente de Vmax)
+// Corte DURO por celda BAJA. Mismo umbral que main.cpp (CELL_UV_V) y que el
+// registro UV_THRESH del BQ (0x53 = 2.8 V). Cubre dos escenarios:
+//   · celda realmente descargada → no se carga a 3 A un pack por debajo de UV;
+//   · cable de sense abierto / conector suelto → el canal lee ~0 V o NEGATIVO,
+//     así que la medida de esa celda es falsa y no se puede garantizar su OV.
+// Sin este chequeo, un Vmin de -0.889 V dejaba BMS_OK en HIGH indefinidamente.
+#define CELL_VMIN_HARD_V     2.8f       ///< ⚠ corte DURO por celda baja / sense abierto
 #define CELL_TMAX_CHG_C      45.0f      ///< ⚠ T máx para cargar (el FW antiguo usaba 40)
 #define CELL_TMIN_CHG_C      0.0f       ///< ⚠ T mín para cargar (Li-ion NO carga en frío)
 
@@ -222,6 +229,9 @@ void setup()
 
     Serial.printf("Vmax: %.1f V (fijo)  I_inicio: %.1f A (tope %.1f A)\n",
                   CHG_TERM_VOLT_V, CHG_START_CURRENT_A, CHG_MAX_CURRENT_A);
+    Serial.printf("Corte por celda: UV=%.2f V  OV=%.2f V | T carga: %.0f..%.0f C\n",
+                  CELL_VMIN_HARD_V, CELL_VMAX_HARD_V,
+                  CELL_TMIN_CHG_C, CELL_TMAX_CHG_C);
     Serial.printf("Ventana de gracia comms BQ: %lu ms (BMS_OK NO cae antes)\n",
                   commWindowMs);
     Serial.println(F("ARRANCA SIN CARGAR. Comandos: g=start x=stop c,<I>=corriente f,<ms>=ventana comms v=voltajes t=temps d=datos r=restart"));
@@ -429,7 +439,12 @@ bool chargeAllowed(bool readOk)
     //    (cada SAMPLE_MS) y solo confirma si persiste la ventana + ≥2 muestras.
     //    Así un valor espurio por ruido (con CRC válido) NO corta la carga; el
     //    retry del driver ya cubre el ruido de transporte (COMM/CRC). ──
-    bool badV   = (bms.getMaxVoltage() >= CELL_VMAX_HARD_V);
+    // OV y UV en el MISMO FaultTimer: cualquiera de los dos fuera de ventana es
+    // "V mala". ⚠ El UV es tan crítico como el OV — sin él una celda a ~0 V (o
+    // con el sense abierto, que lee negativo) no bajaba BMS_OK NUNCA.
+    bool badVmax = (bms.getMaxVoltage() >= CELL_VMAX_HARD_V);
+    bool badVmin = (bms.getMinVoltage() <= CELL_VMIN_HARD_V);
+    bool badV   = badVmax || badVmin;
     bool badT   = (bms.getMaxTemp() >= CELL_TMAX_CHG_C) ||
                   (bms.getMinTemp() <= CELL_TMIN_CHG_C);
     bool badNtc = bms.hasOpenNtc();
@@ -438,8 +453,11 @@ bool chargeAllowed(bool readOk)
     fNtc.sample(badNtc, now);
 
     if (fV.confirmed(now, FAULT_V_MS)) {
-        Serial.printf("[SAFE] celda %.3f V >= %.2f V (OV, confirmado) → parar.\n",
-                      bms.getMaxVoltage(), CELL_VMAX_HARD_V);
+        Serial.printf("[SAFE] V fuera de rango (min=%.3f max=%.3f, limites %.2f..%.2f V,"
+                      " confirmado%s%s) → parar.\n",
+                      bms.getMinVoltage(), bms.getMaxVoltage(),
+                      CELL_VMIN_HARD_V, CELL_VMAX_HARD_V,
+                      badVmin ? " UV" : "", badVmax ? " OV" : "");
         return false;
     }
     if (fT.confirmed(now, FAULT_T_MS)) {
