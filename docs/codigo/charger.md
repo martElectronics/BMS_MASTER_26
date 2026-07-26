@@ -32,36 +32,9 @@ no pasarse del límite AC ni con el pack lleno. **Arranca SIN cargar** (`g` para
 - Un fallo **cancela** la orden: hay que re-armar con `g`.
 - `BMS_OK` refleja la **seguridad** del pack (OK=HIGH), no si se está cargando.
 
-### Latencia de detección (presupuesto FS EV5.8)
-
-La ventana del `FaultTimer` **no** es la latencia total: el timer arranca en la primera
-muestra *mala*, no cuando aparece el fallo físico, y solo se evalúa en la cadencia de
-muestreo. La latencia real (fallo físico → `BMS_OK` LOW) es:
-
-```
-latencia ≈ cadencia de muestreo + ventana de debounce + coste de la lectura
-```
-
-| Magnitud | Cadencia | Ventana | Lectura | **Total** | Presupuesto |
-|---|---|---|---|---|---|
-| Voltaje (OV/UV) | `SAMPLE_V_MS` 100 ms | `FAULT_V_MS` 200 ms | ~50 ms | **≈350 ms** | 500 ms ✓ |
-| Temperatura (OT/UT/NTC) | `SAMPLE_T_MS` 250 ms | `FAULT_T_MS` 500 ms | ~70 ms | **≈820 ms** | 1000 ms ✓ |
-| Corriente (sobre-I) | cada vuelta | `HALL_OC_FAULT_MS` 300 ms | — | **≈300 ms** | 500 ms ✓ |
-
-- El amperímetro se evalúa **cada vuelta del loop**, no en la cadencia del BQ: el
-  `HallSensor` ya trae su propio debounce, así que cualquier latencia añadida encima es
-  presupuesto regalado.
-- `V` y `T` se leen **por separado** y a cadencias distintas — el camino rápido (V) no
-  paga el coste de leer temperaturas.
-- Elegir `FAULT_x_MS` **múltiplo** de `SAMPLE_x_MS`: si no, el debounce se confirma en la
-  siguiente muestra del grid y la ventana efectiva se redondea hacia arriba.
-- El comando `d` imprime la latencia peor-caso con el coste de lectura **medido** en
-  tiempo real — verificarla en banco en vez de fiarse de la estimación.
-
 ## Comandos serie
-`g` start · `x` stop · `c,<I>` fijar corriente (capada a `CHG_MAX_CURRENT_A`) ·
-`f,<ms>` ventana de gracia de comms · `v` voltajes · `t` temperaturas · `d` datos
-(incluye latencias medidas) · `r` reset.
+`g` start · `x` stop · `c,<I>` fijar corriente (capada a `CHG_MAX_CURRENT_A`) · `d` datos
+· `r` reset.
 
 ## ⚠ Config PROVISIONAL — confirmar antes de cargar un pack real
 | `#define` | Valor | Nota |

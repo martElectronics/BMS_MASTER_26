@@ -126,17 +126,6 @@
 // Tiempo de fallo según norma FS EV 5.8
 #define HALL_FAULT_MS        500UL    ///< Fallo confirmado si persiste >500ms
 
-// ⚠ SOBREINTENSIDAD: ventana PROPIA y más corta que HALL_FAULT_MS.
-// EV5.8 da 500 ms desde que la corriente se sale hasta que el SDC abre. Si el
-// debounce interno se come los 500 ms enteros, no queda NADA para que la
-// aplicación consulte isOK() y actúe → el presupuesto se incumple siempre, por
-// poco que sea. Con 300 ms quedan 200 ms para evaluación + actuación.
-// Los otros watchdogs (desconexión/stuck/ruido) siguen en HALL_FAULT_MS: son
-// fallos de INTEGRIDAD DE MEDIDA, no una sobrecorriente en curso, y necesitan
-// la ventana larga para no disparar con ruido. (El de stuck además arrastra
-// sus propios HALL_WD_STUCK_US=500 ms para siquiera afirmarse.)
-#define HALL_OC_FAULT_MS     300UL    ///< Sobre-I confirmada si persiste >300ms
-
 
 // ============================================================================
 //  CLASE HALLSENSOR

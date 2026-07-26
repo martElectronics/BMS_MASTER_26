@@ -264,8 +264,7 @@ void HallSensor::_updateFaultTimers()
 
     if (overNow) {
         if (_tFaultOverCurrent == 0) _tFaultOverCurrent = now;
-        // Ventana propia (más corta que HALL_FAULT_MS): ver HallSensor.h.
-        if ((now - _tFaultOverCurrent) >= HALL_OC_FAULT_MS) {
+        if ((now - _tFaultOverCurrent) >= HALL_FAULT_MS) {
             _faultConfirmed = true;
             _overCurrent    = true;
         }
