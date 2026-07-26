@@ -70,42 +70,8 @@
 #define CELL_TMIN_CHG_C      0.0f       ///< ⚠ T mín para cargar (Li-ion NO carga en frío)
 
 #define MSG1_PERIOD_MS       1000UL     ///< cadencia de envío Message 1 (cargador corta a los 5 s sin él)
+#define SAMPLE_MS            250UL      ///< cadencia de lectura+seguridad del pack (V/T/NTC). Desacoplada del MSG1 → OV/OT/NTC se detectan en <0,5 s, no en ~1 s.
 #define RX_TIMEOUT_MS        5000UL     ///< si no llega Message 2 en este tiempo → cargador mudo
-
-// ============================================================================
-//  PRESUPUESTO DE LATENCIA DE BMS_OK (FS EV5.8) — dimensionado con MEDIDAS
-//
-//  El límite es el tiempo TOTAL desde que la condición aparece hasta que
-//  BMS_OK cae: ≤500 ms para V/I, ≤1000 ms para T. Ese total son TRES términos,
-//  no solo la ventana de debounce (ese fue el error original: poner la ventana
-//  igual al límite ya agota el presupuesto entero):
-//
-//    captura   el ADC de celda es single-shot y se dispara una vez por lectura
-//              → si la condición aparece justo después de una conversión,
-//              espera un periodo entero. Peor caso = cadencia de muestreo.
-//    confirma  FaultTimer: ≥2 muestras malas consecutivas Y la ventana
-//              cumplida → max(P, ceil(W/P)·P). Con W = P sale exactamente P.
-//    proceso   de la conversión al digitalWrite de BMS_OK.
-//
-//  Medido en banco (20 boards, 125 kbaud, comando 'd'):
-//    readVoltages     53.5 ms   → proceso V ≈ 53.5 - 10 (conversión) ≈  45 ms
-//    readTemperatures 71.1 ms   → proceso T ≈ 71.1 - 15 (conversión) ≈  56 ms
-//
-//  Cuentas resultantes (peor caso):
-//    V   200 (captura) + 200 (confirma) +  45 (proceso) = 445 ms  ≤ 500 ✓
-//    T   400 (captura) + 400 (confirma) +  56 (proceso) = 856 ms  ≤1000 ✓
-//    I   250 (ventana Hall) + 2 × ~90 (hueco de loop)   = 430 ms  ≤ 500 ✓
-//
-//  ⚠ Dos condiciones ESTRUCTURALES sostienen estas cuentas (ver loop()):
-//     1. V y T NUNCA se leen en la misma vuelta. Si coincidieran, la
-//        evaluación de V arrastraría los 71 ms de la lectura de T y el
-//        término "proceso" de V pasaría de 45 a ~116 ms → 516 ms, fuera.
-//     2. printChgStatus() no comparte vuelta con una lectura. Juntos daban
-//        un hueco de loop de 214 ms medidos, que es lo que retrasa al Hall.
-// ============================================================================
-#define SAMPLE_V_MS          200UL      ///< cadencia de lectura+evaluación de V
-#define SAMPLE_T_MS          400UL      ///< cadencia de lectura+evaluación de T/NTC
-#define HALL_WINDOW_MS       250UL      ///< ventana del HallSensor (setFaultWindowMs)
 
 #define WDG_TIMEOUT_US       8000000UL  ///< IWDG 8 s (igual que el BMS)
 
@@ -116,7 +82,7 @@
 // BMS_OK en HIGH. Solo si al expirar el fallo SIGUE presente se declara fallo
 // y el pin cae a LOW. Ajustable en caliente por serial con 'f,<ms>'.
 #define FAULT_COMM_MS        5000UL     ///< valor por defecto al arrancar (ms)
-#define FAULT_COMM_MIN_MS     250UL     ///< suelo: < SAMPLE_V_MS no da ni 2 muestras
+#define FAULT_COMM_MIN_MS     250UL     ///< suelo: < SAMPLE_MS no da ni 2 muestras
 #define FAULT_COMM_MAX_MS   30000UL     ///< tope duro del comando 'f'
 
 // Ante fallo de comms CONFIRMADO, intentar reconectar el BQ con reInit().
@@ -127,17 +93,14 @@
 //   prácticamente en cada muestra fallida. Mismo valor que main.cpp.
 #define CHG_REINIT_RETRY_MS  2000UL
 
-// Debounce de V/T/NTC: el fallo debe persistir la ventana Y ≥2 muestras
-// consecutivas (k por defecto del FaultTimer). Cada ventana = su cadencia de
-// muestreo → exactamente 2 lecturas malas seguidas para confirmar: un valor
-// espurio aislado (con CRC válido) NO corta la carga, pero el presupuesto de
-// EV5.8 se respeta. El ruido de TRANSPORTE (COMM/CRC) ya lo cubre aparte el
-// retry del driver (BQ_READ_ATTEMPTS=3), así que esto solo filtra el valor malo.
-// ⚠ Eran 500/1000/1000 = el límite completo de la norma, sin dejar nada para
-//   captura ni proceso → V disparaba a ~876 ms y T a ~1312 ms medidos.
-#define FAULT_V_MS           SAMPLE_V_MS  ///< 200 ms → confirma en 2 muestras
-#define FAULT_T_MS           SAMPLE_T_MS  ///< 400 ms → confirma en 2 muestras
-#define FAULT_NTC_MS         SAMPLE_T_MS  ///< NTC abierto: igual que T
+// Debounce de V/T/NTC (mismo criterio que main.cpp): el fallo debe persistir la
+// ventana Y ≥2 muestras consecutivas (k por defecto del FaultTimer). Muestreamos
+// a SAMPLE_MS (250 ms) → ≥2 lecturas por ventana → un glitch de ruido con CRC
+// válido NO corta la carga; solo un fallo real y persistente. El retry del driver
+// cubre el ruido de transporte (COMM/CRC); esto cubre el valor espurio.
+#define FAULT_V_MS           500UL      ///< OV de celda debe persistir ≥500 ms
+#define FAULT_T_MS           1000UL     ///< OT/UT debe persistir ≥1000 ms
+#define FAULT_NTC_MS         1000UL     ///< NTC abierto debe persistir ≥1000 ms
 
 // Tras armar SDC_TSON, PRECHARGE_DONE debe llegar antes de esto o
 // PRECHARGE_FAIL se enclava HIGH (solo se quita con reset de alimentación/MCU).
@@ -170,7 +133,7 @@ static const BQConfig bqCfg = {
 static BQ79606  bms(bqCfg);
 
 // Amperímetro: mide la corriente de carga; sus fallos (desconexión, stuck,
-// ruido, sobre-I, ADC saturado) cortan la carga vía hallSafe().
+// ruido, sobre-I, ADC saturado) cortan la carga vía chargeAllowed().
 static HallSensor hall(PIN_AMP_30A, PIN_AMP_350A);
 
 static CAN_BUS* gCan   = nullptr;
@@ -193,51 +156,6 @@ static unsigned long tLastReinit = 0;
 // (arranque con la cadena muda) BMS_OK debe quedarse LOW desde el principio.
 static bool everRead = false;
 
-// Veredicto del pack (comms + V/T/NTC). Lo recalcula evalPack() al final de
-// cada slot de lectura; el loop lo combina con hallSafe() cada vuelta.
-// Arranca en false: no se afirma "OK" antes de haber medido nada.
-static bool packSafe = false;
-
-// Último resultado de cada lectura. Se guardan por separado porque V y T se
-// leen en slots distintos y el debounce de comms necesita mirar los dos.
-static BQResult lastResV = BQResult::COMM_ERROR;
-static BQResult lastResT = BQResult::COMM_ERROR;
-
-// ============================================================================
-//  INSTRUMENTACIÓN DE TIEMPOS — validación en banco de EV5.8
-//
-//  Presupuesto: desde que la condición APARECE hasta que BMS_OK cae, ≤500 ms
-//  para V/I y ≤1000 ms para T. Ese total tiene TRES términos:
-//
-//    captura   cuantización del muestreo. El ADC de celda es single-shot y se
-//              dispara una vez por lectura: si la condición aparece justo
-//              después de una conversión, espera un periodo entero. NO se
-//              puede medir desde el firmware (no sabemos cuándo apareció);
-//              su peor caso ES el periodo de muestreo, que sí se mide aquí.
-//    confirma  1ª muestra mala → fallo confirmado por el FaultTimer.
-//    proceso   confirmación → digitalWrite de BMS_OK.
-//
-//  tmTripLatMs mide (confirma + proceso). El peor caso total es
-//  tmTripLatMs + periodo de muestreo máximo.
-//
-//  Todo son contadores pasivos: nada imprime dentro del bloque de muestreo
-//  (un printf ahí falsearía justo lo que se quiere medir). Se vuelcan en el
-//  status de 1 s y se ponen a cero con el comando 'z'.
-// ============================================================================
-static uint32_t tmReadVUs = 0, tmReadVMaxUs = 0;   ///< duración de readVoltages()
-static uint32_t tmReadTUs = 0, tmReadTMaxUs = 0;   ///< duración de readTemperatures()
-static uint32_t tmBlockUs = 0, tmBlockMaxUs = 0;   ///< slot de V: lectura + evaluación
-static uint32_t tmPeriodMs = 0, tmPeriodMaxMs = 0; ///< periodo real entre muestreos
-static uint32_t tmLoopGapMaxMs = 0;                ///< mayor hueco entre vueltas de loop() (= stall que retrasa el Hall)
-static uint32_t tmTripLatMs = 0;                   ///< último disparo: confirma+proceso
-static const char* tmTripCause = "-";
-static unsigned long tmHallFailMs = 0;             ///< millis() en que hall.isOK() pasó a false
-
-// Rellenados por evalPack()/hallSafe() al confirmar un fallo; los consume el loop al
-// bajar BMS_OK para cerrar la medida de latencia.
-static const char*   tmTripPend  = nullptr;
-static unsigned long tmTripStart = 0;
-
 // SDC / TSON / precarga (misma máquina que main.cpp::updateTson).
 static bool          bmsSafe          = false;  ///< última evaluación de seguridad (= safe del loop)
 static bool          sdcTson          = false;  ///< estado del latch TSON (= nivel de PIN_SDC_TSON)
@@ -259,12 +177,9 @@ static float         chgOutI         = 0.0f;    ///< I de salida reportada
 //  PROTOTIPOS
 // ============================================================================
 bool   tryReinit(unsigned long now);
-void   evalVLimits(unsigned long now);
-void   evalTLimits(unsigned long now);
-void   sampleV();
-void   sampleT();
-void   evalPack();
-bool   hallSafe();
+bool   readVT();
+bool   readPack();
+bool   chargeAllowed(bool readOk);
 void   updateTson();
 void   sendMessage1(bool allow);
 void   pollMessage2();
@@ -288,16 +203,8 @@ void setup()
     Serial.println(bmsInitOk ? F("[OK] BQ79606 listo.")
                              : F("[WARN] BQ init FALLO."));
 
-    // BMS_OK a LOW hasta que haya una medida real. begin() lo deja en HIGH al
-    // salir bien, pero eso afirma "pack seguro" sin haber leído V ni T todavía.
-    bms.setBmsOk(false);
-
     // Hall: autocalibración de offset (~1 s, con corriente ~0 → aún sin cargar).
     hall.begin();
-    // Ventana de persistencia del Hall. El default de la librería (500 ms) ES
-    // el presupuesto entero de EV5.8 para corriente → nunca podría cumplirse
-    // una vez sumados los huecos de loop. Ver el bloque de presupuesto arriba.
-    hall.setFaultWindowMs(HALL_WINDOW_MS);
     Serial.println(hall.isOK() ? F("[OK] Hall listo.")
                                : F("[WARN] Hall calibración fuera de rango."));
 
@@ -327,7 +234,7 @@ void setup()
                   CELL_TMIN_CHG_C, CELL_TMAX_CHG_C);
     Serial.printf("Ventana de gracia comms BQ: %lu ms (BMS_OK NO cae antes)\n",
                   commWindowMs);
-    Serial.println(F("ARRANCA SIN CARGAR. Comandos: g=start x=stop c,<I>=corriente f,<ms>=ventana comms v=voltajes t=temps d=datos z=reset timing r=restart"));
+    Serial.println(F("ARRANCA SIN CARGAR. Comandos: g=start x=stop c,<I>=corriente f,<ms>=ventana comms v=voltajes t=temps d=datos r=restart"));
 
     IWatchdog.begin(WDG_TIMEOUT_US);
     tLastChgRx = millis();
@@ -354,89 +261,32 @@ void loop()
         gCan->rebootBusFromError();
     }
 
-    // Mayor hueco entre vueltas de loop(). Es el retraso máximo que puede
-    // sufrir el timer interno del Hall (hall.update() solo corre aquí): lo
-    // domina la lectura del BQ, que BLOQUEA. Término "proceso" del presupuesto de I.
-    static unsigned long tLoopPrev = 0;
-    unsigned long tLoopNow = millis();
-    if (tLoopPrev && (tLoopNow - tLoopPrev) > tmLoopGapMaxMs)
-        tmLoopGapMaxMs = tLoopNow - tLoopPrev;
-    tLoopPrev = tLoopNow;
-
     // Amperímetro cada vuelta (máxima resolución + debounce interno de fallos).
     hall.update();
 
-    // Flanco de caída de hall.isOK(): marca cuándo el HallSensor CONFIRMÓ su
-    // fallo (ya con su ventana HALL_WINDOW_MS interna). Lo que va de aquí a que
-    // baje BMS_OK es latencia de CONSUMO; con hallSafe() en la vía rápida
-    // debería salir ~0 — este contador es justo la comprobación de que es así.
-    static bool hallOkPrev = true;
-    bool hallOkNow = hall.isOK();
-    if (hallOkPrev && !hallOkNow) tmHallFailMs = tLoopNow;
-    hallOkPrev = hallOkNow;
-
     // Máquina TSON + precarga: cada vuelta (flanco del botón, timing precarga).
+    // Usa bmsSafe, que se refresca en el bloque de 1 s de abajo.
     updateTson();
 
-    // ── Muestreo del pack: A LO SUMO UNA lectura por vuelta ─────────────────
-    // El `else if` es de SEGURIDAD, no un ahorro: si V y T vencieran a la vez
-    // y se leyeran seguidas, la evaluación de V arrastraría los ~71 ms de la
-    // lectura de T y su término "proceso" pasaría de 45 a ~116 ms → 516 ms,
-    // fuera del presupuesto de 500 ms. Cuando coinciden, V gana la vuelta y T
-    // entra en la siguiente (µs después, ya con BMS_OK actualizado por V).
-    // Causa del disparo: se re-arma cada vuelta para que la medida de latencia
-    // no atribuya un fallo viejo a una caída nueva. La rellenan evalPack() (V/T/
-    // NTC/comms) o hallSafe(), ambos aguas abajo de esta línea en esta vuelta.
-    tmTripPend = nullptr;
+    // ── Seguridad del pack: leer + evaluar RÁPIDO (SAMPLE_MS), desacoplado del
+    //    envío de 1 s. Así un OV/OT/NTC se detecta en <0,5 s, no en ~1 s. ──
+    static unsigned long tSample = 0;
+    if (millis() - tSample >= SAMPLE_MS) {
+        tSample = millis();
 
-    bool didRead = false;
-    static unsigned long tV = 0, tT = 0;
-    if (millis() - tV >= SAMPLE_V_MS) {
-        unsigned long tPrev = tV;
-        tV = millis();
-        if (tPrev) {                       // periodo REAL de V (= término "captura")
-            tmPeriodMs = tV - tPrev;
-            if (tmPeriodMs > tmPeriodMaxMs) tmPeriodMaxMs = tmPeriodMs;
-        }
-        uint32_t tBlk = micros();
-        sampleV();
-        tmBlockUs = micros() - tBlk;
-        if (tmBlockUs > tmBlockMaxUs) tmBlockMaxUs = tmBlockUs;
-        didRead = true;
-    } else if (millis() - tT >= SAMPLE_T_MS) {
-        tT = millis();
-        sampleT();
-        didRead = true;
+        bool readOk = readPack();
+        bmsSafe = chargeAllowed(readOk);   // lo consume updateTson() y el MSG1
+
+        // Un fallo CANCELA la orden de carga: hay que re-armar con 'g'.
+        if (!bmsSafe) chargeRequested = false;
+
+        // BMS_OK refleja la SEGURIDAD del pack (no si cargamos o no).
+        // Polaridad del driver: OK=HIGH, fallo=LOW (fail-safe).
+        bms.setBmsOk(bmsSafe);
     }
-
-    // ── BMS_OK en la VÍA RÁPIDA (cada vuelta) ───────────────────────────────
-    // packSafe lo refrescan sampleV/sampleT; el Hall se consulta aquí mismo.
-    // Antes el Hall solo se miraba dentro del bloque de muestreo, así que un
-    // fallo suyo esperaba hasta un periodo entero de más para llegar al pin.
-    // setBmsOk() solo escribe en los cambios → llamarlo cada vuelta es barato.
-    bmsSafe = packSafe && hallSafe();
-    if (!bmsSafe) chargeRequested = false;   // un fallo cancela la orden de carga
-    bms.setBmsOk(bmsSafe);                   // OK=HIGH, fallo=LOW (fail-safe)
-
-    // Flanco de caída de BMS_OK → cerrar la medida de latencia.
-    static bool bmsSafePrev = true;
-    if (bmsSafePrev && !bmsSafe && tmTripPend && tmTripStart) {
-        tmTripCause = tmTripPend;
-        tmTripLatMs = millis() - tmTripStart;
-        Serial.printf("[TIMING] disparo %s: 1a muestra mala → BMS_OK LOW = %lu ms"
-                      "  (+ hasta %lu ms de captura → peor caso %lu ms)\n",
-                      tmTripCause, tmTripLatMs, tmPeriodMaxMs,
-                      tmTripLatMs + tmPeriodMaxMs);
-    }
-    bmsSafePrev = bmsSafe;
 
     // ── TX Message 1 cada 1 s — el cargador corta si no lo recibe en 5 s. ──
-    // El envío va SIEMPRE en su instante (el OBC no espera), pero el volcado
-    // por serie (~70 ms a 115200) se aplaza a una vuelta sin lectura: juntos
-    // daban un hueco de loop de 214 ms medidos, y ese hueco es justo lo que
-    // retrasa el timer del Hall (dos veces, ver el presupuesto de arriba).
     static unsigned long tMsg1 = 0;
-    static bool printPending = false;
     if (millis() - tMsg1 >= MSG1_PERIOD_MS) {
         tMsg1 = millis();
 
@@ -444,10 +294,6 @@ void loop()
         sendMessage1(allow);
         charging = allow;
 
-        printPending = true;
-    }
-    if (printPending && !didRead) {
-        printPending = false;
         printChgStatus();
     }
 
@@ -455,85 +301,11 @@ void loop()
 }
 
 // ============================================================================
-//  MUESTREO DEL PACK — V y T en slots SEPARADOS
-//
-//  V y T se leen en vueltas distintas del loop (ver el `else if` de loop()):
-//  así la evaluación de V no arrastra los ~71 ms de la lectura de T y el
-//  término "proceso" de su presupuesto se queda en ~45 ms. Cada slot termina
-//  llamando a evalPack(), que recalcula el veredicto completo.
-// ============================================================================
-
-// Muestrea los límites de celda con los datos YA leídos (no lee nada).
-void evalVLimits(unsigned long now)
-{
-    // OV y UV en el MISMO FaultTimer: cualquiera de los dos fuera de ventana es
-    // "V mala". ⚠ El UV es tan crítico como el OV — sin él una celda a ~0 V (o
-    // con el sense abierto, que lee negativo) no bajaba BMS_OK NUNCA.
-    bool badVmax = (bms.getMaxVoltage() >= CELL_VMAX_HARD_V);
-    bool badVmin = (bms.getMinVoltage() <= CELL_VMIN_HARD_V);
-    fV.sample(badVmax || badVmin, now);
-}
-
-void evalTLimits(unsigned long now)
-{
-    bool badT = (bms.getMaxTemp() >= CELL_TMAX_CHG_C) ||
-                (bms.getMinTemp() <= CELL_TMIN_CHG_C);
-    fT.sample(badT, now);
-    // NTC abierto/inválido: pérdida de medida térmica. El driver EXCLUYE los NTC
-    // abiertos de get{Min,Max}Temp (centinela -1000) → hay que mirarlo aparte.
-    fNtc.sample(bms.hasOpenNtc(), now);
-}
-
-// ── Slot de VOLTAJE (cada SAMPLE_V_MS) ──────────────────────────────────────
-void sampleV()
-{
-    if (!bmsInitOk) { lastResV = BQResult::COMM_ERROR; evalPack(); return; }
-
-    // Cronometrado ANTES de cualquier printf: los mensajes de diagnóstico a
-    // 115200 baud cuestan ms y falsearían la medida.
-    uint32_t t0 = micros();
-    lastResV = bms.readVoltages();
-    tmReadVUs = micros() - t0;
-    if (tmReadVUs > tmReadVMaxUs) tmReadVMaxUs = tmReadVUs;
-
-    if (lastResV != BQResult::OK)
-        // Diagnóstico: TIPO (COMM=no responde / CRC=corrupto) y board que casca.
-        // Board alto y persistente → integridad de señal de la cadena.
-        Serial.printf("[BQ] V FALLO %s en board %d\n",
-                      lastResV == BQResult::CRC_ERROR ? "CRC" : "COMM",
-                      bms.getLastReadFailBoard());
-    else
-        evalVLimits(millis());
-
-    evalPack();
-}
-
-// ── Slot de TEMPERATURA + NTC (cada SAMPLE_T_MS) ────────────────────────────
-void sampleT()
-{
-    if (!bmsInitOk) { lastResT = BQResult::COMM_ERROR; evalPack(); return; }
-
-    uint32_t t0 = micros();
-    lastResT = bms.readTemperatures();
-    tmReadTUs = micros() - t0;
-    if (tmReadTUs > tmReadTMaxUs) tmReadTMaxUs = tmReadTUs;
-
-    if (lastResT != BQResult::OK)
-        Serial.printf("[BQ] T FALLO %s en board %d\n",
-                      lastResT == BQResult::CRC_ERROR ? "CRC" : "COMM",
-                      bms.getLastReadFailBoard());
-    else
-        evalTLimits(millis());
-
-    evalPack();
-}
-
-// ============================================================================
 //  Reconexión del BQ — rate-limited (reInit() BLOQUEA varios segundos: wake +
 //  auto-address, hasta 5 intentos).
 //
 //  reInit() se llama con keepBmsOk por defecto (true) → NO toca BMS_OK. El
-//  nivel del pin lo decide SOLO el debounce de evalPack().
+//  nivel del pin lo decide SOLO el debounce de abajo.
 //
 //  Se refresca el watchdog a ambos lados de la llamada: el loop no llega a su
 //  IWatchdog.reload() mientras reInit() bloquea, y un reset del IWDG durante
@@ -555,130 +327,173 @@ bool tryReinit(unsigned long now)
 }
 
 // ============================================================================
-//  VEREDICTO DEL PACK — comms (con ventana de gracia) + V/T/NTC
-//
-//  Se llama al final de CADA slot de lectura y deja el resultado en packSafe,
-//  que el loop combina con el Hall para gobernar BMS_OK.
-//
-//  ⚠ NUNCA declara fallo de comms a la primera. Solo pone packSafe=false si al
-//    agotarse commWindowMs el problema SIGUE ahí *después* de intentar
-//    recuperarlo. Dentro de la ventana se conserva la última medida buena.
+//  Lectura cruda V+T de la cadena. Solo lee y reporta el TIPO de fallo
+//  (COMM=no responde / CRC=corrupto) y en qué board casca — board alto y
+//  persistente → problema de integridad de señal de la cadena.
+//  No toca debounce ni BMS_OK: de eso se encarga readPack().
 // ============================================================================
-void evalPack()
+bool readVT()
 {
-    unsigned long now = millis();
+    BQResult rV = bms.readVoltages();
+    BQResult rT = bms.readTemperatures();
+    bool okV = (rV == BQResult::OK);
+    bool okT = (rT == BQResult::OK);
 
-    // El debounce de comms mira los DOS últimos resultados, aunque V y T se
-    // lean en slots distintos. Si solo mirase la lectura del slot actual, un
-    // fallo permanente en T alternaría malo/bueno con los slots de V y fComm
-    // no confirmaría NUNCA. (Mismo criterio que main.cpp con lastResV/lastResT.)
-    bool readOk = (lastResV == BQResult::OK) && (lastResT == BQResult::OK);
-    if (readOk) everRead = true;          // ya hay medida buena que conservar
-    fComm.sample(!readOk, now);
-
-    if (!readOk) {
-        // ── ¿Queda ventana de gracia? ───────────────────────────────────────
-        // Dentro de la ventana NO se toca la cadena: se seguirá pidiendo datos
-        // en el próximo slot y BMS_OK sigue HIGH con la última medida buena,
-        // así un glitch de ruido se recupera solo. No se evalúan V/T/NTC: el
-        // driver puede devolver caché parcial o centinelas. Excepción de
-        // arranque en frío: sin ninguna lectura buena desde el reset
-        // (!everRead) no hay medida que conservar → sin gracia, LOW fail-safe.
-        if (everRead && !fComm.confirmed(now, commWindowMs)) { packSafe = true; return; }
-
-        // ── Ventana agotada: ÚLTIMO CARTUCHO antes de declarar fallo ────────
-        // Reconectar la cadena (auto-address) y RELEER aquí mismo. El requisito
-        // es bajar BMS_OK solo "si al expirar el problema SIGUE presente": un
-        // auto-address correcto seguido de una lectura buena demuestra que ya
-        // no sigue, así que no se declara fallo y el pin no llega a caer.
-        tmTripPend = "COMM";  tmTripStart = fComm.tStart;
-
-        if (!tryReinit(now)) { packSafe = false; return; }   // rate-limited o falló
-
-        now = millis();                    // reInit() bloquea varios segundos
-        lastResV = bms.readVoltages();
-        lastResT = bms.readTemperatures();
-        if (lastResV != BQResult::OK || lastResT != BQResult::OK) {
-            fComm.sample(true, now);       // reconectó pero sigue sin leer
-            packSafe = false;
-            return;
-        }
-        everRead = true;
-        fComm.sample(false, now);          // un OK rompe la serie: fallo resuelto
-        evalVLimits(now);                  // datos frescos → refrescar debounces
-        evalTLimits(now);
-        Serial.println(F("[BQ] comms restablecidas tras reInit (BMS_OK no llegó a caer)."));
-    }
-
-    // ── Límites de celda con datos frescos y válidos ────────────────────────
-    // Cada FaultTimer confirma con ≥2 muestras malas consecutivas Y su ventana
-    // (= su cadencia de muestreo). Un valor espurio aislado no corta la carga.
-    if (fV.confirmed(now, FAULT_V_MS)) {
-        tmTripPend = "V";  tmTripStart = fV.tStart;
-        Serial.printf("[SAFE] V fuera de rango (min=%.3f max=%.3f, limites %.2f..%.2f V,"
-                      " confirmado) → parar.\n",
-                      bms.getMinVoltage(), bms.getMaxVoltage(),
-                      CELL_VMIN_HARD_V, CELL_VMAX_HARD_V);
-        packSafe = false;
-        return;
-    }
-    if (fT.confirmed(now, FAULT_T_MS)) {
-        tmTripPend = "T";  tmTripStart = fT.tStart;
-        Serial.printf("[SAFE] T fuera de rango (min=%.1f max=%.1f, confirmado) → parar.\n",
-                      bms.getMinTemp(), bms.getMaxTemp());
-        packSafe = false;
-        return;
-    }
-    if (fNtc.confirmed(now, FAULT_NTC_MS)) {
-        tmTripPend = "NTC";  tmTripStart = fNtc.tStart;
-        Serial.printf("[SAFE] %u NTC abierto(s) (confirmado) → parar.\n",
-                      bms.getOpenNtcCount());
-        packSafe = false;
-        return;
-    }
-    packSafe = true;
+    if (!okV) Serial.printf("[BQ] V FALLO %s en board %d\n",
+                            rV == BQResult::CRC_ERROR ? "CRC" : "COMM",
+                            bms.getLastReadFailBoard());
+    if (!okT) Serial.printf("[BQ] T FALLO %s en board %d\n",
+                            rT == BQResult::CRC_ERROR ? "CRC" : "COMM",
+                            bms.getLastReadFailBoard());
+    return okV && okT;
 }
 
 // ============================================================================
-//  Amperímetro — se consulta en la VÍA RÁPIDA (cada vuelta del loop).
+//  Lectura del pack (V/T de celda vía BQ79606)
 //
-//  isOK() ya viene con el debounce propio del HallSensor (ventana fijada en
-//  setup() con setFaultWindowMs). Consultarlo aquí y no dentro de un slot de
-//  muestreo elimina el término de consumo del presupuesto de corriente: antes
-//  un fallo del Hall esperaba hasta un periodo entero para llegar al pin.
+//  ⚠ NUNCA declara fallo a la primera. Todo error de comms —lectura fallida o
+//    BQ sin direccionar— alimenta el debounce fComm. Solo devuelve false (y
+//    solo entonces cae BMS_OK) si al agotarse commWindowMs el problema SIGUE
+//    ahí *después* de intentar recuperarlo. Dentro de la ventana se conserva
+//    la última medida buena y el pin sigue HIGH.
 // ============================================================================
-bool hallSafe()
+bool readPack()
 {
-    bool ok = hall.isOK();
+    unsigned long now = millis();
 
+    // ── 1. Lectura normal ───────────────────────────────────────────────────
+    // Si la cadena no está direccionada (begin() falló al arrancar, o un
+    // reInit() no la recuperó) no hay nada que leer: cuenta como fallo de
+    // comms más y va al MISMO debounce, no a BMS_OK directo.
+    bool readOk = bmsInitOk && readVT();
+    if (readOk) everRead = true;          // ya hay medida buena que conservar
+    fComm.sample(!readOk, now);
+    if (readOk) return true;
+
+    // ── 2. ¿Queda ventana de gracia? ────────────────────────────────────────
+    // Dentro de la ventana NO se toca la cadena: se seguirá pidiendo datos en
+    // el próximo ciclo (cada SAMPLE_MS) y BMS_OK sigue HIGH con la última
+    // medida buena, así un glitch de ruido se recupera solo. Excepción de
+    // arranque en frío: sin ninguna lectura buena desde el reset (!everRead)
+    // no hay medida que conservar → sin gracia, BMS_OK LOW fail-safe.
+    if (everRead && !fComm.confirmed(now, commWindowMs)) return true;
+
+    // ── 3. Ventana agotada: ÚLTIMO CARTUCHO antes de declarar fallo ─────────
+    // Reconectar la cadena (auto-address) y RE-LEER aquí mismo. El requisito
+    // es bajar BMS_OK solo "si al expirar el problema SIGUE presente": un
+    // auto-address correcto seguido de una lectura buena demuestra que ya no
+    // sigue, así que NO se declara fallo y el pin no llega a caer.
+    // ⚠ Antes se lanzaba el reInit() aquí pero se devolvía el veredicto de
+    //   fallo igualmente → el auto-address terminaba OK y BMS_OK caía a LOW
+    //   en el mismo ciclo (abriendo el SDC y desarmando el TSON) para volver
+    //   a HIGH 250 ms después. Ese falso disparo es lo que se corrige aquí.
+    if (!tryReinit(now)) return false;    // rate-limited, o reInit falló
+
+    now = millis();                       // reInit() bloquea varios segundos
+    if (!readVT()) {                      // reconectó pero sigue sin leer
+        fComm.sample(true, now);
+        return false;
+    }
+
+    everRead = true;
+    fComm.sample(false, now);             // un OK rompe la serie: fallo resuelto
+    Serial.println(F("[BQ] comms restablecidas tras reInit (BMS_OK no llegó a caer)."));
+    return true;
+}
+
+// ============================================================================
+//  ¿Se permite cargar?  (corte por celda/temperatura/lectura)
+// ============================================================================
+bool chargeAllowed(bool readOk)
+{
+    unsigned long now = millis();
+
+    // Comm confirmado: readPack devuelve false solo cuando fComm ya está
+    // confirmado (readOk = !fComm.confirmed()), es decir, cuando la ventana
+    // commWindowMs se agotó con el fallo aún presente. → return false directo.
+    // Se avisa solo en el FLANCO (si no, un mensaje cada SAMPLE_MS ahoga el
+    // serial justo cuando se está diagnosticando la caída).
+    static bool commFailPrev = false;
+    if (!readOk) {
+        if (!commFailPrev)
+            Serial.printf("[SAFE] comms BQ caídas > %lu ms y sin recuperar → BMS_OK LOW, parar carga.\n",
+                          commWindowMs);
+        commFailPrev = true;
+        return false;
+    }
+    if (commFailPrev) {
+        Serial.println(F("[SAFE] comms BQ recuperadas → BMS_OK HIGH."));
+        commFailPrev = false;
+    }
+
+    // Dentro de la ventana de gracia: el último intento de lectura falló
+    // (fComm.cond == true) pero el fallo AÚN no está confirmado. El driver
+    // puede devolver caché parcial o valores centinela para NTC/T → NO evaluar
+    // V/T/NTC; se asume seguro y se espera a que el debounce confirme o
+    // el BQ se reconecte. La ventana máxima es commWindowMs.
+    if (fComm.cond) {
+        return true;
+    }
+
+    // ── Debounce de celda (como main.cpp): muestrea la condición cada llamada
+    //    (cada SAMPLE_MS) y solo confirma si persiste la ventana + ≥2 muestras.
+    //    Así un valor espurio por ruido (con CRC válido) NO corta la carga; el
+    //    retry del driver ya cubre el ruido de transporte (COMM/CRC). ──
+    // OV y UV en el MISMO FaultTimer: cualquiera de los dos fuera de ventana es
+    // "V mala". ⚠ El UV es tan crítico como el OV — sin él una celda a ~0 V (o
+    // con el sense abierto, que lee negativo) no bajaba BMS_OK NUNCA.
+    bool badVmax = (bms.getMaxVoltage() >= CELL_VMAX_HARD_V);
+    bool badVmin = (bms.getMinVoltage() <= CELL_VMIN_HARD_V);
+    bool badV   = badVmax || badVmin;
+    bool badT   = (bms.getMaxTemp() >= CELL_TMAX_CHG_C) ||
+                  (bms.getMinTemp() <= CELL_TMIN_CHG_C);
+    bool badNtc = bms.hasOpenNtc();
+    fV.sample(badV, now);
+    fT.sample(badT, now);
+    fNtc.sample(badNtc, now);
+
+    if (fV.confirmed(now, FAULT_V_MS)) {
+        Serial.printf("[SAFE] V fuera de rango (min=%.3f max=%.3f, limites %.2f..%.2f V,"
+                      " confirmado%s%s) → parar.\n",
+                      bms.getMinVoltage(), bms.getMaxVoltage(),
+                      CELL_VMIN_HARD_V, CELL_VMAX_HARD_V,
+                      badVmin ? " UV" : "", badVmax ? " OV" : "");
+        return false;
+    }
+    if (fT.confirmed(now, FAULT_T_MS)) {
+        Serial.printf("[SAFE] T fuera de rango (min=%.1f max=%.1f, confirmado) → parar.\n",
+                      bms.getMinTemp(), bms.getMaxTemp());
+        return false;
+    }
+    // NTC abierto/inválido: pérdida de medida térmica. El driver EXCLUYE los NTC
+    // abiertos de get{Min,Max}Temp (centinela -1000) → hay que mirarlo aparte.
+    if (fNtc.confirmed(now, FAULT_NTC_MS)) {
+        Serial.printf("[SAFE] %u NTC abierto(s) (confirmado) → parar.\n",
+                      bms.getOpenNtcCount());
+        return false;
+    }
+    // Amperímetro: fallo confirmado (desconexión, stuck, ruido, sobre-I, ADC
+    // saturado) → no fiarse de la medida de corriente de carga.
+    // isOK() ya viene con el debounce propio del HallSensor.
+    if (!hall.isOK()) {
 #if CHG_HALL_BLOCKS
-    // Aviso solo en el FLANCO: esto corre cada vuelta, un printf por vuelta
-    // ahogaría el serial y dispararía el hueco de loop que se quiere minimizar.
-    static bool prevOk = true;
-    if (!ok && prevOk) {
-        tmTripPend = "HALL";  tmTripStart = tmHallFailMs;
         Serial.printf("[SAFE] Hall FALLO (%s%s%s%s%s) → parar.\n",
                       hall.isDisconnected() ? "desc "   : "",
                       hall.isStuck()        ? "stuck "  : "",
                       hall.isNoisy()        ? "noisy "  : "",
                       hall.isOverCurrent()  ? "sobreI " : "",
                       hall.isAdcSaturated() ? "adcSat"  : "");
-    } else if (ok && !prevOk) {
-        Serial.println(F("[SAFE] Hall recuperado → BMS_OK puede volver a HIGH."));
-    }
-    prevOk = ok;
-    return ok;
+        return false;
 #else
-    // TEMP: no corta (divisor 350A sin arreglar). Aviso cada 5 s, no cada vuelta.
-    if (!ok) {
+        // TEMP: no corta (divisor 350A sin arreglar). Aviso cada 5 s, no cada ciclo.
         static unsigned long tHallWarn = 0;
         if (millis() - tHallWarn >= 5000) {
             tHallWarn = millis();
             Serial.println(F("[HALL] fallo IGNORADO (temporal, CHG_HALL_BLOCKS=0)"));
         }
+#endif
     }
     return true;
-#endif
 }
 
 // ============================================================================
@@ -817,16 +632,6 @@ void printChgStatus()
     Serial.printf("Hall: %.2f A (%s)  %s\n",
                   hall.getCurrent(), hall.isLowRange() ? "30A" : "350A",
                   hall.isOK() ? "OK" : "FALLO");
-    // ── Tiempos medidos (EV5.8). 'z' pone los máximos a cero. ──
-    Serial.printf("TIMING: readV=%.1f/%.1f  readT=%.1f/%.1f  slotV=%.1f/%.1f ms (ult/max)\n",
-                  tmReadVUs / 1000.0f, tmReadVMaxUs / 1000.0f,
-                  tmReadTUs / 1000.0f, tmReadTMaxUs / 1000.0f,
-                  tmBlockUs / 1000.0f, tmBlockMaxUs / 1000.0f);
-    Serial.printf("        periodo V=%lu/%lu ms (ult/max)  gap loop max=%lu ms\n",
-                  tmPeriodMs, tmPeriodMaxMs, tmLoopGapMaxMs);
-    if (tmTripLatMs)
-        Serial.printf("        ultimo disparo %s: confirma+proceso=%lu ms → peor caso %lu ms\n",
-                      tmTripCause, tmTripLatMs, tmTripLatMs + tmPeriodMaxMs);
     if (rxAlive) {
         Serial.printf("OBC: Vout=%.1f V  Iout=%.1f A  st=0x%02X%s%s%s%s%s\n",
                       chgOutV, chgOutI, chgStatus,
@@ -885,8 +690,7 @@ void printTemps()
 //    f,<ms>  → ventana de gracia ante fallo de comms del BQ (antes de BMS_OK LOW)
 //    v       → tabla de voltajes por celda
 //    t       → tabla de temperaturas por NTC
-//    d       → volcar estado (incluye los tiempos medidos)
-//    z       → poner a cero los máximos de TIMING
+//    d       → volcar estado
 //    r       → reiniciar MCU
 // ============================================================================
 void handleSerial()
@@ -946,12 +750,6 @@ void handleSerial()
         break;
     case 'd':
         printChgStatus();
-        break;
-    case 'z':
-        tmReadVMaxUs = tmReadTMaxUs = tmBlockMaxUs = 0;
-        tmPeriodMaxMs = tmLoopGapMaxMs = tmTripLatMs = 0;
-        tmTripCause = "-";
-        Serial.println(F("[TIMING] maximos a cero."));
         break;
     case 'r':
         Serial.println(F("Restart..."));

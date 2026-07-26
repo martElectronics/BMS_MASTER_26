@@ -223,8 +223,7 @@ void HallSensor::_updateWatchdog(int raw30, int raw350, float i30, float i350)
 
 
 // ============================================================================
-//  TIMERS DE FALLO — ventana _faultMs (default HALL_FAULT_MS = 500 ms;
-//  ajustable por instancia con setFaultWindowMs, ver la nota de EV5.8 en el .h)
+//  TIMERS DE FALLO (500ms según norma FS EV 5.8)
 // ============================================================================
 
 void HallSensor::_updateFaultTimers()
