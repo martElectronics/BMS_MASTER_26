@@ -8,6 +8,8 @@
  *     que aqui se IGNORAN bmsFault (no hay BQ), TSON_FAIL y HV_ACCU_VIL, y no
  *     se escribe el FaultLogger. El resto (latches, precarga, timeout) es
  *     identico: la unica condicion que queda es SDC_3V3.
+ *   · printInputs(): vuelca por serie el estado de todas las entradas (y de
+ *     las salidas) cada 500 ms y al vuelo en cada cambio.
  *
  *  ⚠ OJO CON EL FORMATO DE LOS PINES (ver board_pins.h):
  *   · PIN_BMS_OK es PinName (PB_5, CON guion) porque en produccion lo consume
@@ -31,7 +33,10 @@ static bool     prechargeRunning = false;    ///< precarga en curso (temporizado
 static bool     prechargeFail    = false;    ///< latch HIGH si timeout 5 s (solo lo quita un reset)
 static uint32_t tPrechargeStart  = 0;        ///< millis() del flanco de armado
 
+#define DEBUG_PERIOD_MS       500UL    ///< refresco del volcado de entradas
+
 void updateTson();
+void printInputs();
 
 void setup()
 {
@@ -47,11 +52,14 @@ void setup()
 
     // Entradas con PULL-DOWN, igual que main.cpp: en esta PCB el boton solo se
     // detecta con pull-down; sin el la pata flota.
-    // TSON_FAIL y HV_ACCU_VIL no se leen (ignorados a proposito), por eso no
-    // se configuran aqui.
+    // TSON_FAIL, HV_ACCU_VIL e IMD_OK NO intervienen en la logica (ignorados a
+    // proposito), pero se configuran igual para poder verlos en printInputs().
     pinMode(PIN_TSON_BTN,       INPUT_PULLDOWN);
     pinMode(PIN_PRECHARGE_DONE, INPUT_PULLDOWN);
     pinMode(PIN_SDC_3V3,        INPUT_PULLDOWN);
+    pinMode(PIN_TSON_FAIL,      INPUT_PULLDOWN);
+    pinMode(PIN_HV_ACCU_VIL,    INPUT_PULLDOWN);
+    pinMode(PIN_IMD_OK,         INPUT_PULLDOWN);
 
     // Estado real del boton al arrancar → un boton pegado en HIGH al boot NO
     // cuenta como flanco de subida (no auto-arma el TSON).
@@ -63,8 +71,49 @@ void setup()
 void loop()
 {
     digitalWrite(bmsOkPin, HIGH);
+  //  digitalWrite(PIN_SDC_TSON,  HIGH );
     updateTson();
+    printInputs();
     delay(20);   // antirrebote basico del pulsador
+}
+
+// ============================================================================
+//  DEPURACION — vuelca el estado de TODAS las entradas de la placa
+// ============================================================================
+//  Imprime cada DEBUG_PERIOD_MS, y ADEMAS al instante en cuanto cambia
+//  cualquier entrada (asi no se pierde un pulso corto entre dos volcados).
+//  El '*' al final marca las lineas disparadas por un cambio.
+//  Se incluyen tambien las salidas, para poder correlacionar causa y efecto.
+// ============================================================================
+void printInputs()
+{
+    // Entradas digitales de la PCB (board_pins.h). IMD_OK, TSON_FAIL y
+    // HV_ACCU_VIL son solo telemetria aqui: no entran en la logica del TSON.
+    bool tsonBtn  = digitalRead(PIN_TSON_BTN);
+    bool tsonFail = digitalRead(PIN_TSON_FAIL);
+    bool sdc3v3   = digitalRead(PIN_SDC_3V3);
+    bool preDone  = digitalRead(PIN_PRECHARGE_DONE);
+    bool hvAccu   = digitalRead(PIN_HV_ACCU_VIL);
+    bool imdOk    = digitalRead(PIN_IMD_OK);
+
+    // Empaqueta las 6 entradas en un byte para detectar cambios de un vistazo.
+    uint8_t snapshot = (tsonBtn  << 0) | (tsonFail << 1) | (sdc3v3 << 2) |
+                       (preDone  << 3) | (hvAccu   << 4) | (imdOk  << 5);
+
+    static uint8_t  lastSnapshot = 0xFF;   // 0xFF: fuerza el primer volcado
+    static uint32_t tLastPrint   = 0;
+
+    bool changed = (snapshot != lastSnapshot);
+    if (!changed && (millis() - tLastPrint) < DEBUG_PERIOD_MS) return;
+
+    Serial.printf("[IN ] BTN=%d TSON_FAIL=%d SDC_3V3=%d PRE_DONE=%d HV_ACCU=%d IMD_OK=%d"
+                  " | [OUT] BMS_OK=%d SDC_TSON=%d PRE_FAIL=%d%s\n",
+                  tsonBtn, tsonFail, sdc3v3, preDone, hvAccu, imdOk,
+                  digitalRead(bmsOkPin), sdcTson, prechargeFail,
+                  changed ? "  *" : "");
+
+    lastSnapshot = snapshot;
+    tLastPrint   = millis();
 }
 
 // ============================================================================
