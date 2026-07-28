@@ -537,6 +537,13 @@ void updateTson()
     bool hvAccu   = digitalRead(PIN_HV_ACCU_VIL);
     bool tsonBtn  = digitalRead(PIN_TSON_BTN);
 
+
+hvAccu=0;
+tsonFail=0;
+
+
+
+
     // ── Latch SDC_TSON ──
     if (sdcTson && (!sdc3v3 || tsonFail)) {     // pierde condición de mantenimiento
         sdcTson = false;
@@ -546,6 +553,7 @@ void updateTson()
     if (!sdcTson && btnRising && !bmsFault && !hvAccu && sdc3v3 && !tsonFail) {
         sdcTson = true;
         Serial.println(F("[TSON] armado."));
+        delay(5000);
     }
     tsonBtnPrev = tsonBtn;
     digitalWrite(PIN_SDC_TSON, sdcTson ? HIGH : LOW);

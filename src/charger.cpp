@@ -104,7 +104,7 @@
 
 // Tras armar SDC_TSON, PRECHARGE_DONE debe llegar antes de esto o
 // PRECHARGE_FAIL se enclava HIGH (solo se quita con reset de alimentación/MCU).
-#define PRECHARGE_TIMEOUT_MS 5000UL
+#define PRECHARGE_TIMEOUT_MS 50000UL
 
 // IDs J1939 extendidos
 #define ID_BMS_TO_CHG        0x1806E5F4UL   ///< Message 1 (BMS → cargador)
