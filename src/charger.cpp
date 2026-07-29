@@ -74,6 +74,7 @@
 #define RX_TIMEOUT_MS        5000UL     ///< si no llega Message 2 en este tiempo → cargador mudo
 
 #define WDG_TIMEOUT_US       8000000UL  ///< IWDG 8 s (igual que el BMS)
+#define MONITOR_MS           500UL      ///< cadencia del monitor V/T en vivo (tecla 'm')
 
 // ── VENTANA DE GRACIA POR FALLO DE COMMS DEL BQ ─────────────────────────────
 // Un fallo de comunicación (lectura fallida o BQ sin direccionar) NO baja
@@ -173,6 +174,15 @@ static uint8_t       chgStatus       = 0;       ///< último byte STATUS del car
 static float         chgOutV         = 0.0f;    ///< V de salida reportada
 static float         chgOutI         = 0.0f;    ///< I de salida reportada
 
+// ── Modos de visualizacion por serie (NO afectan a la SEGURIDAD) ────────────
+//  scrutiMode (ON por defecto, tecla 'q' lo apaga): calla SOLO el diagnostico
+//    de comms (ventana de gracia, reInit, CRC por board). Los fallos de
+//    V/T/NTC/Hall y las transiciones de BMS_OK SIEMPRE se ven (con detalle).
+//  liveMonitor (tecla 'm'): imprime V y T en vivo con valores YA cacheados por
+//    readPack (no mete trafico extra en el bus ni bloquea el loop).
+static bool          scrutiMode      = true;   ///< arranque en modo scruti (diag comms en silencio)
+static bool          liveMonitor     = false;
+
 // ============================================================================
 //  PROTOTIPOS
 // ============================================================================
@@ -186,6 +196,10 @@ void   pollMessage2();
 void   printChgStatus();
 void   printVoltages();
 void   printTemps();
+void   printLiveVT();
+void   printVFaultDetail();
+void   printTFaultDetail();
+void   printNtcFaultDetail();
 void   handleSerial();
 
 // ============================================================================
@@ -232,9 +246,8 @@ void setup()
     Serial.printf("Corte por celda: UV=%.2f V  OV=%.2f V | T carga: %.0f..%.0f C\n",
                   CELL_VMIN_HARD_V, CELL_VMAX_HARD_V,
                   CELL_TMIN_CHG_C, CELL_TMAX_CHG_C);
-    Serial.printf("Ventana de gracia comms BQ: %lu ms (BMS_OK NO cae antes)\n",
-                  commWindowMs);
-    Serial.println(F("ARRANCA SIN CARGAR. Comandos: g=start x=stop c,<I>=corriente f,<ms>=ventana comms v=voltajes t=temps d=datos r=restart"));
+    Serial.println(F("ARRANCA SIN CARGAR. Comandos:"));
+    Serial.println(F("  g=start x=stop c,<I>=corriente  v=voltajes t=temps  m=monitor  q=diag  f,<ms>=ventana  d=datos r=restart"));
 
     IWatchdog.begin(WDG_TIMEOUT_US);
     tLastChgRx = millis();
@@ -294,7 +307,14 @@ void loop()
         sendMessage1(allow);
         charging = allow;
 
-        printChgStatus();
+        if (!liveMonitor) printChgStatus();   // en modo monitor manda la tabla V/T
+    }
+
+    // Monitor V/T en vivo (tecla 'm'): valores cacheados, sin leer el bus.
+    static unsigned long tMon = 0;
+    if (liveMonitor && (millis() - tMon >= MONITOR_MS)) {
+        tMon = millis();
+        printLiveVT();
     }
 
     IWatchdog.reload();
@@ -317,12 +337,21 @@ bool tryReinit(unsigned long now)
     if ((now - tLastReinit) < CHG_REINIT_RETRY_MS) return false;
     tLastReinit = now;
 
-    Serial.println(F("[BQ] comms caídas (confirmado) → reInit() (reconectando)..."));
+    // Dedup: el fallo de auto-address se avisa SOLO la primera vez de cada racha
+    // (no spamear cada reintento); se rearma al reconectar. En scruti, silencio.
+    static bool failNotified = false;
+
     IWatchdog.reload();
     bmsInitOk = bms.reInit();
     IWatchdog.reload();
-    Serial.println(bmsInitOk ? F("[OK] BQ reconectado; releyendo el pack...")
-                             : F("[ERROR] reInit falló; se reintentará."));
+
+    if (bmsInitOk) {
+        if (failNotified && !scrutiMode) Serial.println(F("[BQ] reconectado."));
+    } else {
+        if (!failNotified && !scrutiMode)
+            Serial.println(F("[BQ] sin comunicacion con la cadena (reintentando)..."));
+    }
+    failNotified = !bmsInitOk;
     return bmsInitOk;
 }
 
@@ -339,10 +368,10 @@ bool readVT()
     bool okV = (rV == BQResult::OK);
     bool okT = (rT == BQResult::OK);
 
-    if (!okV) Serial.printf("[BQ] V FALLO %s en board %d\n",
+    if (!scrutiMode && !okV) Serial.printf("[BQ] V FALLO %s en board %d\n",
                             rV == BQResult::CRC_ERROR ? "CRC" : "COMM",
                             bms.getLastReadFailBoard());
-    if (!okT) Serial.printf("[BQ] T FALLO %s en board %d\n",
+    if (!scrutiMode && !okT) Serial.printf("[BQ] T FALLO %s en board %d\n",
                             rT == BQResult::CRC_ERROR ? "CRC" : "COMM",
                             bms.getLastReadFailBoard());
     return okV && okT;
@@ -397,7 +426,7 @@ bool readPack()
 
     everRead = true;
     fComm.sample(false, now);             // un OK rompe la serie: fallo resuelto
-    Serial.println(F("[BQ] comms restablecidas tras reInit (BMS_OK no llegó a caer)."));
+    if (!scrutiMode) Serial.println(F("[BQ] comms restablecidas tras reInit."));
     return true;
 }
 
@@ -415,14 +444,14 @@ bool chargeAllowed(bool readOk)
     // serial justo cuando se está diagnosticando la caída).
     static bool commFailPrev = false;
     if (!readOk) {
-        if (!commFailPrev)
+        if (!commFailPrev && !scrutiMode)
             Serial.printf("[SAFE] comms BQ caídas > %lu ms y sin recuperar → BMS_OK LOW, parar carga.\n",
                           commWindowMs);
         commFailPrev = true;
         return false;
     }
     if (commFailPrev) {
-        Serial.println(F("[SAFE] comms BQ recuperadas → BMS_OK HIGH."));
+        if (!scrutiMode) Serial.println(F("[SAFE] comms BQ recuperadas → BMS_OK HIGH."));
         commFailPrev = false;
     }
 
@@ -452,26 +481,44 @@ bool chargeAllowed(bool readOk)
     fT.sample(badT, now);
     fNtc.sample(badNtc, now);
 
+    // Los fallos de V/T/NTC SIEMPRE se muestran (tambien en scruti): son la
+    // seguridad de verdad y lo que scruti provoca. Se imprime el DETALLE
+    // (modulo + celda/NTC + valor) una sola vez por episodio (flanco), no cada
+    // ciclo, para no ahogar el serial mientras el fallo se mantiene.
+    static bool vShown = false, tShown = false, ntcShown = false;
+
     if (fV.confirmed(now, FAULT_V_MS)) {
-        Serial.printf("[SAFE] V fuera de rango (min=%.3f max=%.3f, limites %.2f..%.2f V,"
-                      " confirmado%s%s) → parar.\n",
-                      bms.getMinVoltage(), bms.getMaxVoltage(),
-                      CELL_VMIN_HARD_V, CELL_VMAX_HARD_V,
-                      badVmin ? " UV" : "", badVmax ? " OV" : "");
+        if (!vShown) {
+            Serial.println(F("\n[FALLO] VOLTAJE fuera de rango -> parar carga:"));
+            printVFaultDetail();
+            vShown = true;
+        }
         return false;
     }
+    vShown = false;
+
     if (fT.confirmed(now, FAULT_T_MS)) {
-        Serial.printf("[SAFE] T fuera de rango (min=%.1f max=%.1f, confirmado) → parar.\n",
-                      bms.getMinTemp(), bms.getMaxTemp());
+        if (!tShown) {
+            Serial.println(F("\n[FALLO] TEMPERATURA fuera de rango -> parar carga:"));
+            printTFaultDetail();
+            tShown = true;
+        }
         return false;
     }
-    // NTC abierto/inválido: pérdida de medida térmica. El driver EXCLUYE los NTC
-    // abiertos de get{Min,Max}Temp (centinela -1000) → hay que mirarlo aparte.
+    tShown = false;
+
+    // NTC abierto/invalido: perdida de medida termica. El driver EXCLUYE los NTC
+    // abiertos de get{Min,Max}Temp (centinela -1000) -> hay que mirarlo aparte.
     if (fNtc.confirmed(now, FAULT_NTC_MS)) {
-        Serial.printf("[SAFE] %u NTC abierto(s) (confirmado) → parar.\n",
-                      bms.getOpenNtcCount());
+        if (!ntcShown) {
+            Serial.printf("\n[FALLO] %u NTC abierto(s) -> parar carga:\n",
+                          bms.getOpenNtcCount());
+            printNtcFaultDetail();
+            ntcShown = true;
+        }
         return false;
     }
+    ntcShown = false;
     // Amperímetro: fallo confirmado (desconexión, stuck, ruido, sobre-I, ADC
     // saturado) → no fiarse de la medida de corriente de carga.
     // isOK() ya viene con el debounce propio del HallSensor.
@@ -613,7 +660,9 @@ void printChgStatus()
                   bmsSafe ? "HIGH (OK)" : "LOW (FALLO)");
     // Estado del debounce de comms: si hay un fallo en curso, cuánto lleva y
     // cuánto le queda para tumbar BMS_OK.
-    if (fComm.cond || fComm.badRun) {
+    if (scrutiMode) {
+        Serial.printf("COMM: %s\n", (fComm.cond || fComm.badRun) ? "FALLO" : "OK");
+    } else if (fComm.cond || fComm.badRun) {
         unsigned long held = millis() - fComm.tStart;
         Serial.printf("COMM: FALLO en curso %lu/%lu ms (n=%u) %s\n",
                       held, commWindowMs, fComm.badRun,
@@ -680,6 +729,70 @@ void printTemps()
         Serial.println();
     }
     Serial.printf("Tmin=%.1f  Tmax=%.1f\n", bms.getMinTemp(), bms.getMaxTemp());
+}
+
+// ============================================================================
+//  Monitor V/T en vivo (tecla 'm') — valores CACHEADOS (readPack ya lee cada
+//  SAMPLE_MS); NO mete trafico extra en el bus ni bloquea el loop.
+// ============================================================================
+void printLiveVT()
+{
+    Serial.println(F("\n===== MONITOR V/T (en vivo) ====="));
+    for (uint8_t b = 0; b < TOTALBOARDS; b++) {
+        Serial.printf("M%02u.%c V:", b / 2 + 1, (b % 2 == 0) ? 'a' : 'b');
+        for (uint8_t c = 0; c < CELLS_FOR_BOARD(b); c++)
+            Serial.printf(" %.3f", bms.getVoltage(b, c));
+        Serial.print(F("   T:"));
+        for (uint8_t k = 0; k < NTCS_PER_BOARD[b % 2]; k++)
+            Serial.printf(" %.1f", bms.getTemperature(b, k));
+        Serial.println();
+    }
+    Serial.printf("Vmin=%.3f Vmax=%.3f dV=%.0fmV | Tmin=%.1f Tmax=%.1f\n",
+                  bms.getMinVoltage(), bms.getMaxVoltage(), bms.getVoltageDelta(),
+                  bms.getMinTemp(), bms.getMaxTemp());
+}
+
+// Detalle de fallo de V: modulo + celda + valor. Mapeo igual que main.cpp:
+// modulo = board/2+1; board par -> celdas 1..6, board impar -> celdas 7..11.
+void printVFaultDetail()
+{
+    for (uint8_t b = 0; b < TOTALBOARDS; b++)
+        for (uint8_t c = 0; c < CELLS_FOR_BOARD(b); c++) {
+            float v = bms.getVoltage(b, c);
+            bool ov = (v >= CELL_VMAX_HARD_V);
+            bool uv = (v <= CELL_VMIN_HARD_V);
+            if (ov || uv)
+                Serial.printf("   Modulo M%02u celda %u: %.3f V (%s)\n",
+                              b / 2 + 1, (b % 2 == 0) ? c + 1 : c + 7,
+                              v, ov ? "OV" : "UV");
+        }
+}
+
+// Detalle de fallo de T: modulo + NTC + valor. board par -> NTC 1..6,
+// board impar -> NTC 7..9.
+void printTFaultDetail()
+{
+    for (uint8_t b = 0; b < TOTALBOARDS; b++)
+        for (uint8_t c = 0; c < NTCS_PER_BOARD[b % 2]; c++) {
+            float t = bms.getTemperature(b, c);
+            if (t <= BQ_NTC_OPEN_C) continue;          // abierto -> lo cubre fNtc
+            bool ot = (t >= CELL_TMAX_CHG_C);
+            bool ut = (t <= CELL_TMIN_CHG_C);
+            if (ot || ut)
+                Serial.printf("   Modulo M%02u NTC %u: %.1f C (%s)\n",
+                              b / 2 + 1, (b % 2 == 0) ? c + 1 : c + 7,
+                              t, ot ? "OT" : "UT");
+        }
+}
+
+// Detalle de NTC abierto(s): que modulo/NTC.
+void printNtcFaultDetail()
+{
+    for (uint8_t b = 0; b < TOTALBOARDS; b++)
+        for (uint8_t c = 0; c < NTCS_PER_BOARD[b % 2]; c++)
+            if (bms.getTemperature(b, c) <= BQ_NTC_OPEN_C)
+                Serial.printf("   Modulo M%02u NTC %u: abierto/invalido\n",
+                              b / 2 + 1, (b % 2 == 0) ? c + 1 : c + 7);
 }
 
 // ============================================================================
@@ -750,6 +863,15 @@ void handleSerial()
         break;
     case 'd':
         printChgStatus();
+        break;
+    case 'm':
+        liveMonitor = !liveMonitor;
+        Serial.printf("[MON] monitor V/T en vivo %s\n", liveMonitor ? "ON" : "OFF");
+        break;
+    case 'q':
+        scrutiMode = !scrutiMode;
+        Serial.printf("[UI] modo %s\n", scrutiMode ? "SCRUTI (diag comms en silencio)"
+                                                   : "DEV (todo visible)");
         break;
     case 'r':
         Serial.println(F("Restart..."));
