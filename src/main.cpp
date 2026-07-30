@@ -109,16 +109,16 @@ static constexpr int NUM_MODULES = TOTALBOARDS / 2;
 #define CELL_OT_C     60.0f     ///< Overtemperature (°C) — EV5.8.4: ≤60
 
 // Debounce por normativa FS EV5.8
-#define FAULT_V_MS     500UL    ///< V debe persistir ≥500 ms
-#define FAULT_T_MS    1000UL    ///< T debe persistir ≥1000 ms
-#define FAULT_NTC_MS  1000UL    ///< NTC abierto (pérdida de medida, clase T)
+#define FAULT_V_MS     3000UL    ///< V debe persistir ≥500 ms
+#define FAULT_T_MS    3000UL    ///< T debe persistir ≥1000 ms
+#define FAULT_NTC_MS  3000UL    ///< NTC abierto (pérdida de medida, clase T)
 // COMM/INIT: ventanas "medias" (2-3 s) para tolerar glitches de ruido del BQ
 // sin abrir el SDC ni relanzar el auto-address a la primera. NO son fallos de
 // celda FS (esos son V/T/NTC arriba, sin tocar). El reInit ahora se dispara
 // SOLO cuando fComm lleva confirmado FAULT_COMM_MS (ver sampleAndEvaluate) →
 // ante ruido se vuelve a pedir datos, no se re-inicializa la cadena.
-#define FAULT_COMM_MS 2000UL    ///< Comms BQ caídas sin recuperar (antes 500)
-#define FAULT_INIT_MS 3000UL    ///< Init BQ fallido persistente (antes: inmediato)
+#define FAULT_COMM_MS 6000UL    ///< Comms BQ caídas sin recuperar (antes 500)
+#define FAULT_INIT_MS 200UL    ///< Init BQ fallido persistente (antes: inmediato)
 
 // Cadencias de muestreo: 2× respecto al mínimo FS para tener ≥2 muestras
 // dentro de cada ventana de debounce → mejor filtrado de ruido transitorio.
@@ -394,6 +394,10 @@ void sampleAndEvaluate()
         lastResV = bms.readVoltages();
         if      (lastResV == BQResult::COMM_ERROR) canNumCommFails++;
         else if (lastResV == BQResult::CRC_ERROR)  canNumCrcFails++;
+        if (lastResV != BQResult::OK)
+            Serial.printf("[BQ] V FALLO %s en board %d\n",
+                          lastResV == BQResult::CRC_ERROR ? "CRC" : "COMM",
+                          bms.getLastReadFailBoard());
         if (lastResV == BQResult::OK) {
             bool badV = (bms.getMinVoltage() < CELL_UV_V) ||
                         (bms.getMaxVoltage() > CELL_OV_V);
@@ -407,6 +411,10 @@ void sampleAndEvaluate()
         lastResT = bms.readTemperatures();
         if      (lastResT == BQResult::COMM_ERROR) canNumCommFails++;
         else if (lastResT == BQResult::CRC_ERROR)  canNumCrcFails++;
+        if (lastResT != BQResult::OK)
+            Serial.printf("[BQ] T FALLO %s en board %d\n",
+                          lastResT == BQResult::CRC_ERROR ? "CRC" : "COMM",
+                          bms.getLastReadFailBoard());
         if (lastResT == BQResult::OK) {
             bool badT = (bms.getMinTemp() < CELL_UT_C) ||
                         (bms.getMaxTemp() > CELL_OT_C);
@@ -428,21 +436,31 @@ void sampleAndEvaluate()
     // Antes bastaba un readErr aislado (ruido) para relanzar el auto-address;
     // ahora ante ruido las lecturas periódicas siguen pidiendo datos y solo se
     // re-inicializa la cadena si las comms siguen caídas toda la ventana.
-    if (fComm.confirmed(now, FAULT_COMM_MS)) {
-        // Reintento con rate-limit (#3, opción B): reInit() bloquea
-        // unos segundos; lo limitamos a uno cada BMS_REINIT_RETRY_MS
-        // (NO en cada flanco, NO en cada loop).
-        if ((now - tLastReinit) >= BMS_REINIT_RETRY_MS) {
-            tLastReinit = now;
-            canNumTriesReset++;
-            if (bms.reInit()) {
-                bmsInitOk = true;
-                fInit.sample(false, now);
-                Serial.println(F("[OK] BQ recuperado tras fallo de comms."));
-            }
+    // reInit: FUERA de precarga, solo si el fallo de comms lleva confirmado
+    // FAULT_COMM_MS (no re-inicializar ante ruido suelto). DURANTE la precarga
+    // (ventana ruidosa: el transitorio de HV puede dejar mudo el board base) se
+    // intenta reconectar YA al PRIMER fallo — el WAKE del reInit puede resucitarlo
+    // antes de que fComm confirme y tumbe BMS_OK.
+    bool reinitNow = prechargeRunning ? readErr
+                                      : fComm.confirmed(now, FAULT_COMM_MS);
+    if (reinitNow && (now - tLastReinit) >= BMS_REINIT_RETRY_MS) {
+        tLastReinit = now;
+        canNumTriesReset++;
+        // En precarga: UN solo intento de auto-address. Un reInit que falla con
+        // 5 intentos bloquea ~5 s y rompería el timing de precarga + el watchdog.
+        // Si no recupera, fComm sigue contando y acaba tumbando BMS_OK igual.
+        bms.setMaxAttempts(prechargeRunning ? 1 : 5);
+        IWatchdog.reload();               // reInit bloquea; no dejar caer el WDG
+        bool okReinit = bms.reInit();
+        IWatchdog.reload();
+        bms.setMaxAttempts(5);            // restaurar default
+        if (okReinit) {
+            bmsInitOk = true;
+            fInit.sample(false, now);
+            fComm.sample(false, now);     // recuperado: rompe la racha (evita confirm -> BMS_OK LOW)
+            Serial.println(F("[OK] BQ recuperado."));
         }
     }
-    // (else: fComm.sample(false) ya reseteó badRun/tStart arriba)
 }
 
 // ============================================================================
@@ -541,11 +559,21 @@ void updateTson()
 hvAccu=0;
 tsonFail=0;
 
+    // Debounce de SDC_3V3 (PC7): un glitch de EMI (transitorio de precarga/HV) NO
+    // debe desarmar el TSON. Solo cuenta como "SDC caido" si SDC_3V3 esta LOW de
+    // forma continua el tiempo de debounce (k=2 lecturas + ventana); una lectura
+    // HIGH rompe la racha. NO compromete el SDC HW (los AIRs abren por hardware);
+    // solo filtra la reaccion logica del latch SDC_TSON. Ajusta los 50 ms al
+    // ancho real del glitch si hiciera falta.
+    static FaultTimer fSdc;
+    fSdc.sample(!sdc3v3, millis());
+    bool sdc3v3Lost = fSdc.confirmed(millis(), 50UL);
+
 
 
 
     // ── Latch SDC_TSON ──
-    if (sdcTson && (!sdc3v3 || tsonFail)) {     // pierde condición de mantenimiento
+    if (sdcTson && (sdc3v3Lost || tsonFail)) {  // pierde condición de mantenimiento (SDC_3V3 con debounce)
         sdcTson = false;
         Serial.println(F("[TSON] desarmado (SDC_3V3 bajo o TSON_FAIL)."));
     }
