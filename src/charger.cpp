@@ -281,6 +281,9 @@ void loop()
     // Usa bmsSafe, que se refresca en el bloque de 1 s de abajo.
     updateTson();
 
+    // Perder el TSON CANCELA la orden de carga: hay que re-armar el TSON (y dar 'g').
+    if (!sdcTson) chargeRequested = false;
+
     // ── Seguridad del pack: leer + evaluar RÁPIDO (SAMPLE_MS), desacoplado del
     //    envío de 1 s. Así un OV/OT/NTC se detecta en <0,5 s, no en ~1 s. ──
     static unsigned long tSample = 0;
@@ -303,7 +306,7 @@ void loop()
     if (millis() - tMsg1 >= MSG1_PERIOD_MS) {
         tMsg1 = millis();
 
-        bool allow = chargeRequested && bmsSafe;
+        bool allow = chargeRequested && bmsSafe && sdcTson;   // no cargar sin TSON armado
         sendMessage1(allow);
         charging = allow;
 
@@ -848,7 +851,7 @@ void handleSerial()
     switch (buf[0]) {
     case 'g':
         chargeRequested = true;
-        Serial.printf("[CHG] START solicitado (%.1f A). La carga arranca si la seguridad da OK.\n",
+        Serial.printf("[CHG] START solicitado (%.1f A). La carga arranca si la seguridad da OK y el TSON esta armado.\n",
                       chgCurrentA);
         break;
     case 'x':
