@@ -86,6 +86,7 @@ HallSensor hall(PIN_AMP_30A, PIN_AMP_350A);
 SocEstimator soc;   // SOC: coulomb counting + OCV (ver SocEstimator.h)
 
 FanController fan(PIN_PWM);   // ventiladores (ver FanController.h)
+static bool   fanForceMax = false;   ///< comando 'F': fuerza ventiladores al 100 % (test)
 
 // NUM_MODULES derivado del driver: 2 boards por módulo. Se auto-adapta a
 // TOTALBOARDS (20 banco / 24 pack completo).
@@ -313,7 +314,7 @@ void setup()
         logger.log(buildFaultRecord(FaultLogger::EVT_BOOT, 0));
     }
 
-    Serial.println(F("Cmd: v t a s f c i r  d=dump log  D=clear log  C=clear cnt"));
+    Serial.println(F("Cmd: v t a s f c i r  F=fans100%  d=dump log  D=clear log  C=clear cnt"));
 
     // Arrancar el watchdog AL FINAL (tras el init/calibración acotados).
     // Una vez iniciado NO se puede parar (es independiente por HW).
@@ -338,7 +339,7 @@ void loop()
     // Fail-safe de refrigeración: T no fresca/fiable (lectura T fallida,
     // comms o NTC abierto) → ventiladores 100 % (no fiarse de Tmax rancia).
     bool fanFS = (lastResT != BQResult::OK) || fComm.cond || fNtc.cond;
-    fan.update(bms.getMaxTemp(), hall.getCurrent(), fanFS);  // curva + FF
+    fan.update(bms.getMaxTemp(), hall.getCurrent(), fanFS || fanForceMax);  // curva + FF; 'F' fuerza 100%
     updateBmsOk();         // BMS_OK no-latching (auto-rearma). Antes que updateTson.
     updateTson();          // máquina TSON + precarga (usa bmsFault de updateBmsOk)
     updateCanTx();         // telemetría CAN IDs 10-16 (throttled por timer)
@@ -444,8 +445,8 @@ void sampleAndEvaluate()
     bool reinitNow = prechargeRunning ? readErr
                                       : fComm.confirmed(now, FAULT_COMM_MS);
     if (reinitNow && (now - tLastReinit) >= BMS_REINIT_RETRY_MS) {
-        tLastReinit = now;
-        canNumTriesReset++;
+            tLastReinit = now;
+            canNumTriesReset++;
         // En precarga: UN solo intento de auto-address. Un reInit que falla con
         // 5 intentos bloquea ~5 s y rompería el timing de precarga + el watchdog.
         // Si no recupera, fComm sigue contando y acaba tumbando BMS_OK igual.
@@ -455,13 +456,15 @@ void sampleAndEvaluate()
         IWatchdog.reload();
         bms.setMaxAttempts(5);            // restaurar default
         if (okReinit) {
-            bmsInitOk = true;
-            fInit.sample(false, now);
+                bmsInitOk = true;
+                fInit.sample(false, now);
             fComm.sample(false, now);     // recuperado: rompe la racha (evita confirm -> BMS_OK LOW)
             Serial.println(F("[OK] BQ recuperado."));
+            }
         }
     }
-}
+    // (else: fComm.sample(false) ya reseteó badRun/tStart arriba)
+
 
 // ============================================================================
 //  BMS_OK — no-latching, auto-rearma (el latch que abre el SDC es HW)
@@ -996,6 +999,11 @@ void handleSerial()
         } else {
             Serial.println(F("Re-init [ERROR]"));
         }
+        break;
+
+    case 'F':
+        fanForceMax = !fanForceMax;
+        Serial.printf("[FAN] forzar 100%% = %s\n", fanForceMax ? "ON" : "OFF");
         break;
 
     case 'r':

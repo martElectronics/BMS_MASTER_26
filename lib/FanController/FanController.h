@@ -61,7 +61,7 @@
 #define FAN_FF_DUTY      50      ///< % piso de duty por feed-forward
 #endif
 #ifndef FAN_PWM_HZ
-#define FAN_PWM_HZ       1000u   ///< [TUNE] frecuencia PWM (2/3 hilos vía driver)
+#define FAN_PWM_HZ       25000u  ///< 25 kHz: entrada PWM del ventilador de 4 hilos (CFM-6025BF, spec 21-28 kHz). Antes 1000 (asumía 2/3 hilos vía MOSFET).
 #endif
 
 class FanController {
