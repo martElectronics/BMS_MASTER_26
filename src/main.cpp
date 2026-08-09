@@ -105,14 +105,14 @@ static constexpr int NUM_MODULES = TOTALBOARDS / 2;
 //   OT  60 °C — coincide con FS EV5.8.4 y máx. del datasheet. Fans saturan
 //             al 100 % a 50 °C → 10 °C de margen real antes del trip.
 #define CELL_UV_V      2.8f     ///< Undervoltage (V)
-#define CELL_OV_V      4.2f     ///< Overvoltage (V)
+#define CELL_OV_V      5.2f     ///< Overvoltage (V)
 #define CELL_UT_C    -20.0f     ///< Undertemperature (°C)
 #define CELL_OT_C     60.0f     ///< Overtemperature (°C) — EV5.8.4: ≤60
 
 // Debounce por normativa FS EV5.8
-#define FAULT_V_MS     3000UL    ///< V debe persistir ≥500 ms
-#define FAULT_T_MS    3000UL    ///< T debe persistir ≥1000 ms
-#define FAULT_NTC_MS  3000UL    ///< NTC abierto (pérdida de medida, clase T)
+#define FAULT_V_MS     5000UL    ///< V debe persistir ≥500 ms
+#define FAULT_T_MS    5000UL    ///< T debe persistir ≥1000 ms
+#define FAULT_NTC_MS  5000UL    ///< NTC abierto (pérdida de medida, clase T)
 // COMM/INIT: ventanas "medias" (2-3 s) para tolerar glitches de ruido del BQ
 // sin abrir el SDC ni relanzar el auto-address a la primera. NO son fallos de
 // celda FS (esos son V/T/NTC arriba, sin tocar). El reInit ahora se dispara
@@ -186,6 +186,22 @@ static uint8_t       cntFltNtc  = 0;   ///< episodios de NTC abierto
 static uint8_t       cntFltComm = 0;   ///< episodios de comms BQ caídas
 static uint8_t       cntFltHall = 0;   ///< episodios de fallo del Hall
 static uint8_t       cntFltInit = 0;   ///< episodios de init BQ fallido
+
+// ── Flags STICKY (latcheados desde el boot) — CAN ID 17 ─────────────────────
+// Capturan eventos MÁS CORTOS que el periodo de envío del CAN: un glitch de
+// 10 ms en SDC_3V3 se pierde entre dos tramas de estado (ID 15 B3 manda el
+// NIVEL actual), pero aquí deja el bit puesto para el post-mortem.
+// Se muestrean por FLANCO (transiciones), con la lectura CRUDA del pin: así
+// se registra el glitch aunque el debounce lo filtre y no llegue a desarmar.
+// Se limpian solo con reset del MCU o con el comando 'C'.
+static bool          stkSdcLost    = false; ///< SDC_3V3 cayó alguna vez
+static bool          stkTsonDisarm = false; ///< el latch TSON se desarmó alguna vez
+static bool          stkTsonFail   = false; ///< TSON_FAIL se activó alguna vez
+static bool          stkImdLost    = false; ///< IMD_OK cayó alguna vez
+static bool          stkBmsFault   = false; ///< bmsFault confirmado alguna vez
+static uint8_t       cntTsonDisarm = 0;     ///< nº de desarmes del TSON (satura a 255)
+static uint8_t       cntSdcLost    = 0;     ///< nº de caídas de SDC_3V3 (satura a 255)
+static uint8_t       cntImdLost    = 0;     ///< nº de caídas de IMD_OK (satura a 255)
 
 // ── Debug / diagnóstico (ID 15 BMS_DEBUG) ──────────────────────────────────
 // firstFaultTrigger : primer fallo que entró en este episodio (enum B4 ID 15)
@@ -297,13 +313,14 @@ void setup()
         Serial.println(F("[CAN] FDCAN init FALLO — TX CAN deshabilitada."));
     } else {
         gCan->configurePacketTimersByPriority();   // BMS_DEBUG (todos los fallos por bits)
-        gCan->setPacketTimer(16, 500);             // ID 16 contadores de fallo: 500 ms
+        gCan->setPacketTimer(16, 100);             // ID 16 contadores de fallo: 100 ms (post-mortem: 5x resolucion)
+        gCan->setPacketTimer(17, 100);             // ID 17 sticky SDC/TSON: 100 ms
         // 13/14/15 NO están en configurePacketTimersByPriority() (la lista salta de
         // 12 a 33); sin timer, send() los emitiría cada loop (kHz) y saturaría el bus
         // (ademas son IDs bajos = alta prioridad CAN → inanición de VCU/PDM).
         gCan->setPacketTimer(13, 500);             // ID 13 diagnóstico
         gCan->setPacketTimer(14, 500);             // ID 14 tiempos/contadores de comms
-        gCan->setPacketTimer(15, 500);             // ID 15 BMS_DEBUG
+        gCan->setPacketTimer(15, 100);             // ID 15 BMS_DEBUG: 100 ms (era 500 → un episodio corto caia entre tramas)
         Serial.println(F("[CAN] FDCAN listo (125k, IDs 10-16, 386-392)."));
     }
 
@@ -505,6 +522,7 @@ void updateBmsOk()
     if (bmsFault) {
         if (faultEpisodeStart == 0) {
             faultEpisodeStart = now;
+            stkBmsFault = true;              // sticky post-mortem (ID 17)
             // Prioridad arbitraria: si varios entran a la vez, gana el de
             // mayor severidad de seguridad (V > T > NTC > Comm > Hall > Init).
             if      (faultV)     firstFaultTrigger = 1;
@@ -558,9 +576,20 @@ void updateTson()
     bool hvAccu   = digitalRead(PIN_HV_ACCU_VIL);
     bool tsonBtn  = digitalRead(PIN_TSON_BTN);
 
+    // ── STICKY para post-mortem (CAN ID 17) ──────────────────────────────────
+    // Por FLANCO y con la señal CRUDA (antes de cualquier override/debounce):
+    // registra glitches más cortos que el periodo de envío del CAN, que en el
+    // nivel instantáneo del ID 15 B3 no se verían.
+    {
+        bool imdOkRaw = digitalRead(PIN_IMD_OK);
+        static bool sdcPrev = true, imdPrev = true, tsonFailPrev = false;
+        if (sdcPrev && !sdc3v3) { stkSdcLost = true; if (cntSdcLost < 255) cntSdcLost++; }
+        if (imdPrev && !imdOkRaw) { stkImdLost = true; if (cntImdLost < 255) cntImdLost++; }
+        if (!tsonFailPrev && tsonFail) stkTsonFail = true;
+        sdcPrev = sdc3v3; imdPrev = imdOkRaw; tsonFailPrev = tsonFail;
+    }
 
-hvAccu=0;
-tsonFail=0;
+
 
     // Debounce de SDC_3V3 (PC7): un glitch de EMI (transitorio de precarga/HV) NO
     // debe desarmar el TSON. Solo cuenta como "SDC caido" si SDC_3V3 esta LOW de
@@ -578,13 +607,15 @@ tsonFail=0;
     // ── Latch SDC_TSON ──
     if (sdcTson && (sdc3v3Lost || tsonFail)) {  // pierde condición de mantenimiento (SDC_3V3 con debounce)
         sdcTson = false;
+        stkTsonDisarm = true;                       // sticky post-mortem (ID 17)
+        if (cntTsonDisarm < 255) cntTsonDisarm++;
         Serial.println(F("[TSON] desarmado (SDC_3V3 bajo o TSON_FAIL)."));
     }
     bool btnRising = tsonBtn && !tsonBtnPrev;   // flanco de subida del botón
     if (!sdcTson && btnRising && !bmsFault && !hvAccu && sdc3v3 && !tsonFail) {
         sdcTson = true;
         Serial.println(F("[TSON] armado."));
-        delay(5000);
+        delay(2000);
     }
     tsonBtnPrev = tsonBtn;
     digitalWrite(PIN_SDC_TSON, sdcTson ? HIGH : LOW);
@@ -835,6 +866,28 @@ void updateCanTx()
                        cntFltComm, cntFltHall, cntFltInit };
     gCan->setPacket((uint32_t)16, d16, 6);
 
+    // ── ID 17 (0x11) — STICKY SDC/TSON (post-mortem) ───────────────────────
+    // El ID 15 B3 manda el NIVEL actual de SDC_3V3/TSON_FAIL/IMD_OK; si el
+    // evento dura menos que el periodo de envío, no se ve. Estos bits quedan
+    // LATCHEADOS desde el boot → un glitch de 10 ms sigue visible después.
+    // Lectura del log: si stkSdcLost=1 y stkBmsFault=0 → el SDC lo abrió OTRO
+    // nodo (IMD/BSPD/paro/inercia), NO el BMS.
+    //   B0 bit0 SDC_3V3 cayó · bit1 TSON desarmado · bit2 TSON_FAIL activo
+    //          bit3 IMD_OK cayó · bit4 precarga FALLÓ · bit5 bmsFault ocurrió
+    //   B1 nº desarmes TSON · B2 nº caídas SDC_3V3 · B3 nº caídas IMD_OK
+    //   B4-7 reservado (0)
+    uint8_t d17[8] = {0};
+    if (stkSdcLost)    d17[0] |= (1 << 0);
+    if (stkTsonDisarm) d17[0] |= (1 << 1);
+    if (stkTsonFail)   d17[0] |= (1 << 2);
+    if (stkImdLost)    d17[0] |= (1 << 3);
+    if (prechargeFail) d17[0] |= (1 << 4);
+    if (stkBmsFault)   d17[0] |= (1 << 5);
+    d17[1] = cntTsonDisarm;
+    d17[2] = cntSdcLost;
+    d17[3] = cntImdLost;
+    gCan->setPacket((uint32_t)17, d17, 8);
+
     // ── ID 392 (0x188) — SOC (UINT8, %) ────────────────────────────────────
     uint8_t socv = soc.soc();
     gCan->setPacket((uint32_t)392, &socv, 1);
@@ -1028,6 +1081,9 @@ void handleSerial()
     case 'C':
         // Reset de los contadores de fallo por causa (CAN ID 16).
         cntFltV = cntFltT = cntFltNtc = cntFltComm = cntFltHall = cntFltInit = 0;
+        // Sticky del ID 17 (SDC/TSON): mismo comando de reset.
+        stkSdcLost = stkTsonDisarm = stkTsonFail = stkImdLost = stkBmsFault = false;
+        cntTsonDisarm = cntSdcLost = cntImdLost = 0;
         Serial.println(F("Contadores de fallo (ID 16) reseteados a 0."));
         break;
 
@@ -1060,6 +1116,10 @@ void printStatus()
                   fNtc.confirmed(millis(), FAULT_NTC_MS),
                   fComm.confirmed(millis(), FAULT_COMM_MS),
                   !hall.isOK());
+    Serial.printf("Sticky(ID17): SDC_perdido=%d(%u) TSON_desarm=%d(%u) TSON_FAIL=%d "
+                  "IMD_perdido=%d(%u) BMS_fallo=%d\n",
+                  stkSdcLost, cntSdcLost, stkTsonDisarm, cntTsonDisarm, stkTsonFail,
+                  stkImdLost, cntImdLost, stkBmsFault);
     Serial.printf("Cnt(ID16): V=%u T=%u NTC=%u COMM=%u HALL=%u INIT=%u  [C=reset]\n",
                   cntFltV, cntFltT, cntFltNtc, cntFltComm, cntFltHall, cntFltInit);
     Serial.printf("TSON: SDC_TSON=%d PRE_FAIL=%d | SDC_3V3=%d TSON_FAIL=%d HV_ACCU=%d IMD_OK=%d\n",

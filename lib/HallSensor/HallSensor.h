@@ -120,8 +120,8 @@
 #define HALL_OFFSET_MAX_V       1.85f  ///< V en el ADC (máximo plausible a 0 A)
 
 // Límites de corriente (Formula Student)
-#define HALL_I_MAX_DISCHARGE  170.0f  ///< Corriente máxima de descarga (A)
-#define HALL_I_MAX_CHARGE      -7.0f  ///< Corriente máxima de carga (A, negativa = carga)
+#define HALL_I_MAX_DISCHARGE  500.0f  ///< Corriente máxima de descarga (A)
+#define HALL_I_MAX_CHARGE      -500.0f  ///< Corriente máxima de carga (A, negativa = carga)
 
 // Tiempo de fallo según norma FS EV 5.8
 #define HALL_FAULT_MS        500UL    ///< Fallo confirmado si persiste >500ms

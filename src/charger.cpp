@@ -55,10 +55,10 @@
 // eran [12][11]=132 puntos, pero indicaste 5S/módulo). ⚠ CONFIRMAR con
 // multímetro la tensión del pack al 100 %.
 #define CHG_TERM_VOLT_V      456.0f     ///< ⚠ Vmax fin de carga (valor del FW antiguo). FIJO: nunca por serial.
-#define CHG_START_CURRENT_A  3.0f       ///< corriente DC al arrancar (la que ya sabes que funciona)
-#define CHG_MAX_CURRENT_A    4.0f       ///< ⚠ TOPE duro: el serial no puede pedir más (atado al límite AC/plomos)
+#define CHG_START_CURRENT_A  8.0f       ///< corriente DC al arrancar (la que ya sabes que funciona)
+#define CHG_MAX_CURRENT_A    14.0f       ///< ⚠ TOPE duro: el serial no puede pedir más (atado al límite AC/plomos)
 
-#define CELL_VMAX_HARD_V     4.25f      ///< corte DURO por celda (seguridad independiente de Vmax)
+#define CELL_VMAX_HARD_V     4.2f      ///< corte DURO por celda (seguridad independiente de Vmax)
 // Corte DURO por celda BAJA. Mismo umbral que main.cpp (CELL_UV_V) y que el
 // registro UV_THRESH del BQ (0x53 = 2.8 V). Cubre dos escenarios:
 //   · celda realmente descargada → no se carga a 3 A un pack por debajo de UV;
