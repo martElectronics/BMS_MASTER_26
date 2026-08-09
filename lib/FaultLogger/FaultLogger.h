@@ -55,15 +55,23 @@ public:
         EVT_PRECHARGE_FAIL = 5,   ///< timeout 5 s de precarga
     };
 
+    /// Almacén en uso tras begin().
+    enum Backend : uint8_t {
+        BK_NONE  = 0,   ///< sin almacenamiento: log() es no-op
+        BK_FRAM  = 1,   ///< MB85RC256V por I²C (32 KB, ring con header)
+        BK_FLASH = 2,   ///< flash interna del STM32 (4 KB, append-only)
+    };
+
     /**
-     * Inicializa I²C3 en PC8/PC9 @ 400 kHz, comprueba que el MB85RC256V
-     * responde, lee/valida el header. Si el magic está corrupto o no
-     * existe (primera vez), formatea el log.
-     * @return true si la FRAM responde y queda lista para loguear.
+     * Inicializa el log. Intenta primero la FRAM (I²C3 PC8/PC9 @ 400 kHz);
+     * si el MB85RC256V no responde, cae automáticamente a la FLASH INTERNA
+     * del STM32 (últimos 4 KB), que persiste igual entre apagados.
+     * @return true si algún backend quedó listo para loguear.
      */
     bool begin();
 
-    bool isReady() const { return _ready; }
+    bool    isReady() const { return _ready; }
+    Backend backend() const { return _backend; }
 
     /**
      * Añade un evento al ring buffer. Avanza writeIdx, incrementa
@@ -98,11 +106,38 @@ private:
     static constexpr uint32_t MAGIC      = 0x4D415254UL; ///< "MART" big-endian
     static constexpr uint8_t  VERSION    = 1;
 
+    // ── Backend FLASH interna ────────────────────────────────────────────────
+    // Últimos 4 KB de la flash del STM32G474RE (512 KB): 0x0807F000-0x0807FFFF.
+    // La dirección está alineada tanto a página de 2 KB (dual-bank, el default
+    // del G474: páginas 126-127 del banco 2) como de 4 KB (single-bank: página
+    // 127); _flashErase() detecta el modo en runtime vía FLASH_OPTR_DBANK.
+    // El firmware ocupa ~16 % de la flash, así que esta zona queda muy lejos
+    // del código. Diferencias con la FRAM que fuerzan otro diseño:
+    //   · Solo se escribe en doubleword (64 bits) alineado.
+    //   · NO se puede reescribir sin borrar la página entera → NADA de header
+    //     (que habría que reescribir en cada log): el log es APPEND-ONLY y el
+    //     punto de escritura se busca al arrancar (primer slot todo 0xFF).
+    //   · El borrado bloquea la CPU ~20-40 ms → solo al llenarse (1 vez cada
+    //     FLASH_LOG_SLOTS eventos), nunca en un log normal.
+    static constexpr uint32_t FLASH_LOG_ADDR  = 0x0807F000UL;  ///< base del log en flash
+    static constexpr uint16_t FLASH_LOG_SLOTS = 256;           ///< 4096 B / 16 B por registro
+
+    Backend  _backend   = BK_NONE;
+    uint16_t _flashSlot = 0;        ///< próximo slot libre (== FLASH_LOG_SLOTS si lleno)
+
+    bool _flashBegin();
+    bool _flashLog(const uint8_t* rec);
+    void _flashDump(void (*tick)());
+    bool _flashErase();
+
     bool _readBytes (uint16_t addr, uint8_t* data, size_t len);
     bool _writeBytes(uint16_t addr, const uint8_t* data, size_t len);
     bool _readHeader();
     bool _writeHeader();
     void _formatLog();
+
+    static void _serialize(const FaultRecord& rec, uint32_t ts, uint8_t out[16]);
+    static void _printRec(uint16_t idx, const uint8_t* rec);
 
     static const char* _eventName(uint8_t type);
 };
