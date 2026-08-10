@@ -807,27 +807,48 @@ Numeración V2.5 (packets 0x01-0x0C). 2 bytes en bytes 0-1 (SB 8) salvo ERPM
 
 ---
 
-## 22. VCU (mart-cockpit) — telemetría que transmite
+## 22. VCU (VCU_26) — telemetría que transmite
 
-Lo que **publica la VCU** y el AiM puede loguear (fuente: `CAN_VCU.md` del
-cockpit, rama `feature/modJoseSTM32`). Standard ID, Big Endian, 125 kbps.
-Start Bit en convención RaceStudio (byte bajo en multi-byte).
+Lo que **publica la VCU** y el AiM puede loguear. Standard ID, Big Endian,
+125 kbps. Start Bit en convención RaceStudio (byte bajo en multi-byte).
+
+> **Fuente: repo `VCU_26`, `src/Control.cpp` → `publishTelemetry()` (rev.
+> 2026-08-10).** La versión anterior de esta sección se generó desde
+> `CAN_VCU.md` de `mart-cockpit`, que es otro firmware: el layout de **0x488
+> no coincidía** y el AiM decodificaba ese ID cruzado. 0x48B, 0x48C y 0x48E sí
+> coincidían y no han cambiado.
+>
+> ⚠ La VCU **solo transmite**. No recibe nada, así que el bloque de comandos
+> hacia el inversor de §21.2 no lo manda este firmware.
 
 ### 22.1 ID 0x488 (1160) — VCU_DIAG (8 bytes)
 | Canal | Short | Start Bit | Bits | Fmt | Descripción |
 |---|---|---|---|---|---|
-| VCU_FaultCause | FCAU | 0  | 8  | U | 0=OK 1=sinR2D 2=SDC abierto 3=APPS impl 4=fallo inv 5=BMS perdido |
-| VCU_AppsImpl   | AIMP | 8  | 8  | U | 0=none 1=S1 2=S2 3=ambos 4=desv>10% |
-| VCU_BmsFresh   | BMSF | 16 | 1  | U | trama BMS reciente |
-| VCU_InvFresh   | INVF | 17 | 1  | U | estado inversor reciente |
-| VCU_Simulating | SIMU | 18 | 1  | U | modo simulación |
-| VCU_ModeCAN    | MCAN | 19 | 1  | U | 1=control CAN |
-| VCU_Debug      | DBG_ | 20 | 1  | U | debug serie |
-| VCU_DriveEN    | DREN | 21 | 1  | U | par habilitado |
-| VCU_ResetCause | RCAU | 24 | 8  | U | 1=BOR 2=NRST 3=SW 4=IWDG 5=WWDG 6=lowpwr |
-| VCU_InvFault   | IFLT | 32 | 8  | U | eco del fault code del inversor |
-| VCU_Throttle   | THR_ | 40 | 8  | U | acelerador 0-100 % |
-| VCU_Heartbeat  | HBT_ | 56 | 16 | U | cuenta de loop (se congela si cuelga) |
+| VCU_FaultCause | FCAU | 0  | 8  | U | causa de no-R2D (ver tabla abajo) |
+| VCU_ResetCause | RCAU | 8  | 8  | U | 0=desconocido 1=power/BOR 2=NRST 3=SW 4=IWDG 5=WWDG 6=lowpwr |
+| VCU_Heartbeat  | HBT_ | 24 | 16 | U | cuenta de loop; **se congela si el firmware se cuelga** |
+
+Bytes 4-7 reservados (siempre 0). No los declares o loguearás ceros.
+
+**`VCU_FaultCause`** — el primero que aplica, en este orden:
+
+| Valor | Significado |
+|---|---|
+| 0 | R2D activo / OK |
+| 2 | SDC abierto |
+| 6 | freno desconectado o en corto (brake2 fuera de banda) |
+| 3 | APPS implausible |
+| 1 | esperando start + freno |
+
+> Los valores 4 (fallo inversor) y 5 (BMS perdido) del layout viejo **no existen**
+> en VCU_26: este firmware no habla con el inversor ni escucha al BMS. El 6 es
+> nuevo. `VCU_AppsImpl`, `VCU_InvFault`, `VCU_Throttle` y los bits de
+> BmsFresh/InvFresh/Simulating/ModeCAN/Debug/DriveEN **tampoco se emiten**; si
+> siguen declarados en RaceStudio, bórralos (leen basura o ceros).
+>
+> `VCU_Heartbeat` es el canal más útil para vigilancia en pista: si deja de
+> incrementar con la VCU alimentada, el loop está colgado. Combínalo con
+> `VCU_ResetCause = 4` (IWDG) para detectar el ciclo cuelgue → reset.
 
 ### 22.2 ID 0x48B (1163) — APPS (8 bytes)
 | Canal | Short | Start Bit | Bits | Fmt | Gain | Ud |
@@ -853,7 +874,11 @@ Start Bit en convención RaceStudio (byte bajo en multi-byte).
 | VCU_Start  | STRT | 24 | 8  | U | pulsador Start |
 | VCU_R2D    | R2D_ | 32 | 8  | U | Ready-to-Drive |
 | VCU_AppsSt | APST | 40 | 8  | U | estado APPS 0=NORMAL 1=IMPL 2=PENDING |
+| VCU_BrakeFlt | BFLT | 48 | 8 | U | freno desconectado/en corto → tumba el R2D |
 
+> `VCU_BrakeFlt` (byte 6) no estaba en la versión anterior de esta tabla pero la
+> VCU sí lo emite. Es el que explica un `VCU_FaultCause = 6`. Byte 7 reservado (0).
+>
 > IDs VCU del Excel aún **sin implementar**: 0x190 (400), 0x489/0x48A (FAIL
 > CODES), 0x48D (steer/ruedas), 0x48F (PWM). El layout de 0x48E cambió respecto
 > al Excel original (Vbat 2 bytes, SDC en vez de TSON, +estado APPS).
@@ -864,5 +889,7 @@ Start Bit en convención RaceStudio (byte bajo en multi-byte).
 añadidos en rama `testing` rev. 2026-05-28; §21 inversor DTI HV-500 rev.
 2026-05-30; §21 inversor rehecha con manual DTI v2.5 + DBC: Standard/node 1,
 numeracion V2.5, transmit 0x3E1-0x4C1, comandos 0x21-0x181, rev. 2026-05-31;
-§22 telemetria de la VCU mart-cockpit rev. 2026-05-31).
+§22 telemetria de la VCU mart-cockpit rev. 2026-05-31;
+§22 REHECHA contra el repo VCU_26 (src/Control.cpp) rev. 2026-08-10: 0x488
+corregido, +VCU_BrakeFlt en 0x48E).
 Si cambia alguna trama, regenerar este doc antes de subir el coche a pista.*
