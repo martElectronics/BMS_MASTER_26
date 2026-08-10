@@ -48,10 +48,11 @@
 | 10 | 0x0A | 1  | 800 ms | Estado general (8 flags) |
 | 11 | 0x0B | 8  | 799 ms | MaxT, MaxV, MinV, MinT |
 | 12 | 0x0C | 6  | 799 ms | Status V / Status T (bitmap por módulo) + V_DELTA (mV) |
-| 13 | 0x0D | 4  | 798 ms | maxFailTime, numTriesReset |
-| 14 | 0x0E | 8  | 200 ms | lastFailTime, contadores comm/CRC/reset |
-| **15** | **0x0F** | **8** | **200 ms** | **BMS_DEBUG — granularidad por bit** |
-| 16 | 0x10 | 6 | 500 ms | Contadores de fallo por causa (6×UINT8) |
+| 13 | 0x0D | 4  | 500 ms | maxFailTime, numTriesReset |
+| 14 | 0x0E | 8  | 500 ms | lastFailTime, contadores comm/CRC/reset |
+| **15** | **0x0F** | **8** | **100 ms** | **BMS_DEBUG — granularidad por bit** |
+| 16 | 0x10 | 6 | 100 ms | Contadores de fallo por causa (6×UINT8) |
+| **17** | **0x11** | **8** | **100 ms** | **STICKY SDC/TSON — latcheado, post-mortem** |
 | 386 | 0x182 | 8 | 557 ms paginado | IDmod, V1, V2, V3 |
 | 387 | 0x183 | 8 | 556 ms paginado | IDmod, V4, V5, V6 |
 | 388 | 0x184 | 8 | 556 ms paginado | IDmod, V7, V8, V9 |
@@ -164,7 +165,7 @@ Bytes 2-3: numTriesReset (uint16 BE)        — reintentos de reInit BQ
 
 ---
 
-## 8. ID 14 (0x0E) — Último episodio · 8 bytes · 200 ms
+## 8. ID 14 (0x0E) — Último episodio · 8 bytes · 500 ms
 
 ```
 Bytes 0-1: lastFailMs (uint16 BE)           — duración del episodio actual/último
@@ -186,7 +187,7 @@ Bytes 6-7: numTriesReset (uint16 BE)        — idéntico al de ID 13
 
 ---
 
-## 9. ID 15 (0x0F) — BMS_DEBUG · 8 bytes · 200 ms
+## 9. ID 15 (0x0F) — BMS_DEBUG · 8 bytes · 100 ms
 
 **El frame clave para diagnosticar caídas de BMS_OK en pista.**
 
@@ -257,7 +258,7 @@ B7: causa del último reset
 
 ---
 
-## 9b. ID 16 (0x10) — Contadores de fallo por causa · 6 bytes · 500 ms
+## 9b. ID 16 (0x10) — Contadores de fallo por causa · 6 bytes · 100 ms
 
 > ⚠ **No está en el Excel base** — añadido en rama `testing`. Si regeneras el
 > Excel de datos CAN, mete este ID como BMS / 0x10 / 6 bytes / UINT8.
@@ -287,6 +288,48 @@ Byte 5: cntFltInit — de init BQ fallido
 
 > Complementa al ID 15: el ID 15 te dice qué pasa **ahora**; el ID 16 te dice
 > **cuántas veces** ha pasado cada cosa aunque ya se haya despejado.
+
+---
+
+## 9c. ID 17 (0x11) — STICKY SDC/TSON · 8 bytes · 100 ms
+
+> ⚠ **No está en el Excel base** — nuevo. Si regeneras el Excel de datos CAN,
+> mete este ID como BMS / 0x11 / 8 bytes.
+
+El ID 15 B3 manda el **nivel actual** de SDC_3V3 / TSON_FAIL / IMD_OK: si el
+evento dura menos que el periodo de envío, cae entre dos tramas y no deja
+rastro. Estos bits quedan **LATCHEADOS desde el boot** — se muestrean por
+FLANCO y con la señal **cruda** (antes del debounce), así que un glitch de
+10 ms que ni siquiera llegó a desarmar el TSON sigue visible después.
+Reset por comando serie `C` o al reiniciar el micro.
+
+```
+Byte 0   : bits sticky (ver tabla)
+Byte 1   : cntTsonDisarm — nº de desarmes del TSON
+Byte 2   : cntSdcLost    — nº de caídas de SDC_3V3
+Byte 3   : cntImdLost    — nº de caídas de IMD_OK
+Byte 4-7 : reservado (0)
+```
+
+| Canal | Short | Byte | Bit | Len | Tipo | Descripción |
+|---|---|---|---|---|---|---|
+| BMS_StkSdcLost  | SKSD | 0 | 0 | 1 | bit | SDC_3V3 cayó alguna vez |
+| BMS_StkTsonDis  | SKTD | 0 | 1 | 1 | bit | el latch TSON se desarmó alguna vez |
+| BMS_StkTsonFail | SKTF | 0 | 2 | 1 | bit | TSON_FAIL se activó alguna vez |
+| BMS_StkImdLost  | SKIM | 0 | 3 | 1 | bit | IMD_OK cayó alguna vez |
+| BMS_StkPreFail  | SKPF | 0 | 4 | 1 | bit | precarga falló (latch duro) |
+| BMS_StkBmsFault | SKBF | 0 | 5 | 1 | bit | bmsFault confirmado alguna vez |
+| BMS_CntTsonDis  | CNTD | 1 | 0 | 8 | uint8 | nº de desarmes del TSON |
+| BMS_CntSdcLost  | CNSD | 2 | 0 | 8 | uint8 | nº de caídas de SDC_3V3 |
+| BMS_CntImdLost  | CNIM | 3 | 0 | 8 | uint8 | nº de caídas de IMD_OK |
+
+### Receta: ¿paró el coche el BMS, o fue otro nodo del SDC?
+
+| SKBF | SKSD | Lectura |
+|---|---|---|
+| **1** | — | **Fue el BMS.** Mira ID 15 B4 (primer trigger) e ID 16 (qué contador subió) |
+| 0 | **1** | **El SDC lo abrió OTRO nodo** (IMD / BSPD / paro / inercia). El BMS solo reaccionó desarmando el TSON |
+| 0 | 0 | Ni BMS ni SDC → mirar reset del micro (ID 15 B7; contadores del ID 16 cayendo a 0 = hubo reset) |
 
 ---
 
@@ -434,6 +477,7 @@ Dos sistemas en paralelo: **nombre largo** (descriptivo, hasta 16 chars) y
 - `V_*` / `T_*` / `NTC_*` → snapshots (ID 15 B2).
 - `State_*` / `Pre_*` / `Pin_*` → state del sistema (ID 15 B3).
 - `Rst_*` → causa del último reset (ID 15 B7).
+- `Stk_*` → sticky latcheados desde el boot (ID 17).
 - `Mod_*` → detalle por módulo (IDs 386-391).
 
 ### Short name (4 chars, AiM RaceStudio)
@@ -454,6 +498,8 @@ Las letras de la 1ª columna dicen "categoría":
 | `IM` | IDmod (uno por ID paginado) | IM86..IM91 |
 | `FF` | First Fault (enum) | FFLT |
 | `EP` | Episodio | EPMS |
+| `SK` | Sticky latcheado desde el boot (ID 17) | SKSD, SKTD, SKTF, SKIM, SKPF, SKBF |
+| `CN` | Contador (IDs 16 y 17) | CNTV..CNTI, CNTD, CNSD, CNIM |
 
 Los short names ya existentes en tu protocolo `01_MART` (Tmax/Vmax/Vmin/Tmin
 del ID 0xB, LTFT/NCFA/NCRC del ID 0xE, SOC del ID 0x188) se mantienen tal
@@ -600,6 +646,19 @@ y `Data Format` (`U` = Unsigned, `S` = Signed).
 | BMS_CntComm | CNTC | 24 | 8 | U |
 | BMS_CntHall | CNTH | 32 | 8 | U |
 | BMS_CntInit | CNTI | 40 | 8 | U |
+
+### ID 0x11 — Sticky SDC/TSON (DLC 8)
+| Name | Short | Start Bit | Bits | Fmt |
+|---|---|---|---|---|
+| BMS_StkSdcLost | SKSD | 0 | 1 | U |
+| BMS_StkTsonDis | SKTD | 1 | 1 | U |
+| BMS_StkTsonFail | SKTF | 2 | 1 | U |
+| BMS_StkImdLost | SKIM | 3 | 1 | U |
+| BMS_StkPreFail | SKPF | 4 | 1 | U |
+| BMS_StkBmsFault | SKBF | 5 | 1 | U |
+| BMS_CntTsonDis | CNTD | 8 | 8 | U |
+| BMS_CntSdcLost | CNSD | 16 | 8 | U |
+| BMS_CntImdLost | CNIM | 24 | 8 | U |
 
 ### ID 0x182 / 0x183 / 0x184 / 0x185 — Tensiones (DLC 8)
 Todos uint16. IDmod en SB 8 (gain 1). Tensiones en SB 24/40/56 (gain **0.001**, V).

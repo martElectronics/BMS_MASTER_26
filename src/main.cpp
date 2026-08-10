@@ -321,7 +321,7 @@ void setup()
         gCan->setPacketTimer(13, 500);             // ID 13 diagnóstico
         gCan->setPacketTimer(14, 500);             // ID 14 tiempos/contadores de comms
         gCan->setPacketTimer(15, 100);             // ID 15 BMS_DEBUG: 100 ms (era 500 → un episodio corto caia entre tramas)
-        Serial.println(F("[CAN] FDCAN listo (125k, IDs 10-16, 386-392)."));
+        Serial.println(F("[CAN] FDCAN listo (125k, IDs 10-17, 386-392)."));
     }
 
     // ── FRAM logger (MB85RC256V): si está, loguear evento BOOT con
