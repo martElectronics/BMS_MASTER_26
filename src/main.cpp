@@ -313,6 +313,15 @@ void setup()
         Serial.println(F("[CAN] FDCAN init FALLO — TX CAN deshabilitada."));
     } else {
         gCan->configurePacketTimersByPriority();   // BMS_DEBUG (todos los fallos por bits)
+        // ⚠ TRAMPA: configurePacketTimersByPriority() asigna el intervalo
+        // INVERTIDO — ratio = 1 - (id-minId)/(maxId-minId) → el ID MÁS BAJO se
+        // lleva el intervalo MÁS LARGO (ID 10 → 800 ms) y los altos 50 ms.
+        // Los IDs 10 y 11 son justo los del estado de seguridad (BMS_OK y
+        // min/max V/T), así que se sobreescriben aquí: a 800 ms un episodio
+        // corto de BMS_OK (que auto-rearma al despejarse) no llegaba a verse
+        // en el log del datalogger.
+        gCan->setPacketTimer(10, 100);             // ID 10 estado general (BMS_OK)
+        gCan->setPacketTimer(11, 100);             // ID 11 min/max V/T (excursión que dispara el fallo)
         gCan->setPacketTimer(16, 100);             // ID 16 contadores de fallo: 100 ms (post-mortem: 5x resolucion)
         gCan->setPacketTimer(17, 100);             // ID 17 sticky SDC/TSON: 100 ms
         // 13/14/15 NO están en configurePacketTimersByPriority() (la lista salta de

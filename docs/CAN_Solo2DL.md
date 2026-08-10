@@ -45,8 +45,8 @@
 
 | ID dec | ID hex | DLC | Periodo | Contenido |
 |---|---|---|---|---|
-| 10 | 0x0A | 1  | 800 ms | Estado general (8 flags) |
-| 11 | 0x0B | 8  | 799 ms | MaxT, MaxV, MinV, MinT |
+| 10 | 0x0A | 1  | 100 ms | Estado general (8 flags) |
+| 11 | 0x0B | 8  | 100 ms | MaxT, MaxV, MinV, MinT |
 | 12 | 0x0C | 6  | 799 ms | Status V / Status T (bitmap por módulo) + V_DELTA (mV) |
 | 13 | 0x0D | 4  | 500 ms | maxFailTime, numTriesReset |
 | 14 | 0x0E | 8  | 500 ms | lastFailTime, contadores comm/CRC/reset |
@@ -61,13 +61,21 @@
 | 391 | 0x187 | 8 | 554 ms paginado | IDmod, T8, T9, Tmax, Tmin, stV, stT |
 | 392 | 0x188 | 1 | 553 ms | SOC (%) |
 
+> ⚠ **Trampa de `configurePacketTimersByPriority()`**: asigna el periodo
+> **invertido** — `ratio = 1 - (id-minId)/(maxId-minId)`, así que el ID **más
+> bajo** se lleva el intervalo **más largo** (ID 10 → 800 ms) y los altos 50 ms.
+> Es al revés de lo que sugiere la prioridad CAN. Por eso los IDs del estado de
+> seguridad (10, 11, 13, 14, 15, 16, 17) llevan `setPacketTimer()` **explícito**
+> después de esa llamada. Si añades un ID nuevo que importe, ponle su timer a
+> mano o se irá a ~800 ms sin que te des cuenta.
+
 **Paginado (386-391):** un módulo distinto por ronda (~556 ms entre módulos
 del mismo ID). Con 12 módulos, cada módulo se actualiza cada ~6.7 s.
 El campo `IDmod` (byte 0-1) te dice de cuál es la trama.
 
 ---
 
-## 4. ID 10 (0x0A) — Estado general · 1 byte · 800 ms
+## 4. ID 10 (0x0A) — Estado general · 1 byte · 100 ms
 
 ```
 Byte 0:  [b7][b6][b5][b4][b3][b2][b1][b0]
@@ -94,7 +102,7 @@ Byte 0:  [b7][b6][b5][b4][b3][b2][b1][b0]
 
 ---
 
-## 5. ID 11 (0x0B) — Métricas V/T · 8 bytes · 799 ms
+## 5. ID 11 (0x0B) — Métricas V/T · 8 bytes · 100 ms
 
 ```
 Bytes 0-1: MaxT (int16 BE, °C)
