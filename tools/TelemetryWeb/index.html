@@ -1,0 +1,107 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>BMS Telemetry Dashboard</title>
+    <link rel="stylesheet" href="style.css">
+    <link href="https://fonts.googleapis.com/css2?family=Inter:ital,opsz,wght@0,14..32,400;0,14..32,500;0,14..32,600;0,14..32,700;1,14..32,400&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet">
+</head>
+<body>
+    <header>
+        <div class="header-content">
+            <div class="logo">
+                <img src="images.jpg" alt="MART Logo" class="logo-img" width="32" height="32" style="border-radius: 4px; object-fit: cover;">
+                <h1>MART BMS <span>Telemetry</span></h1>
+            </div>
+            <div class="controls">
+                <div class="connection-status" id="connectionStatus">
+                    <span class="dot"></span>
+                    <span id="statusText">Disconnected</span>
+                </div>
+                <button id="connectBtn" class="btn primary">⚡ Connect Serial</button>
+            </div>
+        </div>
+    </header>
+
+    <main>
+        <!-- Hero stats row -->
+        <div class="hero-stats" id="heroStats">
+            <div class="stat-card bms-card" id="bmsCard">
+                <span class="label">BMS_OK</span>
+                <span class="value bms-value" id="bmsOk">—</span>
+            </div>
+
+            <div class="stat-card">
+                <span class="label">Pack Current</span>
+                <span class="value mono" id="currentText">—</span>
+            </div>
+            <div class="stat-card">
+                <span class="label">Fan Duty</span>
+                <span class="value mono" id="fanText">—</span>
+            </div>
+        </div>
+
+        <div class="dashboard-grid">
+            <!-- Left: global panel -->
+            <aside class="panel sidebar-panel">
+                <h2>Pack Extremes</h2>
+                <div class="extremes-grid">
+                    <div class="stat-box">
+                        <span class="label">V Min</span>
+                        <span class="value mono" id="vMinText">—</span>
+                    </div>
+                    <div class="stat-box">
+                        <span class="label">V Max</span>
+                        <span class="value mono" id="vMaxText">—</span>
+                    </div>
+                    <div class="stat-box">
+                        <span class="label">T Min</span>
+                        <span class="value mono" id="tMinText">—</span>
+                    </div>
+                    <div class="stat-box">
+                        <span class="label">T Max</span>
+                        <span class="value mono" id="tMaxText">—</span>
+                    </div>
+                    <div class="stat-box span2">
+                        <span class="label">Voltage Delta</span>
+                        <span class="value mono" id="vDeltaText">—</span>
+                    </div>
+                    <div class="stat-box span2">
+                        <span class="label">Open NTCs</span>
+                        <span class="value mono" id="ntcOpenText">—</span>
+                    </div>
+                </div>
+
+                <h2 class="mt-2">Fault Flags</h2>
+                <div class="fault-grid">
+                    <div class="fault-badge ok" id="faultV">V</div>
+                    <div class="fault-badge ok" id="faultT">T</div>
+                    <div class="fault-badge ok" id="faultNTC">NTC</div>
+                    <div class="fault-badge ok" id="faultCOMM">COMM</div>
+                    <div class="fault-badge ok" id="faultHALL">HALL</div>
+                    <div class="fault-badge ok" id="faultINIT">INIT</div>
+                </div>
+
+                <div class="info-box mt-2">
+                    <p>Flash <code>mainsim</code>, open the Serial monitor and press <strong>'j'</strong> to start JSON streaming. Then connect here.</p>
+                    <p>Baud: <strong>115200</strong></p>
+                </div>
+            </aside>
+
+            <!-- Right: module grids -->
+            <section class="panel modules-panel">
+                <div class="tabs">
+                    <button class="tab active" id="tabV" onclick="switchTab('v')">⚡ Voltages</button>
+                    <button class="tab" id="tabT" onclick="switchTab('t')">🌡 Temperatures</button>
+                </div>
+                <div id="modulesContainer" class="modules-container">
+                    <div class="no-data-msg">Connect to the STM32 to see live data.</div>
+                </div>
+            </section>
+        </div>
+    </main>
+
+    <script src="script.js"></script>
+</body>
+</html>

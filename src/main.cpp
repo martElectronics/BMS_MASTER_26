@@ -93,6 +93,23 @@ static bool   fanForceMax = false;   ///< comando 'F': fuerza ventiladores al 10
 static constexpr int NUM_MODULES = TOTALBOARDS / 2;
 
 // ============================================================================
+//  TELEMETRY DASHBOARD
+// ============================================================================
+#include "Telemetrydashboard.h"
+
+// Forward declarations para los helpers de mapeo
+static float modCellV(int m, int n);
+static float modCellT(int m, int k);
+
+static const DashConfig dashCfg = {
+    NUM_MODULES, 11, 9,
+    modCellV, modCellT,
+    2.8f, 4.2f, -20.0f, 60.0f,
+    500
+};
+static TelemetryDashboard dash(Serial, bms, hall, soc, fan, dashCfg);
+
+// ============================================================================
 //  UMBRALES Y TIEMPOS
 // ============================================================================
 // ✓ Confirmado contra datasheet Samsung INR21700-40T (rev. 2026-05-20):
@@ -346,7 +363,7 @@ void setup()
         logger.log(buildFaultRecord(FaultLogger::EVT_BOOT, 0));
     }
 
-    Serial.println(F("Cmd: v t a s f c i r  F=fans100%  d=dump log  D=clear log  C=clear cnt"));
+    Serial.println(F("Cmd: v t a s f c i r  F=fans100%  d=dump log  D=clear log  C=clear cnt  m=ansi  j=json"));
 
     // Arrancar el watchdog AL FINAL (tras el init/calibración acotados).
     // Una vez iniciado NO se puede parar (es independiente por HW).
@@ -375,10 +392,26 @@ void loop()
     updateBmsOk();         // BMS_OK no-latching (auto-rearma). Antes que updateTson.
     updateTson();          // máquina TSON + precarga (usa bmsFault de updateBmsOk)
     updateCanTx();         // telemetría CAN IDs 10-16 (throttled por timer)
+    
+    DashFaults df;
+    df.bmsOk = !bmsFault;
+    df.fV = fV.confirmed(millis(), FAULT_V_MS);
+    df.fT = fT.confirmed(millis(), FAULT_T_MS);
+    df.fNtc = fNtc.confirmed(millis(), FAULT_NTC_MS);
+    df.fComm = fComm.confirmed(millis(), FAULT_COMM_MS);
+    df.fHall = !hall.isOK();
+    df.initOk = bmsInitOk;
+    dash.update(df);
+    
     handleSerial();
 
     static unsigned long tPrint = 0;
-    if (millis() - tPrint >= PRINT_MS) { tPrint = millis(); printStatus(); }
+    if (millis() - tPrint >= PRINT_MS) { 
+        tPrint = millis(); 
+        if (!dash.active()) {
+            printStatus(); 
+        }
+    }
 
     // Refrescar el watchdog SOLO si la iteración completa terminó: si el
     // loop se cuelga en cualquier punto, el IWDG no se refresca → reset
@@ -1126,6 +1159,18 @@ void handleSerial()
         stkSdcLost = stkTsonDisarm = stkTsonFail = stkImdLost = stkBmsFault = false;
         cntTsonDisarm = cntSdcLost = cntImdLost = cntBusOff = 0;
         Serial.println(F("Contadores de fallo (ID 16) reseteados a 0."));
+        break;
+
+    case 'm':
+        if (!dash.active()) { dash.setJsonMode(false); dash.toggle(); }
+        else if (dash.isJsonMode()) { dash.toggle(); dash.setJsonMode(false); dash.toggle(); }
+        else { dash.toggle(); }
+        break;
+
+    case 'j':
+        if (!dash.active()) { dash.setJsonMode(true); dash.toggle(); }
+        else if (!dash.isJsonMode()) { dash.toggle(); dash.setJsonMode(true); dash.toggle(); }
+        else { dash.toggle(); }
         break;
 
     default: break;
