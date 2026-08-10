@@ -318,7 +318,7 @@ Byte 2   : cntSdcLost    — nº de caídas de SDC_3V3
 Byte 3   : cntImdLost    — nº de caídas de IMD_OK
 Byte 4   : rolling counter (contador de vida, vuelta cada 25,6 s)
 Byte 5-6 : uptime en segundos (uint16 BE, satura a 65535 ≈ 18 h)
-Byte 7   : reservado (0)
+Byte 7   : cntBusOff — nº de episodios de bus-off del FDCAN
 ```
 
 | Canal | Short | Byte | Bit | Len | Tipo | Descripción |
@@ -334,6 +334,7 @@ Byte 7   : reservado (0)
 | BMS_CntImdLost  | CNIM | 3 | 0 | 8 | uint8 | nº de caídas de IMD_OK |
 | BMS_AliveCnt    | ALIV | 4 | 0 | 8 | uint8 | contador de vida (+1 cada 100 ms) |
 | BMS_Uptime      | UPTI | 5-6 | 0 | 16 | uint16 | segundos desde el arranque |
+| BMS_CntBusOff   | CNBO | 7 | 0 | 8 | uint8 | nº de episodios de bus-off del FDCAN |
 
 ### Contador de vida (B4) y uptime (B5-6)
 
@@ -686,6 +687,7 @@ y `Data Format` (`U` = Unsigned, `S` = Signed).
 | BMS_CntImdLost | CNIM | 24 | 8 | U |
 | BMS_AliveCnt | ALIV | 32 | 8 | U |
 | BMS_Uptime | UPTI | 40 | 16 | U |
+| BMS_CntBusOff | CNBO | 56 | 8 | U |
 
 ### ID 0x182 / 0x183 / 0x184 / 0x185 — Tensiones (DLC 8)
 Todos uint16. IDmod en SB 8 (gain 1). Tensiones en SB 24/40/56 (gain **0.001**, V).

@@ -355,6 +355,16 @@ public:
     //** BUS_OFF REBOOT **//
     bool rebootBusFromError();
 
+    /**
+     * @brief ¿El periférico está AHORA en bus-off? Solo consulta, no recupera.
+     *
+     * rebootBusFromError() devuelve true tanto si el bus estaba sano como si
+     * logró recuperarlo, así que desde su retorno NO se pueden contar los
+     * episodios de bus-off. Llamar a esto ANTES de recuperar para llevar la
+     * cuenta (telemetría/post-mortem: tras un corte, saber que lo hubo).
+     */
+    bool isBusOff();
+
     //** PACKET TIMING **//
     void configurePacketTimersByPriority();
 

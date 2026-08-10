@@ -346,6 +346,24 @@ void CAN_BUS::printReceivedIds()
     DataIN.printAllPacketsIDs();
 }
 
+// Solo CONSULTA el estado bus-off (no intenta recuperar). Ver la nota del .h:
+// hace falta para poder CONTAR los episodios, porque rebootBusFromError() no
+// distingue "estaba sano" de "estaba en bus-off y lo recuperé".
+bool CAN_BUS::isBusOff()
+{
+#if defined(ESP32) || defined(ESP32S3)
+    twai_status_info_t status;
+    twai_get_status_info(&status);
+    return status.state == TWAI_STATE_BUS_OFF;
+#elif defined(STM32G4xx)
+    FDCAN_ProtocolStatusTypeDef psr;
+    HAL_FDCAN_GetProtocolStatus(&hfdcan, &psr);
+    return psr.BusOff != 0;
+#else
+    return false;
+#endif
+}
+
 bool CAN_BUS::rebootBusFromError()
 {
 #if defined(ESP32) || defined(ESP32S3)

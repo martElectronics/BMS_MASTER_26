@@ -202,6 +202,8 @@ static bool          stkBmsFault   = false; ///< bmsFault confirmado alguna vez
 static uint8_t       cntTsonDisarm = 0;     ///< nº de desarmes del TSON (satura a 255)
 static uint8_t       cntSdcLost    = 0;     ///< nº de caídas de SDC_3V3 (satura a 255)
 static uint8_t       cntImdLost    = 0;     ///< nº de caídas de IMD_OK (satura a 255)
+static uint8_t       cntBusOff     = 0;     ///< nº de episodios de bus-off del FDCAN (satura a 255)
+static bool          canBusOffNow  = false; ///< true mientras el FDCAN esté en bus-off (estado REAL, runtime)
 
 // ── Debug / diagnóstico (ID 15 BMS_DEBUG) ──────────────────────────────────
 // firstFaultTrigger : primer fallo que entró en este episodio (enum B4 ID 15)
@@ -726,7 +728,10 @@ static void buildDebugFlags(uint8_t out[4])
     // B3 — state (PCB nueva: SDC/TSON/precarga/IMD)
     if (bms.isOK())                        out[3] |= (1 << 0); // AutoAddress OK
     if (bmsInitOk)                         out[3] |= (1 << 1); // init BQ OK
-    if (gCanOk)                            out[3] |= (1 << 2); // FDCAN OK
+    // FDCAN OK = init correcto Y el bus NO está en bus-off AHORA. Antes solo
+    // miraba gCanOk (el init del arranque), así que este bit decía "OK" aunque
+    // el bus llevara minutos caído — engañoso justo en el post-mortem.
+    if (gCanOk && !canBusOffNow)           out[3] |= (1 << 2); // FDCAN OK (estado real)
     if (sdcTson)                           out[3] |= (1 << 3); // latch TSON cerrado
     if (prechargeFail)                     out[3] |= (1 << 4); // precarga FALLÓ (enclavado)
     if (digitalRead(PIN_IMD_OK))           out[3] |= (1 << 5); // IMD_OK
@@ -766,7 +771,18 @@ void updateCanTx()
     // Recuperación de bus-off (cableado / baud / sin otros nodos). Barato
     // si el bus está sano (solo chequea FDCAN_PSR_BO); solo actúa si BO.
     static unsigned long tCanChk = 0;
-    if (millis() - tCanChk >= 1000) { tCanChk = millis(); gCan->rebootBusFromError(); }
+    if (millis() - tCanChk >= 1000) {
+        tCanChk = millis();
+        // Consultar ANTES de recuperar: rebootBusFromError() devuelve true tanto
+        // si el bus estaba sano como si lo recuperó, así que desde su retorno no
+        // se pueden contar los episodios. Se cuenta por FLANCO (entrada en
+        // bus-off), y el contador viaja en el ID 17 B7 → cuando el bus vuelve,
+        // el log dice cuántos cortes hubo mientras no llegaban tramas.
+        const bool boNow = gCan->isBusOff();
+        if (boNow && !canBusOffNow && cntBusOff < 255) cntBusOff++;
+        canBusOffNow = boNow;
+        gCan->rebootBusFromError();
+    }
 
     // ── ID 10 (0xA) — estado general (1 byte de flags) ──────────────────────
     bool condNow = fV.cond || fT.cond || fNtc.cond || fComm.cond || !hall.isOK();
@@ -910,6 +926,7 @@ void updateCanTx()
     const uint16_t upS16 = (upS > 65535UL) ? 65535 : (uint16_t)upS;
     d17[5] = (uint8_t)((upS16 >> 8) & 0xFF);          // big-endian
     d17[6] = (uint8_t)(upS16 & 0xFF);
+    d17[7] = cntBusOff;                               // episodios de bus-off del FDCAN
     gCan->setPacket((uint32_t)17, d17, 8);
 
     // ── ID 392 (0x188) — SOC (UINT8, %) ────────────────────────────────────
@@ -1107,7 +1124,7 @@ void handleSerial()
         cntFltV = cntFltT = cntFltNtc = cntFltComm = cntFltHall = cntFltInit = 0;
         // Sticky del ID 17 (SDC/TSON): mismo comando de reset.
         stkSdcLost = stkTsonDisarm = stkTsonFail = stkImdLost = stkBmsFault = false;
-        cntTsonDisarm = cntSdcLost = cntImdLost = 0;
+        cntTsonDisarm = cntSdcLost = cntImdLost = cntBusOff = 0;
         Serial.println(F("Contadores de fallo (ID 16) reseteados a 0."));
         break;
 
@@ -1144,6 +1161,9 @@ void printStatus()
                   "IMD_perdido=%d(%u) BMS_fallo=%d\n",
                   stkSdcLost, cntSdcLost, stkTsonDisarm, cntTsonDisarm, stkTsonFail,
                   stkImdLost, cntImdLost, stkBmsFault);
+    Serial.printf("CAN: %s  bus-off x%u  uptime=%lu s\n",
+                  !gCanOk ? "init FALLO" : (canBusOffNow ? "BUS-OFF" : "OK"),
+                  cntBusOff, millis() / 1000UL);
     Serial.printf("Cnt(ID16): V=%u T=%u NTC=%u COMM=%u HALL=%u INIT=%u  [C=reset]\n",
                   cntFltV, cntFltT, cntFltNtc, cntFltComm, cntFltHall, cntFltInit);
     Serial.printf("TSON: SDC_TSON=%d PRE_FAIL=%d | SDC_3V3=%d TSON_FAIL=%d HV_ACCU=%d IMD_OK=%d\n",
