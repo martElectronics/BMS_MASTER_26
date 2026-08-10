@@ -160,7 +160,10 @@ static BQResult lastResV = BQResult::OK, lastResT = BQResult::OK;
 static bool          sdcTson          = false;  ///< estado del latch TSON (= nivel de PIN_SDC_TSON)
 static bool          tsonBtnPrev      = false;  ///< nivel previo del botón (flanco de subida)
 static bool          prechargeRunning = false;  ///< temporizador de precarga en marcha
-static bool          prechargeFail    = false;  ///< latch HIGH si timeout 5 s (se quita con reset de alimentación)
+// PRECHARGE_FAIL retirado: el pin queda LOW permanente (ver updateTson). Se
+// conserva la constante como 0 para no romper los bits de telemetría que la
+// referenciaban (ID 15 B3 bit4, ID 17 B0 bit4), que ahora van siempre a 0.
+static constexpr bool prechargeFail = false;
 static unsigned long tPrechargeStart  = 0;
 
 // ============================================================================
@@ -260,7 +263,8 @@ void setup()
         Serial.println(F("[WDG] *** Reset previo causado por el WATCHDOG ***"));
 
     // Estado seguro inicial: BMS_OK lo pone el driver (LOW hasta init OK).
-    // Salidas en estado seguro: SDC_TSON abierto, PRECHARGE_FAIL sin fallo.
+    // Salidas en estado seguro: SDC_TSON abierto. PRECHARGE_FAIL se pone LOW
+    // aquí y NO se vuelve a escribir (lógica de precarga-fallida retirada).
     pinMode(PIN_SDC_TSON,      OUTPUT); digitalWrite(PIN_SDC_TSON,      LOW);
     pinMode(PIN_PRECHARGE_FAIL,OUTPUT); digitalWrite(PIN_PRECHARGE_FAIL, LOW);
     // Entradas con PULL-DOWN: en la PCB nueva el botón (confirmado con
@@ -631,36 +635,32 @@ void updateTson()
     tsonBtnPrev = tsonBtn;
     digitalWrite(PIN_SDC_TSON, sdcTson ? HIGH : LOW);
 
-    // ── Precarga: temporizador de 5 s desde el flanco SDC_TSON ↑ ──
+    // ── Precarga: SOLO temporizador de vigilancia (sin latch de fallo) ──
+    // PRECHARGE_FAIL ya NO se usa: el pin queda en LOW permanente (se deja así
+    // en setup y no se vuelve a escribir). El timeout solo AVISA por serial y
+    // para el temporizador; no enclava nada ni acciona el pin.
+    // prechargeRunning se mantiene porque lo consume sampleAndEvaluate() para
+    // reconectar el BQ de forma agresiva mientras dura la precarga.
     static bool sdcTsonPrev = false;
     if (sdcTson && !sdcTsonPrev) {               // flanco de armado
-        // PRECHARGE_DONE NO puede estar HIGH antes de cerrar el TSON: si lo
-        // está, la entrada está atascada (aislador/soldadura) → no fiarse y
-        // enclavar fallo, en vez de dar la precarga por hecha al instante.
-        if (digitalRead(PIN_PRECHARGE_DONE)) {
-            prechargeFail = true;
-            logger.log(buildFaultRecord(FaultLogger::EVT_PRECHARGE_FAIL, 0));
-            Serial.println(F("[PRE] FALLO: PRECHARGE_DONE ya HIGH al armar (entrada atascada)."));
-        } else {
-            prechargeRunning = true;
-            tPrechargeStart  = millis();
-            Serial.println(F("[PRE] Precarga iniciada (5 s)."));
-        }
+        prechargeRunning = true;
+        tPrechargeStart  = millis();
+        if (digitalRead(PIN_PRECHARGE_DONE))
+            Serial.println(F("[PRE] aviso: PRECHARGE_DONE ya venía HIGH al armar."));
+        Serial.println(F("[PRE] Precarga iniciada."));
     }
-    if (!sdcTson) prechargeRunning = false;      // se cancela al desarmar (si no falló)
+    if (!sdcTson) prechargeRunning = false;      // se cancela al desarmar
     sdcTsonPrev = sdcTson;
 
-    if (prechargeRunning && !prechargeFail) {
+    if (prechargeRunning) {
         if (digitalRead(PIN_PRECHARGE_DONE)) {
             prechargeRunning = false;            // precarga completada a tiempo
             Serial.println(F("[PRE] Precarga OK."));
         } else if ((millis() - tPrechargeStart) >= PRECHARGE_TIMEOUT_MS) {
-            prechargeFail = true;                // LATCH duro → reset de alimentación
-            logger.log(buildFaultRecord(FaultLogger::EVT_PRECHARGE_FAIL, 0));
-            Serial.println(F("[PRE] FALLO: precarga no completada en 5 s (enclavado)."));
+            prechargeRunning = false;            // se agota la vigilancia (sin latch)
+            Serial.println(F("[PRE] aviso: PRECHARGE_DONE no llegó a tiempo."));
         }
     }
-    digitalWrite(PIN_PRECHARGE_FAIL, prechargeFail ? HIGH : LOW);
 }
 
 // ============================================================================
