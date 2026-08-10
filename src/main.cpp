@@ -895,6 +895,21 @@ void updateCanTx()
     d17[1] = cntTsonDisarm;
     d17[2] = cntSdcLost;
     d17[3] = cntImdLost;
+
+    // ── B4 rolling counter · B5-6 uptime (s) — CONTADOR DE VIDA ─────────────
+    // B4 se deriva del TIEMPO, no de un contador incrementado a mano: así queda
+    // sincronizado con el periodo de envío del paquete (100 ms) sin depender de
+    // cada cuánto corra updateCanTx (velocidad de loop, kHz) ni sufrir jitter
+    // contra el timer del paquete (que daría falsos "trama perdida").
+    //   · salta >1 entre tramas consecutivas → tramas PERDIDAS en el log.
+    //   · congelado mientras siguen llegando tramas → BMS colgado.
+    //   · uptime vuelve a 0 → el MCU se RESETEO (ver ID 15 B7 para la causa).
+    const uint32_t upMs = millis();
+    d17[4] = (uint8_t)((upMs / 100UL) & 0xFFUL);      // da la vuelta cada 25,6 s
+    const uint32_t upS  = upMs / 1000UL;
+    const uint16_t upS16 = (upS > 65535UL) ? 65535 : (uint16_t)upS;
+    d17[5] = (uint8_t)((upS16 >> 8) & 0xFF);          // big-endian
+    d17[6] = (uint8_t)(upS16 & 0xFF);
     gCan->setPacket((uint32_t)17, d17, 8);
 
     // ── ID 392 (0x188) — SOC (UINT8, %) ────────────────────────────────────

@@ -52,7 +52,7 @@
 | 14 | 0x0E | 8  | 500 ms | lastFailTime, contadores comm/CRC/reset |
 | **15** | **0x0F** | **8** | **100 ms** | **BMS_DEBUG — granularidad por bit** |
 | 16 | 0x10 | 6 | 100 ms | Contadores de fallo por causa (6×UINT8) |
-| **17** | **0x11** | **8** | **100 ms** | **STICKY SDC/TSON — latcheado, post-mortem** |
+| **17** | **0x11** | **8** | **100 ms** | **STICKY SDC/TSON (latcheado) + contador de vida y uptime** |
 | 386 | 0x182 | 8 | 557 ms paginado | IDmod, V1, V2, V3 |
 | 387 | 0x183 | 8 | 556 ms paginado | IDmod, V4, V5, V6 |
 | 388 | 0x184 | 8 | 556 ms paginado | IDmod, V7, V8, V9 |
@@ -316,7 +316,9 @@ Byte 0   : bits sticky (ver tabla)
 Byte 1   : cntTsonDisarm — nº de desarmes del TSON
 Byte 2   : cntSdcLost    — nº de caídas de SDC_3V3
 Byte 3   : cntImdLost    — nº de caídas de IMD_OK
-Byte 4-7 : reservado (0)
+Byte 4   : rolling counter (contador de vida, vuelta cada 25,6 s)
+Byte 5-6 : uptime en segundos (uint16 BE, satura a 65535 ≈ 18 h)
+Byte 7   : reservado (0)
 ```
 
 | Canal | Short | Byte | Bit | Len | Tipo | Descripción |
@@ -330,6 +332,21 @@ Byte 4-7 : reservado (0)
 | BMS_CntTsonDis  | CNTD | 1 | 0 | 8 | uint8 | nº de desarmes del TSON |
 | BMS_CntSdcLost  | CNSD | 2 | 0 | 8 | uint8 | nº de caídas de SDC_3V3 |
 | BMS_CntImdLost  | CNIM | 3 | 0 | 8 | uint8 | nº de caídas de IMD_OK |
+| BMS_AliveCnt    | ALIV | 4 | 0 | 8 | uint8 | contador de vida (+1 cada 100 ms) |
+| BMS_Uptime      | UPTI | 5-6 | 0 | 16 | uint16 | segundos desde el arranque |
+
+### Contador de vida (B4) y uptime (B5-6)
+
+`ALIV` se deriva del reloj (`millis()/100`), no de un contador incrementado a
+mano: así va sincronizado con el periodo de envío del paquete y no depende de
+la velocidad del loop. Lectura en el log:
+
+| Síntoma | Significado |
+|---|---|
+| `ALIV` salta más de 1 entre tramas consecutivas | **tramas perdidas** en la recepción (el hueco del log NO es que el BMS dejara de mandar) |
+| `ALIV` congelado y siguen llegando tramas | **BMS colgado** (la lógica no avanza) |
+| `UPTI` vuelve a 0 | **el MCU se reseteó** → mirar ID 15 B7 para la causa (bit2 = watchdog) |
+| Dejan de llegar tramas | BMS sin alimentación, colgado del todo, o bus caído |
 
 ### Receta: ¿paró el coche el BMS, o fue otro nodo del SDC?
 
@@ -667,6 +684,8 @@ y `Data Format` (`U` = Unsigned, `S` = Signed).
 | BMS_CntTsonDis | CNTD | 8 | 8 | U |
 | BMS_CntSdcLost | CNSD | 16 | 8 | U |
 | BMS_CntImdLost | CNIM | 24 | 8 | U |
+| BMS_AliveCnt | ALIV | 32 | 8 | U |
+| BMS_Uptime | UPTI | 40 | 16 | U |
 
 ### ID 0x182 / 0x183 / 0x184 / 0x185 — Tensiones (DLC 8)
 Todos uint16. IDmod en SB 8 (gain 1). Tensiones en SB 24/40/56 (gain **0.001**, V).
