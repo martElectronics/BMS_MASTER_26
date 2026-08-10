@@ -344,9 +344,14 @@ bool tryReinit(unsigned long now)
     // (no spamear cada reintento); se rearma al reconectar. En scruti, silencio.
     static bool failNotified = false;
 
+    // En PRECARGA: UN solo intento de auto-address. Un reInit que falla con los
+    // 5 intentos bloquea ~5 s y se comeria entero el PRECHARGE_TIMEOUT_MS.
+    // Si no recupera, fComm sigue contando y acaba tumbando BMS_OK igual.
+    bms.setMaxAttempts(prechargeRunning ? 1 : 5);
     IWatchdog.reload();
     bmsInitOk = bms.reInit();
     IWatchdog.reload();
+    bms.setMaxAttempts(5);                  // restaurar default
 
     if (bmsInitOk) {
         if (failNotified && !scrutiMode) Serial.println(F("[BQ] reconectado."));
@@ -401,6 +406,26 @@ bool readPack()
     if (readOk) everRead = true;          // ya hay medida buena que conservar
     fComm.sample(!readOk, now);
     if (readOk) return true;
+
+    // ── 1b. PRECARGA: reconectar YA, al PRIMER fallo (igual que main.cpp) ────
+    // El transitorio de HV puede dejar mudo el board base, y esperar toda la
+    // ventana de gracia sin tocar la cadena desperdicia justo los segundos que
+    // dura la precarga: el pulso de WAKE del reInit puede resucitarlo antes.
+    // ⚠ Es un intento de RECUPERACION, NO un veredicto: si recupera, se
+    //   devuelve OK; si no, se sigue al paso 2 y el nivel de BMS_OK lo decide
+    //   la ventana de gracia igual que fuera de precarga (si se retornara false
+    //   aqui, un fallo de comms en precarga abriria el SDC AL INSTANTE, que es
+    //   justo lo contrario de lo que se busca).
+    if (prechargeRunning && tryReinit(now)) {
+        now = millis();                   // reInit() bloquea
+        if (readVT()) {
+            everRead = true;
+            fComm.sample(false, now);     // un OK rompe la serie
+            if (!scrutiMode) Serial.println(F("[BQ] recuperado en precarga."));
+            return true;
+        }
+        fComm.sample(true, now);
+    }
 
     // ── 2. ¿Queda ventana de gracia? ────────────────────────────────────────
     // Dentro de la ventana NO se toca la cadena: se seguirá pidiendo datos en
