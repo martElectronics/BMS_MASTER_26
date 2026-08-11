@@ -61,6 +61,18 @@
 | 391 | 0x187 | 8 | 554 ms paginado | IDmod, T8, T9, Tmax, Tmin, stV, stT |
 | 392 | 0x188 | 1 | 553 ms | SOC (%) |
 
+> ⚠⚠ **EL DLC REAL ES SIEMPRE 8**, en TODOS los IDs. La columna "DLC" de este
+> doc indica los bytes **con datos útiles**, pero `setPacket()` fija
+> `size = 8` siempre y rellena lo que sobra con **0xFF** (no con 0). Al dar de
+> alta los mensajes en RaceStudio 3, **pon longitud 8 en todos** — si pones 1,
+> 4 o 6 el frame recibido no cuadrará. Los bytes de relleno se leen como 255;
+> ignóralos.
+>
+> ⚠ **Endianness**: `setPacket()` convierte a **big-endian** cada elemento del
+> array. Para los IDs con `uint16` (11, 12, 13, 14, 386-389) eso da el "uint16
+> BE" que indican las tablas. Para los de `uint8` (10, 15, 16, 17, 390, 391,
+> 392) la conversión es no-op → los bytes van en el orden escrito.
+>
 > ⚠ **Trampa de `configurePacketTimersByPriority()`**: asigna el periodo
 > **invertido** — `ratio = 1 - (id-minId)/(maxId-minId)`, así que el ID **más
 > bajo** se lleva el intervalo **más largo** (ID 10 → 800 ms) y los altos 50 ms.
@@ -159,7 +171,7 @@ Dos formas de configurar los bitmaps en RaceStudio:
 
 ---
 
-## 7. ID 13 (0x0D) — Estadística acumulada · 4 bytes · 798 ms
+## 7. ID 13 (0x0D) — Estadística acumulada · 4 bytes · 500 ms
 
 ```
 Bytes 0-1: maxFailMs (uint16 BE, ms)        — duración máx vista desde boot
