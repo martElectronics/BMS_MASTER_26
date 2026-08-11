@@ -48,7 +48,7 @@
 | 10 | 0x0A | 1  | 100 ms | Estado general (8 flags) |
 | 11 | 0x0B | 8  | 100 ms | MaxT, MaxV, MinV, MinT |
 | 12 | 0x0C | 6  | 799 ms | Status V / Status T (bitmap por módulo) + V_DELTA (mV) |
-| 13 | 0x0D | 4  | 500 ms | maxFailTime, numTriesReset |
+| 13 | 0x0D | 8  | 500 ms | maxFailTime, numTriesReset, max/lastCommFailTime |
 | 14 | 0x0E | 8  | 500 ms | lastFailTime, contadores comm/CRC/reset |
 | **15** | **0x0F** | **8** | **100 ms** | **BMS_DEBUG — granularidad por bit** |
 | 16 | 0x10 | 6 | 100 ms | Contadores de fallo por causa (6×UINT8) |
@@ -171,17 +171,36 @@ Dos formas de configurar los bitmaps en RaceStudio:
 
 ---
 
-## 7. ID 13 (0x0D) — Estadística acumulada · 4 bytes · 500 ms
+## 7. ID 13 (0x0D) — Estadística acumulada · 8 bytes · 500 ms
 
 ```
 Bytes 0-1: maxFailMs (uint16 BE, ms)        — duración máx vista desde boot
 Bytes 2-3: numTriesReset (uint16 BE)        — reintentos de reInit BQ
+Bytes 4-5: maxCommFailMs (uint16 BE, ms)    — duración máx de un episodio de comms
+Bytes 6-7: lastCommFailMs (uint16 BE, ms)   — duración del episodio de comms actual/último
 ```
 
 | Canal | Short | Byte | Bit | Len | Tipo | Escala | Unidad |
 |---|---|---|---|---|---|---|---|
-| BMS_MaxFailMs   | MFLM | 0 | 0 | 16 | uint16 BE | 1 | ms |
-| BMS_NumTryReset | NTR_ | 2 | 0 | 16 | uint16 BE | 1 | —  |
+| BMS_MaxFailMs     | MFLM | 0 | 0 | 16 | uint16 BE | 1 | ms |
+| BMS_NumTryReset   | NTR_ | 2 | 0 | 16 | uint16 BE | 1 | —  |
+| BMS_MaxCommFailMs | MCFM | 4 | 0 | 16 | uint16 BE | 1 | ms |
+| BMS_LastCommFailMs| LCFM | 6 | 0 | 16 | uint16 BE | 1 | ms |
+
+> ⏱ **Los tiempos cuentan desde que se DETECTA la anomalía**, no desde que el
+> debounce la confirma: el reloj arranca en la primera muestra mala y para
+> cuando la condición se despeja, así que **incluye la ventana de debounce**.
+> Antes arrancaba en la confirmación (con BMS_OK ya caído) y se perdían los
+> primeros 500-2000 ms de cada episodio.
+>
+> Consecuencia útil: también se cronometran los episodios que **no llegaron a
+> confirmar**. Si ves `MaxFailMs` menor que la ventana de debounce (500 ms para
+> V, 1000 para T, 2000 para comms), significa que hubo una anomalía real que se
+> resolvió sola **sin abrir el SDC** — justo lo que interesa para cazar ruido.
+>
+> `MaxCommFailMs` / `LastCommFailMs` son el mismo reloj pero **solo para las
+> comms del BQ**, para poder separar "cuánto duró el fallo de comunicación" de
+> "cuánto duró el episodio de fallo en general".
 
 ---
 
@@ -618,11 +637,13 @@ y `Data Format` (`U` = Unsigned, `S` = Signed).
 | BMS_StatusV | GSV_ | 8 | 16 | U |
 | BMS_StatusT | GST_ | 24 | 16 | U |
 
-### ID 0x0D — Estadística (DLC 4)
+### ID 0x0D — Estadística (DLC 8)
 | Name | Short | Start Bit | Bits | Fmt | Ud |
 |---|---|---|---|---|---|
 | BMS_MaxFailMs | MFLM | 8 | 16 | U | ms |
 | BMS_NumTryReset | NTR_ | 24 | 16 | U | — |
+| BMS_MaxCommFailMs | MCFM | 40 | 16 | U | ms |
+| BMS_LastCommFailMs | LCFM | 56 | 16 | U | ms |
 
 ### ID 0x0E — Último episodio (DLC 8)
 | Name | Short | Start Bit | Bits | Fmt |

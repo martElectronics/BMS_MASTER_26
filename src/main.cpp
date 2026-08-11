@@ -196,6 +196,10 @@ static uint16_t      canNumTriesReset = 0;   ///< nº reInit() por comms
 static unsigned long faultEpisodeStart= 0;   ///< ms inicio episodio fallo (0=sin)
 static uint16_t      canLastFailMs    = 0;   ///< duración (ms) episodio actual/último
 static uint16_t      canMaxFailMs     = 0;   ///< máx duración de episodio vista
+// Reloj propio de los fallos de COMMS del BQ (ID 13 B4-7), mismo criterio que
+// el episodio general: cuenta desde la primera lectura fallida.
+static uint16_t      canLastCommFailMs= 0;   ///< duración (ms) del episodio de comms actual/último
+static uint16_t      canMaxCommFailMs = 0;   ///< máx duración de episodio de comms vista
 
 // Contadores por causa (ID 16): nº de veces que cada fallo confirmado ha
 // disparado desde el último reset. Se incrementan en el FLANCO DE SUBIDA
@@ -565,38 +569,61 @@ void updateBmsOk()
     // (FAULT_COMM_MS < FAULT_INIT_MS) → BMS_OK cae por la vía comm.
     bmsFault = faultV || faultT || faultNtc || faultComm || faultHall || faultInit;
 
-    // Telemetría: duración del episodio (IDs 13/14) + primer trigger (ID 15 B4).
-    // Y persistencia FRAM: log de FALL al inicio del episodio, RISE al final.
-    if (bmsFault) {
+    // ── DURACIÓN DEL EPISODIO (IDs 13/14) ───────────────────────────────────
+    // El reloj arranca cuando APARECE la condición (primera muestra mala), NO
+    // cuando el debounce la confirma: así el tiempo reportado incluye la ventana
+    // de debounce y mide lo que de verdad duró la anomalía, de su detección a su
+    // resolución. Antes empezaba en la confirmación (con el pin ya caído), así
+    // que se perdían los primeros 500-2000 ms de cada episodio.
+    // ⚠ Efecto secundario buscado: ahora también se cronometran los episodios
+    //   que NO llegan a confirmar (se despejaron dentro del debounce). Ver un
+    //   maxFailMs < ventana de debounce significa justo eso: hubo anomalía pero
+    //   NO llegó a abrir el SDC.
+    bool condNow = fV.cond || fT.cond || fNtc.cond || fComm.cond || fInit.cond
+                   || !hall.isOK();
+    if (condNow) {
         if (faultEpisodeStart == 0) {
             faultEpisodeStart = now;
-            stkBmsFault = true;              // sticky post-mortem (ID 17)
-            // Prioridad arbitraria: si varios entran a la vez, gana el de
+            // Prioridad arbitraria: si varias entran a la vez, gana la de
             // mayor severidad de seguridad (V > T > NTC > Comm > Hall > Init).
-            if      (faultV)     firstFaultTrigger = 1;
-            else if (faultT)     firstFaultTrigger = 2;
-            else if (faultNtc)   firstFaultTrigger = 3;
-            else if (faultComm)  firstFaultTrigger = 4;
-            else if (faultHall)  firstFaultTrigger = 5;
-            else if (faultInit)  firstFaultTrigger = 6;
-            else                 firstFaultTrigger = 0;
-            // Persistir en FRAM la transición BMS_OK ↓ (causa raíz + snapshot)
-            logger.log(buildFaultRecord(FaultLogger::EVT_BMS_OK_FALL,
-                                        firstFaultTrigger));
+            if      (fV.cond)      firstFaultTrigger = 1;
+            else if (fT.cond)      firstFaultTrigger = 2;
+            else if (fNtc.cond)    firstFaultTrigger = 3;
+            else if (fComm.cond)   firstFaultTrigger = 4;
+            else if (!hall.isOK()) firstFaultTrigger = 5;
+            else if (fInit.cond)   firstFaultTrigger = 6;
+            else                   firstFaultTrigger = 0;
         }
         unsigned long dur = now - faultEpisodeStart;
         canLastFailMs = (dur > 65535UL) ? 65535 : (uint16_t)dur;
         if (canLastFailMs > canMaxFailMs) canMaxFailMs = canLastFailMs;
     } else {
-        if (faultEpisodeStart != 0) {
-            // Transición BMS_OK ↑ (despeje): log con el firstFault del
-            // episodio que acaba (útil para correlacionar con el FALL).
-            logger.log(buildFaultRecord(FaultLogger::EVT_BMS_OK_RISE,
-                                        firstFaultTrigger));
-        }
         faultEpisodeStart = 0;   // canLastFailMs se mantiene (último episodio)
         firstFaultTrigger = 0;
     }
+
+    // ── DURACIÓN DEL EPISODIO DE COMMS (ID 13 B4-7) ─────────────────────────
+    // Reloj propio solo para las comms del BQ, con el mismo criterio: desde la
+    // primera lectura fallida (fComm.tStart, que ya lo marca el FaultTimer)
+    // hasta que una lectura buena rompe la racha.
+    if (fComm.badRun) {
+        unsigned long d = now - fComm.tStart;
+        canLastCommFailMs = (d > 65535UL) ? 65535 : (uint16_t)d;
+        if (canLastCommFailMs > canMaxCommFailMs) canMaxCommFailMs = canLastCommFailMs;
+    }
+
+    // ── Persistencia FRAM: atada a la TRANSICIÓN REAL del pin ───────────────
+    // Esto NO se mueve al criterio de arriba: el log debe registrar cuándo
+    // cambió BMS_OK de verdad (cuándo se abrió/cerró el SDC), no cuándo se
+    // detectó la condición.
+    static bool bmsFaultPrev = false;
+    if (bmsFault && !bmsFaultPrev) {
+        stkBmsFault = true;                  // sticky post-mortem (ID 17)
+        logger.log(buildFaultRecord(FaultLogger::EVT_BMS_OK_FALL, firstFaultTrigger));
+    } else if (!bmsFault && bmsFaultPrev) {
+        logger.log(buildFaultRecord(FaultLogger::EVT_BMS_OK_RISE, firstFaultTrigger));
+    }
+    bmsFaultPrev = bmsFault;
 
     // Auto-rearma: cuando todo se despeja, BMS_OK vuelve a HIGH. El latch HW
     // mantiene el SDC abierto hasta el reset manual humano (EV6.1.6).
@@ -872,8 +899,10 @@ void updateCanTx()
     gCan->setPacket((uint32_t)12, d12, 3);
 
     // ── ID 13 (0xD) — maxTotalFailTime(ms), numTriesResetComm UINT16×2 ─────
-    uint16_t d13[2] = { canMaxFailMs, canNumTriesReset };
-    gCan->setPacket((uint32_t)13, d13, 2);
+    // B4-5 maxCommFailMs · B6-7 lastCommFailMs (antes relleno 0xFF).
+    uint16_t d13[4] = { canMaxFailMs, canNumTriesReset,
+                        canMaxCommFailMs, canLastCommFailMs };
+    gCan->setPacket((uint32_t)13, d13, 4);
 
     // ── ID 14 (0xE) — lastFailTime(ms), numCommFails, numCrcFails,
     //                  numTriesReset  UINT16×4 ─────────────────────────────
