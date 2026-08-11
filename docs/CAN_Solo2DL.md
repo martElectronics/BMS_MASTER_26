@@ -756,12 +756,23 @@ El AiM es un **logger**: del inversor lee lo que **transmite** (§21.1). Los
 >
 > ⚠ El inversor a **125 kbps** en CAN2. Byte order **Big Endian**, casi todo
 > **Signed**, **Gain = 1/Scale**. Start Bit en convención RaceStudio (byte bajo).
+>
+> ⚠ **DLC 8 en todos**, igual que el BMS: el manual DTI §2.4 dice literalmente
+> *"Every message has a fixed length of 8 bytes. Bytes which are not used
+> filled with 0xFF"*. Los campos RESERVED se leen como 255, ignóralos.
+>
+> ✅ Contrastado con el **DTI CAN Manual v2.5** (2023-05-11): §21.1 cubre los
+> 8 packets transmitidos (0x1F-0x26) con **todos** sus campos, y §21.2 los 12
+> comandos (0x01-0x0C).
 
 ### 21.1 Transmitido por el inversor (el AiM lo lee)
 
 | ID | Packet | Canal | Start Bit | Bits | Fmt | Gain | Ud |
 |---|---|---|---|---|---|---|---|
-| 0x3E1 | 0x1F | INV_TargetIq    | 8  | 16 | S | 0.1  | A |
+| 0x3E1 | 0x1F | INV_ControlMode | 0  | 8  | U | 1    | enum |
+| 0x3E1 | 0x1F | INV_TargetIq    | 16 | 16 | S | 0.1  | A |
+| 0x3E1 | 0x1F | INV_MotorPos    | 32 | 16 | U | 0.1  | ° |
+| 0x3E1 | 0x1F | INV_MotorStill  | 40 | 8  | U | 1    | bool |
 | 0x401 | 0x20 | INV_ERPM        | 24 | 32 | S | 1    | ERPM |
 | 0x401 | 0x20 | INV_Duty        | 40 | 16 | S | 0.1  | % |
 | 0x401 | 0x20 | INV_VinDC       | 56 | 16 | S | 1    | V |
@@ -778,8 +789,20 @@ El AiM es un **logger**: del inversor lee lo que **transmite** (§21.1). Los
 | 0x481 | 0x24 | INV_CANmapVer   | 56 | 8  | U | 1    | — |
 | 0x4A1 | 0x25 | INV_MaxAC_cfg   | 8  | 16 | S | 0.1  | A |
 | 0x4A1 | 0x25 | INV_MaxAC_avail | 24 | 16 | S | 0.1  | A |
+| 0x4A1 | 0x25 | INV_MinAC_cfg   | 40 | 16 | S | 0.1  | A |
+| 0x4A1 | 0x25 | INV_MinAC_avail | 56 | 16 | S | 0.1  | A |
 | 0x4C1 | 0x26 | INV_MaxDC_cfg   | 8  | 16 | S | 0.1  | A |
 | 0x4C1 | 0x26 | INV_MaxDC_avail | 24 | 16 | S | 0.1  | A |
+| 0x4C1 | 0x26 | INV_MinDC_cfg   | 40 | 16 | S | 0.1  | A |
+| 0x4C1 | 0x26 | INV_MinDC_avail | 56 | 16 | S | 0.1  | A |
+
+**INV_ControlMode (0x3E1 byte 0):** 1=SPEED · 2=CURRENT · 3=CURRENT_BRAKE ·
+4=POS · 7=NONE (0, 5, 6 sin usar). **INV_MotorStill:** 1=parado, 0=girando.
+
+⚠ **`INV_TargetIq` va en los bytes 1-2**, no en 0-1 — es el único campo del
+inversor que no arranca en byte par, así que su Start Bit es **16** (el del
+byte bajo, byte 2). El doc lo daba antes como 8; si lo configuraste con 8
+estabas leyendo Control mode + el byte alto de Target Iq. Verifícalo en el bus.
 
 **INV_FaultCode (0x441 byte 4):** 0=OK · 1=Overvoltage · 2=Undervoltage ·
 3=DRV · 4=Overcurrent · 5=Ctrl OverTemp · 6=Motor OverTemp · 7=Sensor wire ·
