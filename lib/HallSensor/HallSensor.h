@@ -124,7 +124,7 @@
 #define HALL_I_MAX_CHARGE      -500.0f  ///< Corriente máxima de carga (A, negativa = carga)
 
 // Tiempo de fallo según norma FS EV 5.8
-#define HALL_FAULT_MS        500UL    ///< Fallo confirmado si persiste >500ms
+#define HALL_FAULT_MS        250UL    ///< Fallo confirmado si persiste >500ms
 
 
 // ============================================================================

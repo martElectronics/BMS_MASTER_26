@@ -32,6 +32,16 @@
 #include "FaultTimer.h"         // debounce K-de-N (mismo que main.cpp)
 #include "HallSensor.h"         // amperímetro DHAB S/118 (mide corriente de carga)
 
+// ── Dashboard de telemetría en vivo (el mismo del firmware de carrera) ──────
+// ⚠ Su constructor exige SocEstimator y FanController. El charger NO gestiona
+//   ninguno de los dos: se instancian y NO se llama a su begin()/update(), así
+//   que no tocan hardware (el PWM de los fans queda intacto) y el panel pinta
+//   esos dos campos a 0. SOC y FAN NO son válidos en el cargador — ignóralos.
+#define SOC_PACK_CAPACITY_AH   (4.0f * 11)
+#include "SocEstimator.h"
+#include "FanController.h"
+#include "Telemetrydashboard.h"
+
 // ⚠ TEMPORAL: 0 = el fallo del Hall NO corta la carga (solo avisa). Mientras el
 // divisor del canal 350A esté sin arreglar en HW (offset ~2.5V fuera de ventana).
 // Volver a 1 cuando el DHAB de 350A dé ~1.62V a 0 A.
@@ -74,7 +84,6 @@
 #define RX_TIMEOUT_MS        5000UL     ///< si no llega Message 2 en este tiempo → cargador mudo
 
 #define WDG_TIMEOUT_US       8000000UL  ///< IWDG 8 s (igual que el BMS)
-#define MONITOR_MS           500UL      ///< cadencia del monitor V/T en vivo (tecla 'm')
 
 // ── VENTANA DE GRACIA POR FALLO DE COMMS DEL BQ ─────────────────────────────
 // Un fallo de comunicación (lectura fallida o BQ sin direccionar) NO baja
@@ -100,8 +109,8 @@
 // válido NO corta la carga; solo un fallo real y persistente. El retry del driver
 // cubre el ruido de transporte (COMM/CRC); esto cubre el valor espurio.
 #define FAULT_V_MS           200UL      ///< OV de celda debe persistir ≥500 ms
-#define FAULT_T_MS           500UL     ///< OT/UT debe persistir ≥1000 ms
-#define FAULT_NTC_MS         750UL     ///< NTC abierto debe persistir ≥1000 ms
+#define FAULT_T_MS           400UL     ///< OT/UT debe persistir ≥1000 ms
+#define FAULT_NTC_MS         400UL     ///< NTC abierto debe persistir ≥1000 ms
 
 // Tras armar SDC_TSON, PRECHARGE_DONE debe llegar antes de esto o
 // PRECHARGE_FAIL se enclava HIGH (solo se quita con reset de alimentación/MCU).
@@ -136,6 +145,33 @@ static BQ79606  bms(bqCfg);
 // Amperímetro: mide la corriente de carga; sus fallos (desconexión, stuck,
 // ruido, sobre-I, ADC saturado) cortan la carga vía chargeAllowed().
 static HallSensor hall(PIN_AMP_30A, PIN_AMP_350A);
+
+// ── Dashboard: objetos y mapeo módulo→celda/NTC ─────────────────────────────
+// Mismo mapeo que main.cpp: módulo m = boards 2m (par, celdas 1-6 / NTC 1-6) y
+// 2m+1 (impar, celdas 7-11 / NTC 7-9).
+static constexpr int NUM_MODULES = TOTALBOARDS / 2;
+
+static float modCellV(int m, int n)   // n = 1..11
+{
+    int ev = 2 * m, od = 2 * m + 1;
+    return (n <= 6) ? bms.getVoltage(ev, n - 1) : bms.getVoltage(od, n - 7);
+}
+static float modCellT(int m, int k)   // k = 1..9
+{
+    int ev = 2 * m, od = 2 * m + 1;
+    return (k <= 6) ? bms.getTemperature(ev, k - 1) : bms.getTemperature(od, k - 7);
+}
+
+static SocEstimator  dashSoc;              ///< NO usado por el charger (ver nota del include)
+static FanController dashFan(PIN_PWM);     ///< NO usado: sin begin() no toca el pin
+static const DashConfig dashCfg = {
+    NUM_MODULES, 11, 9,
+    modCellV, modCellT,
+    CELL_VMIN_HARD_V, CELL_VMAX_HARD_V,    // umbrales de CARGA (no los de carrera)
+    CELL_TMIN_CHG_C,  CELL_TMAX_CHG_C,
+    500
+};
+static TelemetryDashboard dash(Serial, bms, hall, dashSoc, dashFan, dashCfg);
 
 static CAN_BUS* gCan   = nullptr;
 static bool     gCanOk = false;
@@ -180,10 +216,9 @@ static float         chgOutI         = 0.0f;    ///< I de salida reportada
 //  scrutiMode (ON por defecto, tecla 'q' lo apaga): calla SOLO el diagnostico
 //    de comms (ventana de gracia, reInit, CRC por board). Los fallos de
 //    V/T/NTC/Hall y las transiciones de BMS_OK SIEMPRE se ven (con detalle).
-//  liveMonitor (tecla 'm'): imprime V y T en vivo con valores YA cacheados por
-//    readPack (no mete trafico extra en el bus ni bloquea el loop).
+//  El monitor V/T en vivo lo sirve ahora TelemetryDashboard (teclas 'm'/'j');
+//  el liveMonitor propio que habia aqui se retiro por redundante.
 static bool          scrutiMode      = true;   ///< arranque en modo scruti (diag comms en silencio)
-static bool          liveMonitor     = false;
 
 // ============================================================================
 //  PROTOTIPOS
@@ -198,7 +233,6 @@ void   pollMessage2();
 void   printChgStatus();
 void   printVoltages();
 void   printTemps();
-void   printLiveVT();
 void   printVFaultDetail();
 void   printTFaultDetail();
 void   printNtcFaultDetail();
@@ -250,7 +284,7 @@ void setup()
                   CELL_VMIN_HARD_V, CELL_VMAX_HARD_V,
                   CELL_TMIN_CHG_C, CELL_TMAX_CHG_C);
     Serial.println(F("ARRANCA SIN CARGAR. Comandos:"));
-    Serial.println(F("  g=start x=stop c,<I>=corriente  v=voltajes t=temps  m=monitor  q=diag  f,<ms>=ventana  d=datos r=restart"));
+    Serial.println(F("  g=start x=stop c,<I>=corriente  v=voltajes t=temps  m=panel j=panel(JSON)  q=diag  f,<ms>=ventana  d=datos r=restart"));
 
     IWatchdog.begin(WDG_TIMEOUT_US);
     tLastChgRx = millis();
@@ -313,14 +347,22 @@ void loop()
         sendMessage1(allow);
         charging = allow;
 
-        if (!liveMonitor) printChgStatus();   // en modo monitor manda la tabla V/T
+        if (!dash.active()) printChgStatus();   // con el panel activo manda el dashboard
     }
 
-    // Monitor V/T en vivo (tecla 'm'): valores cacheados, sin leer el bus.
-    static unsigned long tMon = 0;
-    if (liveMonitor && (millis() - tMon >= MONITOR_MS)) {
-        tMon = millis();
-        printLiveVT();
+    // Dashboard de telemetría en vivo (teclas 'm' = ANSI, 'j' = JSON). Solo LEE
+    // los valores ya cacheados por readPack — no dispara lecturas del BQ. Con el
+    // panel apagado el coste es ~0.
+    {
+        DashFaults df;
+        df.bmsOk  = bmsSafe;
+        df.fV     = fV.confirmed(millis(), FAULT_V_MS);
+        df.fT     = fT.confirmed(millis(), FAULT_T_MS);
+        df.fNtc   = fNtc.confirmed(millis(), FAULT_NTC_MS);
+        df.fComm  = fComm.confirmed(millis(), commWindowMs);
+        df.fHall  = !hall.isOK();
+        df.initOk = bmsInitOk;
+        dash.update(df);
     }
 
     IWatchdog.reload();
@@ -762,27 +804,6 @@ void printTemps()
     Serial.printf("Tmin=%.1f  Tmax=%.1f\n", bms.getMinTemp(), bms.getMaxTemp());
 }
 
-// ============================================================================
-//  Monitor V/T en vivo (tecla 'm') — valores CACHEADOS (readPack ya lee cada
-//  SAMPLE_MS); NO mete trafico extra en el bus ni bloquea el loop.
-// ============================================================================
-void printLiveVT()
-{
-    Serial.println(F("\n===== MONITOR V/T (en vivo) ====="));
-    for (uint8_t b = 0; b < TOTALBOARDS; b++) {
-        Serial.printf("M%02u.%c V:", b / 2 + 1, (b % 2 == 0) ? 'a' : 'b');
-        for (uint8_t c = 0; c < CELLS_FOR_BOARD(b); c++)
-            Serial.printf(" %.3f", bms.getVoltage(b, c));
-        Serial.print(F("   T:"));
-        for (uint8_t k = 0; k < NTCS_PER_BOARD[b % 2]; k++)
-            Serial.printf(" %.1f", bms.getTemperature(b, k));
-        Serial.println();
-    }
-    Serial.printf("Vmin=%.3f Vmax=%.3f dV=%.0fmV | Tmin=%.1f Tmax=%.1f\n",
-                  bms.getMinVoltage(), bms.getMaxVoltage(), bms.getVoltageDelta(),
-                  bms.getMinTemp(), bms.getMaxTemp());
-}
-
 // Detalle de fallo de V: modulo + celda + valor. Mapeo igual que main.cpp:
 // modulo = board/2+1; board par -> celdas 1..6, board impar -> celdas 7..11.
 void printVFaultDetail()
@@ -895,9 +916,18 @@ void handleSerial()
     case 'd':
         printChgStatus();
         break;
+    // Dashboard en vivo: 'm' panel ANSI, 'j' salida JSON (tools/TelemetryWeb).
+    // Mismas teclas que el firmware de carrera.
     case 'm':
-        liveMonitor = !liveMonitor;
-        Serial.printf("[MON] monitor V/T en vivo %s\n", liveMonitor ? "ON" : "OFF");
+        if (!dash.active())            { dash.setJsonMode(false); dash.toggle(); }
+        else if (dash.isJsonMode())    { dash.toggle(); dash.setJsonMode(false); dash.toggle(); }
+        else                           { dash.toggle(); }
+        break;
+
+    case 'j':
+        if (!dash.active())            { dash.setJsonMode(true); dash.toggle(); }
+        else if (!dash.isJsonMode())   { dash.toggle(); dash.setJsonMode(true); dash.toggle(); }
+        else                           { dash.toggle(); }
         break;
     case 'q':
         scrutiMode = !scrutiMode;
