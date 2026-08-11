@@ -834,11 +834,20 @@ Bytes 4-7 reservados (siempre 0). No los declares o loguearás ceros.
 
 | Valor | Significado |
 |---|---|
+| **7** | ⚠ **BYPASS DE BANCO ACTIVO** — la salida R2D esta forzada, sin ningun enclavamiento |
 | 0 | R2D activo / OK |
 | 2 | SDC abierto |
 | 6 | freno desconectado o en corto (brake2 fuera de banda) |
 | 3 | APPS implausible |
 | 1 | esperando start + freno |
+
+> El **7 tiene prioridad sobre todos los demas**: si aparece, la VCU esta en modo
+> banco con el par habilitado saltandose SDC, secuencia de armado, freno e
+> implausibilidad del APPS. Nunca deberia verse en pista. Se corresponde con el
+> byte 7 del 0x48E puesto a 1 (ver §22.4).
+>
+> La salida R2D es **ACTIVO BAJO** en el pin (LOW = par habilitado), pero el bit
+> `VCU_R2D` del 0x48E se publica en logica positiva: 1 = R2D activo.
 
 > Los valores 4 (fallo inversor) y 5 (BMS perdido) del layout viejo **no existen**
 > en VCU_26: este firmware no habla con el inversor ni escucha al BMS. El 6 es
@@ -875,9 +884,14 @@ Bytes 4-7 reservados (siempre 0). No los declares o loguearás ceros.
 | VCU_R2D    | R2D_ | 32 | 8  | U | Ready-to-Drive |
 | VCU_AppsSt | APST | 40 | 8  | U | estado APPS 0=NORMAL 1=IMPL 2=PENDING |
 | VCU_BrakeFlt | BFLT | 48 | 8 | U | freno desconectado/en corto → tumba el R2D |
+| VCU_Bypass   | BYPS | 56 | 8 | U | ⚠ bypass de banco: R2D forzado sin enclavamientos |
 
 > `VCU_BrakeFlt` (byte 6) no estaba en la versión anterior de esta tabla pero la
-> VCU sí lo emite. Es el que explica un `VCU_FaultCause = 6`. Byte 7 reservado (0).
+> VCU sí lo emite. Es el que explica un `VCU_FaultCause = 6`.
+>
+> `VCU_Bypass` (byte 7) es el bypass de banco (opción 21 del menú serie de la
+> VCU). **Merece una alarma en el dashboard**: mientras vale 1 el par está
+> habilitado saltándose todos los enclavamientos. No persiste entre reinicios.
 >
 > IDs VCU del Excel aún **sin implementar**: 0x190 (400), 0x489/0x48A (FAIL
 > CODES), 0x48D (steer/ruedas), 0x48F (PWM). El layout de 0x48E cambió respecto
