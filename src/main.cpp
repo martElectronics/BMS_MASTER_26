@@ -127,9 +127,9 @@ static TelemetryDashboard dash(Serial, bms, hall, soc, fan, dashCfg);
 #define CELL_OT_C     60.0f     ///< Overtemperature (°C) — EV5.8.4: ≤60
 
 // Debounce por normativa FS EV5.8
-#define FAULT_V_MS     5000UL    ///< V debe persistir ≥500 ms
-#define FAULT_T_MS    5000UL    ///< T debe persistir ≥1000 ms
-#define FAULT_NTC_MS  5000UL    ///< NTC abierto (pérdida de medida, clase T)
+#define FAULT_V_MS     150000UL    ///< V debe persistir ≥500 ms
+#define FAULT_T_MS    150000UL    ///< T debe persistir ≥1000 ms
+#define FAULT_NTC_MS  150000UL    ///< NTC abierto (pérdida de medida, clase T)
 // COMM/INIT: ventanas "medias" (2-3 s) para tolerar glitches de ruido del BQ
 // sin abrir el SDC ni relanzar el auto-address a la primera. NO son fallos de
 // celda FS (esos son V/T/NTC arriba, sin tocar). El reInit ahora se dispara
