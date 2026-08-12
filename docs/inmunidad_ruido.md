@@ -183,13 +183,145 @@ quiere en un BMS.
 | 4 | Slew-rate + "no físico" | V sucios, sense abierto | Bajo | ⭐⭐ |
 | 5 | Decimación del ADC | V/T sucios (de origen) | 1 línea | ⭐⭐ |
 | 6 | Apantallado / ferritas / ruteo | EMI real | HW | ⭐⭐⭐ |
+| 7 | **No abortar la lectura + recuperación proporcionada** (§9) | Un board tumba el pack | Medio | ⭐⭐⭐ |
 
 **Regla:** implementar **1 primero**, medir, y elegir el resto con el dato en la
 mano. Sin la métrica de reintentos se trabaja a ciegas.
 
+> El **#7 (§9)** es el de mayor impacto estructural, pero también el único que
+> toca el camino de seguridad del driver: requiere su propia sesión de banco.
+> Los #1-#5 son acotados y se pueden meter de uno en uno.
+
 ---
 
-## 9. Estado actual de los parámetros (referencia)
+## 9. Recuperación proporcionada ante fallo de lectura ⭐
+
+El bloque más importante del documento. Hoy **un solo board ruidoso ciega el
+pack entero y además dispara un auto-address completo** — dos reacciones
+desproporcionadas al problema real.
+
+### 9.1 El problema: la lectura se aborta al primer fallo
+
+[BQ79606.cpp:213-221](../lib/BQ79606/BQ79606.cpp) (idéntico en `readTemperatures`):
+
+```c
+for (uint8_t board = 0; board < TOTALBOARDS; board++) {
+    BQResult r = _readBoardRetry(board, VCELL1H, buf, sizeof(buf), MAXBYTES);
+    if (r != BQResult::OK) { _lastReadFailBoard = board; return r; }  // ← ABORTA
+    ...
+}
+```
+
+Si falla el board 7, **los boards 8-19 no se leen** y se pierde el ciclo entero.
+Consecuencias:
+
+- La seguridad se queda **ciega de todo el pack** por culpa de un board. Si en
+  ese instante el módulo 3 tenía un OV, no se detecta.
+- `fComm` se dispara igual que si la cadena entera estuviera muerta.
+- Solo queda `_lastReadFailBoard` (el último), no **cuántos** ni **cuáles**.
+
+### 9.2 Mejora A — leer todos los boards, marcar los fallidos
+
+Sustituir el `return` por "marcar y continuar":
+
+```c
+uint32_t failMask = 0;                     // bit b = board b fallido este ciclo
+uint8_t  failCount = 0;
+BQResult worst = BQResult::OK;
+
+for (uint8_t board = 0; board < TOTALBOARDS; board++) {
+    BQResult r = _readBoardRetry(board, VCELL1H, buf, sizeof(buf), MAXBYTES);
+    if (r != BQResult::OK) {
+        failMask |= (1UL << board);
+        failCount++;
+        _lastReadFailBoard = board;
+        worst = r;                          // CRC_ERROR / COMM_ERROR
+        continue;                           // ← SEGUIR con los demás
+    }
+    for (uint8_t c = 0; c < 6; c++) { ...decodificar... }
+}
+_boardFailMask = failMask;                  // nuevos miembros de la clase
+_boardFailCount = failCount;
+_updateVoltageStats();                      // ⚠ debe EXCLUIR los de failMask
+return (failCount == 0) ? BQResult::OK : worst;
+```
+
+**Requisitos que NO se pueden saltar:**
+
+1. `_updateVoltageStats()` y `_updateTempStats()` deben **excluir** los boards de
+   `failMask`. Si no, entran datos **rancios** del ciclo anterior en el min/max
+   → se podría perder un OV real o inventar uno falso. Es el punto crítico.
+2. Getters nuevos: `getBoardFailMask()`, `getBoardFailCount()`.
+3. La aplicación debe seguir tratando la pérdida parcial como **fallo**
+   (EV5.8.13: pérdida de medida = fallo) — pero **sin cegar el resto del pack**.
+
+**Ganancia:** con 1 board fallido conservas 19/20 módulos con datos **válidos**
+y la vigilancia sigue viva sobre ellos.
+
+### 9.3 Mejora B — escalar la recuperación según CUÁNTOS fallan
+
+Sale casi gratis con la A, y es la que evita el cañonazo. `reInit()` cierra la
+UART, hace WAKE, comm-reset, re-direcciona los 20 boards y reconfigura todos los
+registros: **1-5 s bloqueando**, totalmente ciego. Hacer eso porque un board dio
+CRC malo es desproporcionado.
+
+| `failCount` | Interpretación | Reacción propuesta |
+|---|---|---|
+| **1-2 boards** | Ruido localizado: conector, tramo, ese chip | **NO tocar la cadena.** Seguir leyendo; solo esos módulos pierden medida |
+| **Todos desde el board N** | Cadena rota a partir de N | Auto-address (ahí sí procede) |
+| **Todos, incluido el 0** | Base muda / cadena caída | Auto-address + WAKE |
+
+Cómo distinguir el patrón con `failMask`:
+
+```c
+bool contiguoDesdeN = (failMask != 0) &&
+                      ((failMask & (failMask + (failMask & -failMask))) == 0);
+bool incluyeBase    = (failMask & 1) != 0;
+```
+
+Aplicado al caso real del **board 0 en la precarga**: si falla **solo** el bit 0,
+sabes que es el base y no la cadena; si se encienden todos, es la cadena entera.
+Hoy los dos casos son indistinguibles.
+
+### 9.4 Mejora C — recuperación escalonada
+
+Entre "reintentar trama" (~1 ms) y "reinicializar la cadena" (~5 s) **no hay
+nada**. Faltan peldaños intermedios y baratos:
+
+| Nivel | Acción | Coste | Estado |
+|---|---|---|---|
+| 1 | Reintento de trama (`BQ_READ_ATTEMPTS`) | ~1 ms | ✅ ya está |
+| 2 | **Re-sincronizar el bus** (comm-clear / comm-reset sin re-direccionar) | ~ms | ❌ `_commClear()` **ya existe** en el driver pero NO se usa en recuperación |
+| 3 | Releer solo el board problemático con más reintentos | ~ms | ❌ |
+| 4 | Auto-address completo | 1-5 s | ✅ es lo único que hay hoy |
+
+⚠ `_commClear()` tal como está deja el TX en LOW y **no reabre la UART**: habría
+que completarlo (o usar `_commReset()`, que sí renegocia el baudrate) antes de
+meterlo en el camino de recuperación.
+
+### 9.5 Mejora D — `reInit()` no bloqueante
+
+Convertirlo en máquina de estados para no parar el loop varios segundos. Hoy
+está parcheado con `IWatchdog.reload()` a ambos lados y con
+`setMaxAttempts(1)` durante la precarga. Es la de más trabajo y la menos
+urgente: dejarla para el final.
+
+### 9.6 Orden y riesgo
+
+1. **9.2 (A)** — leer todos y marcar. Toca el **camino de seguridad** del driver:
+   el riesgo está en la exclusión de los boards fallidos del min/max. Validar en
+   banco desconectando un board a propósito y comprobando que el resto sigue
+   midiendo y que ese módulo NO aporta datos rancios.
+2. **9.3 (B)** — decidir la recuperación por `failCount`/`failMask`.
+3. **9.4 (C)** — peldaños intermedios.
+4. **9.5 (D)** — no bloqueante.
+
+**No implementar A+B con prisa antes de rodar**: cambian cómo se comporta la
+seguridad ante pérdida de medida. Merecen su sesión de banco.
+
+---
+
+## 10. Estado actual de los parámetros (referencia)
 
 | Parámetro | main.cpp | charger.cpp | Normativa FS |
 |---|---|---|---|

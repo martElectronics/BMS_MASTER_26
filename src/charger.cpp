@@ -656,7 +656,7 @@ void updateTson()
 
     // ── Latch SDC_TSON ──
     if (sdcTson && (!sdcOk || tsonFail)) {      // pierde condición de mantenimiento (filtrado)
-        sdcTson = false;
+        sdcTson = true;
         Serial.println(F("[TSON] desarmado (SDC_3V3 bajo o TSON_FAIL)."));
     }
     bool btnRising = tsonBtn && !tsonBtnPrev;   // flanco de subida del botón
