@@ -127,22 +127,22 @@ static TelemetryDashboard dash(Serial, bms, hall, soc, fan, dashCfg);
 #define CELL_OT_C     60.0f     ///< Overtemperature (°C) — EV5.8.4: ≤60
 
 // Debounce por normativa FS EV5.8
-#define FAULT_V_MS     150000UL    ///< V debe persistir ≥500 ms
-#define FAULT_T_MS    150000UL    ///< T debe persistir ≥1000 ms
-#define FAULT_NTC_MS  150000UL    ///< NTC abierto (pérdida de medida, clase T)
+#define FAULT_V_MS     1500UL    ///< V debe persistir ≥500 ms
+#define FAULT_T_MS    1500UL    ///< T debe persistir ≥1000 ms
+#define FAULT_NTC_MS  1500UL    ///< NTC abierto (pérdida de medida, clase T)
 // COMM/INIT: ventanas "medias" (2-3 s) para tolerar glitches de ruido del BQ
 // sin abrir el SDC ni relanzar el auto-address a la primera. NO son fallos de
 // celda FS (esos son V/T/NTC arriba, sin tocar). El reInit ahora se dispara
 // SOLO cuando fComm lleva confirmado FAULT_COMM_MS (ver sampleAndEvaluate) →
 // ante ruido se vuelve a pedir datos, no se re-inicializa la cadena.
-#define FAULT_COMM_MS 6000UL    ///< Comms BQ caídas sin recuperar (antes 500)
+#define FAULT_COMM_MS 1000UL    ///< Comms BQ caídas sin recuperar (antes 500)
 #define FAULT_INIT_MS 200UL    ///< Init BQ fallido persistente (antes: inmediato)
 
 // Cadencias de muestreo: 2× respecto al mínimo FS para tener ≥2 muestras
 // dentro de cada ventana de debounce → mejor filtrado de ruido transitorio.
 // Las ventanas FAULT_V_MS / FAULT_T_MS NO se tocan (las marca FS EV5.8).
-#define SAMPLE_V_MS    250UL
-#define SAMPLE_T_MS    500UL
+#define SAMPLE_V_MS    100UL
+#define SAMPLE_T_MS    100UL
 #define PRINT_MS      2000UL
 
 // Watchdog HW independiente: si el loop() se cuelga y no se refresca,
@@ -154,6 +154,12 @@ static TelemetryDashboard dash(Serial, bms, hall, soc, fan, dashCfg);
 // Tras armar SDC_TSON, PRECHARGE_DONE debe llegar antes de este tiempo o
 // PRECHARGE_FAIL se enclava HIGH (solo se quita con reset de alimentación).
 #define PRECHARGE_TIMEOUT_MS  5000UL
+
+// Filtro anti-ruido de SDC_3V3 (PC7): tiempo que el nivel debe mantenerse
+// ESTABLE antes de aceptarlo. Sube este valor si siguen colandose glitches;
+// es tambien el retardo con el que el firmware ve una apertura REAL del SDC
+// (los AIRs ya han abierto por HW para entonces).
+#define SDC_FILTER_MS         150UL
 
 // ============================================================================
 //  ESTADO DE FALLOS — debounce NO-latching (auto-rearma; el latch es HW)
@@ -666,28 +672,40 @@ void updateTson()
 
 
 
-    // Debounce de SDC_3V3 (PC7): un glitch de EMI (transitorio de precarga/HV) NO
-    // debe desarmar el TSON. Solo cuenta como "SDC caido" si SDC_3V3 esta LOW de
-    // forma continua el tiempo de debounce (k=2 lecturas + ventana); una lectura
-    // HIGH rompe la racha. NO compromete el SDC HW (los AIRs abren por hardware);
-    // solo filtra la reaccion logica del latch SDC_TSON. Ajusta los 50 ms al
-    // ancho real del glitch si hiciera falta.
-    static FaultTimer fSdc;
-    fSdc.sample(!sdc3v3, millis());
-    bool sdc3v3Lost = fSdc.confirmed(millis(), 50UL);
+    // ── FILTRO DE SDC_3V3 (PC7) ─────────────────────────────────────────────
+    // La linea llega con mucho ruido/EMI y da flancos espurios en los dos
+    // sentidos. Debounce de NIVEL: el estado filtrado solo cambia si el nivel
+    // nuevo se mantiene estable SDC_FILTER_MS; cualquier rebote reinicia la
+    // cuenta. Como el loop corre a kHz, en esa ventana se muestrea miles de
+    // veces -> un tren de ruido NO consigue mover el estado.
+    // Frente al FaultTimer que habia antes: aquel solo filtraba la BAJADA (y
+    // con k=2 lecturas), asi que una subida espuria pasaba directa.
+    // ⚠ NO compromete la seguridad: el SDC es HARDWARE y los AIRs abren solos.
+    //   Esto solo filtra la reaccion LOGICA del latch SDC_TSON, que ante una
+    //   apertura REAL llegara SDC_FILTER_MS mas tarde.
+    static bool          sdcStable  = false;   // nivel ya filtrado
+    static bool          sdcLastRaw = false;   // ultima lectura cruda
+    static unsigned long tSdcChange = 0;       // ms del ultimo cambio de la cruda
+    if (sdc3v3 != sdcLastRaw) {                // rebote: reinicia la cuenta
+        sdcLastRaw = sdc3v3;
+        tSdcChange = millis();
+    } else if (sdc3v3 != sdcStable && (millis() - tSdcChange) >= SDC_FILTER_MS) {
+        sdcStable = sdc3v3;                    // nivel estable -> se acepta
+    }
+    const bool sdcOk = sdcStable;              // usar SIEMPRE esta, no la cruda
 
 
 
 
     // ── Latch SDC_TSON ──
-    if (sdcTson && (sdc3v3Lost || tsonFail)) {  // pierde condición de mantenimiento (SDC_3V3 con debounce)
+    if (sdcTson && (!sdcOk || tsonFail)) {      // pierde condición de mantenimiento (SDC_3V3 filtrado)
         sdcTson = false;
         stkTsonDisarm = true;                       // sticky post-mortem (ID 17)
         if (cntTsonDisarm < 255) cntTsonDisarm++;
         Serial.println(F("[TSON] desarmado (SDC_3V3 bajo o TSON_FAIL)."));
     }
     bool btnRising = tsonBtn && !tsonBtnPrev;   // flanco de subida del botón
-    if (!sdcTson && btnRising && !bmsFault && !hvAccu && sdc3v3 && !tsonFail) {
+    if (!sdcTson && btnRising && !bmsFault && !hvAccu && sdcOk && !tsonFail) {
         sdcTson = true;
         Serial.println(F("[TSON] armado."));
         delay(2000);

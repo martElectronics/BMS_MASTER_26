@@ -33,7 +33,7 @@ struct FaultTimer {
     // Confirma si hay >=k malas consecutivas Y la ventana se cumplió.
     // La resta (now - tStart) en unsigned es correcta aun con overflow de millis().
     bool confirmed(unsigned long now, unsigned long windowMs,
-                   uint8_t k = 2) const {
+                   uint8_t k = 5) const {
         return (badRun >= k) && ((now - tStart) >= windowMs);
     }
 };

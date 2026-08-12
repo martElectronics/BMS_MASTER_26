@@ -64,11 +64,11 @@
 // PROBADO en vez de calcularlo por nº de serie (no quedó claro: los arrays
 // eran [12][11]=132 puntos, pero indicaste 5S/módulo). ⚠ CONFIRMAR con
 // multímetro la tensión del pack al 100 %.
-#define CHG_TERM_VOLT_V      456.0f     ///< ⚠ Vmax fin de carga (valor del FW antiguo). FIJO: nunca por serial.
-#define CHG_START_CURRENT_A  8.0f       ///< corriente DC al arrancar (la que ya sabes que funciona)
+#define CHG_TERM_VOLT_V      460.0f     ///< ⚠ Vmax fin de carga (valor del FW antiguo). FIJO: nunca por serial.
+#define CHG_START_CURRENT_A  9.0f       ///< corriente DC al arrancar (la que ya sabes que funciona)
 #define CHG_MAX_CURRENT_A    14.0f       ///< ⚠ TOPE duro: el serial no puede pedir más (atado al límite AC/plomos)
 
-#define CELL_VMAX_HARD_V     4.2f      ///< corte DURO por celda (seguridad independiente de Vmax)
+#define CELL_VMAX_HARD_V     4.15f      ///< corte DURO por celda (seguridad independiente de Vmax)
 // Corte DURO por celda BAJA. Mismo umbral que main.cpp (CELL_UV_V) y que el
 // registro UV_THRESH del BQ (0x53 = 2.8 V). Cubre dos escenarios:
 //   · celda realmente descargada → no se carga a 3 A un pack por debajo de UV;
@@ -115,6 +115,10 @@
 // Tras armar SDC_TSON, PRECHARGE_DONE debe llegar antes de esto o
 // PRECHARGE_FAIL se enclava HIGH (solo se quita con reset de alimentación/MCU).
 #define PRECHARGE_TIMEOUT_MS 50000UL
+
+// Filtro anti-ruido de SDC_3V3 (PC7): tiempo que el nivel debe mantenerse
+// ESTABLE antes de aceptarlo. Mismo criterio que main.cpp.
+#define SDC_FILTER_MS        150UL
 
 // IDs J1939 extendidos
 #define ID_BMS_TO_CHG        0x1806E5F4UL   ///< Message 1 (BMS → cargador)
@@ -632,18 +636,36 @@ void updateTson()
     bool hvAccu   = digitalRead(PIN_HV_ACCU_VIL);
     bool tsonBtn  = digitalRead(PIN_TSON_BTN);
 
+    // ── FILTRO DE SDC_3V3 (PC7) ─────────────────────────────────────────────
+    // Misma logica que main.cpp: debounce de NIVEL simetrico. El estado
+    // filtrado solo cambia si el nivel nuevo se mantiene estable
+    // SDC_FILTER_MS; cualquier rebote reinicia la cuenta. Como el loop corre a
+    // kHz, un tren de ruido no consigue mover el estado.
+    // ⚠ NO compromete la seguridad: el SDC es HARDWARE y los AIRs abren solos;
+    //   esto solo filtra la reaccion LOGICA del latch SDC_TSON.
+    static bool          sdcStable  = false;
+    static bool          sdcLastRaw = false;
+    static unsigned long tSdcChange = 0;
+    if (sdc3v3 != sdcLastRaw) {
+        sdcLastRaw = sdc3v3;
+        tSdcChange = millis();
+    } else if (sdc3v3 != sdcStable && (millis() - tSdcChange) >= SDC_FILTER_MS) {
+        sdcStable = sdc3v3;
+    }
+    const bool sdcOk = sdcStable;               // usar SIEMPRE esta, no la cruda
+
     // ── Latch SDC_TSON ──
-    if (sdcTson && (!sdc3v3 || tsonFail)) {     // pierde condición de mantenimiento
+    if (sdcTson && (!sdcOk || tsonFail)) {      // pierde condición de mantenimiento (filtrado)
         sdcTson = false;
         Serial.println(F("[TSON] desarmado (SDC_3V3 bajo o TSON_FAIL)."));
     }
     bool btnRising = tsonBtn && !tsonBtnPrev;   // flanco de subida del botón
-    if (!sdcTson && btnRising && bmsSafe && !hvAccu && sdc3v3 && !tsonFail) {
+    if (!sdcTson && btnRising && bmsSafe && !hvAccu && sdcOk && !tsonFail) {
         sdcTson = true;
         Serial.println(F("[TSON] armado."));
     } else if (!sdcTson && btnRising) {
         Serial.printf("[TSON] boton IGNORADO: SAFE=%d HV_ACCU=%d SDC_3V3=%d TSON_FAIL=%d\n",
-                      bmsSafe, hvAccu, sdc3v3, tsonFail);
+                      bmsSafe, hvAccu, sdcOk, tsonFail);
     }
     tsonBtnPrev = tsonBtn;
     digitalWrite(PIN_SDC_TSON, sdcTson ? HIGH : LOW);
