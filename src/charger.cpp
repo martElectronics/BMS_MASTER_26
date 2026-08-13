@@ -103,6 +103,11 @@
 //   prácticamente en cada muestra fallida. Mismo valor que main.cpp.
 #define CHG_REINIT_RETRY_MS  2000UL
 
+// Cuándo INTENTAR reconectar, muy por debajo de la ventana de gracia. Ver la
+// nota de readPack(): reconectar es un intento barato (agresivo), declarar
+// fallo para la carga es caro (conservador). NO usar el mismo valor para los dos.
+#define CHG_COMM_REINIT_MS   400UL
+
 // Debounce de V/T/NTC (mismo criterio que main.cpp): el fallo debe persistir la
 // ventana Y ≥2 muestras consecutivas (k por defecto del FaultTimer). Muestreamos
 // a SAMPLE_MS (250 ms) → ≥2 lecturas por ventana → un glitch de ruido con CRC
@@ -455,6 +460,24 @@ bool readPack()
     if (readOk) everRead = true;          // ya hay medida buena que conservar
     fComm.sample(!readOk, now);
     if (readOk) return true;
+
+    // ── 1a. RECONEXION TEMPRANA (igual que main.cpp) ────────────────────────
+    // A CHG_COMM_REINIT_MS se intenta reconectar, MUCHO antes de que se agote
+    // la ventana de gracia. Son dos tiempos distintos y NO deben mezclarse:
+    //   · reconectar = intento barato, sin coste si falla -> AGRESIVO
+    //   · declarar fallo (BMS_OK LOW, para la carga) -> CONSERVADOR
+    // Usar el mismo valor para ambos obliga a elegir entre "reconecta tarde" o
+    // "corta pronto". Aqui el veredicto lo sigue decidiendo commWindowMs abajo.
+    if (!prechargeRunning && fComm.confirmed(now, CHG_COMM_REINIT_MS)
+        && tryReinit(now)) {
+        now = millis();                   // reInit() bloquea
+        if (readVT()) {
+            everRead = true;
+            fComm.sample(false, now);     // un OK rompe la serie
+            return true;
+        }
+        fComm.sample(true, now);
+    }
 
     // ── 1b. PRECARGA: reconectar YA, al PRIMER fallo (igual que main.cpp) ────
     // El transitorio de HV puede dejar mudo el board base, y esperar toda la

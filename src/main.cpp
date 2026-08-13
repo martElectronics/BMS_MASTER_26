@@ -135,14 +135,33 @@ static TelemetryDashboard dash(Serial, bms, hall, soc, fan, dashCfg);
 // celda FS (esos son V/T/NTC arriba, sin tocar). El reInit ahora se dispara
 // SOLO cuando fComm lleva confirmado FAULT_COMM_MS (ver sampleAndEvaluate) →
 // ante ruido se vuelve a pedir datos, no se re-inicializa la cadena.
-#define FAULT_COMM_MS 1000UL    ///< Comms BQ caídas sin recuperar (antes 500)
+// ⚠ DOS TIEMPOS DISTINTOS, NO MEZCLAR (antes eran el mismo parámetro):
+//   · COMM_REINIT_MS = cuándo INTENTAR RECONECTAR. Sin coste si falla (se
+//     reintenta), así que conviene ser AGRESIVO: cuanto antes, mejor.
+//   · FAULT_COMM_MS  = cuándo DECLARAR FALLO y bajar BMS_OK (abre el SDC y
+//     para el coche). Coste alto, así que CONSERVADOR: solo si de verdad no
+//     se recupera.
+//   Usar el mismo valor para ambos obliga a elegir entre "reconecta tarde" o
+//   "el SDC se abre pronto". Separados no hay que ceder en ninguno:
+//     t=1s  → reInit (WAKE + auto-address); BMS_OK sigue HIGH
+//     t=1-6s→ se sigue leyendo; si recupera, aquí acaba todo
+//     t=6s  → solo si SIGUE caída, BMS_OK LOW
+//   Con el rate-limit de 2 s del reInit, en esos 6 s caben 3 intentos.
+#define COMM_REINIT_MS 1000UL   ///< Cuándo intentar reconectar el BQ (agresivo)
+#define FAULT_COMM_MS 6000UL    ///< Cuándo BMS_OK cae por comms (conservador)
 #define FAULT_INIT_MS 200UL    ///< Init BQ fallido persistente (antes: inmediato)
 
 // Cadencias de muestreo: 2× respecto al mínimo FS para tener ≥2 muestras
 // dentro de cada ventana de debounce → mejor filtrado de ruido transitorio.
 // Las ventanas FAULT_V_MS / FAULT_T_MS NO se tocan (las marca FS EV5.8).
-#define SAMPLE_V_MS    100UL
-#define SAMPLE_T_MS    100UL
+// ⚠ NO bajar a 100 ms: con 20 boards cada readVoltages() tarda ~50 ms y
+//   readTemperatures() ~60 ms. Pidiendo ambas cada 100 ms el bus del BQ queda
+//   ocupado el 100 % del tiempo (110 ms de lectura en una ventana de 100), sin
+//   hueco para que respiren los reintentos y con el doble de tramas expuestas
+//   al ruido por segundo. Muestrear más rápido NO mejora la inmunidad: eso lo
+//   da la exigencia de muestras CONSECUTIVAS (la k de confirmed()).
+#define SAMPLE_V_MS    250UL
+#define SAMPLE_T_MS    500UL
 #define PRINT_MS      2000UL
 
 // Watchdog HW independiente: si el loop() se cuelga y no se refresca,
@@ -517,8 +536,11 @@ void sampleAndEvaluate()
     // (ventana ruidosa: el transitorio de HV puede dejar mudo el board base) se
     // intenta reconectar YA al PRIMER fallo — el WAKE del reInit puede resucitarlo
     // antes de que fComm confirme y tumbe BMS_OK.
+    // ⚠ Usa COMM_REINIT_MS (recuperación), NO FAULT_COMM_MS (veredicto): el
+    // reInit es un INTENTO, no una decisión de seguridad. El nivel de BMS_OK lo
+    // sigue decidiendo updateBmsOk() con FAULT_COMM_MS, mucho más tarde.
     bool reinitNow = prechargeRunning ? readErr
-                                      : fComm.confirmed(now, FAULT_COMM_MS);
+                                      : fComm.confirmed(now, COMM_REINIT_MS);
     if (reinitNow && (now - tLastReinit) >= BMS_REINIT_RETRY_MS) {
             tLastReinit = now;
             canNumTriesReset++;
