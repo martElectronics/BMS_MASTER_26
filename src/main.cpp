@@ -193,6 +193,10 @@ static bool bmsFault = false;     ///< fallo confirmado AHORA (no latcheado)
 // reintenta reInit() con rate-limit (no en cada flanco).
 static bool          bmsInitOk    = false;   ///< true tras begin()/reInit() OK
 static unsigned long tLastReinit  = 0;       ///< ms del último intento de reInit
+// Comando 'S': cadena mandada a SHUTDOWN a proposito. Inhibe el reintento
+// automatico de auto-address (si no, el WAKE del reInit la despertaria sola en
+// ~2 s). Se limpia con 'i' (re-init manual) o con un reset del MCU.
+static bool          bqSleeping   = false;
 #define BMS_REINIT_RETRY_MS  2000UL          ///< cadencia mín. entre reintentos
 
 // Lecturas
@@ -392,7 +396,7 @@ void setup()
         logger.log(buildFaultRecord(FaultLogger::EVT_BOOT, 0));
     }
 
-    Serial.println(F("Cmd: v t a s f c i r  F=fans100%  d=dump log  D=clear log  C=clear cnt  m=ansi  j=json"));
+    Serial.println(F("Cmd: v t a s f c i r  F=fans100%  S=dormir BQ  d=dump log  D=clear log  C=clear cnt  m=ansi  j=json"));
 
     // Arrancar el watchdog AL FINAL (tras el init/calibración acotados).
     // Una vez iniciado NO se puede parar (es independiente por HW).
@@ -463,6 +467,12 @@ void sampleAndEvaluate()
     if (!bmsInitOk) {
         fInit.sample(true, now);
         fComm.sample(true, now);
+        // Dormidos A PROPOSITO (comando 'S'): NO reintentar el auto-address, o
+        // el pulso WAKE del reInit los despertaria a los ~2 s y el shutdown no
+        // serviria de nada. Se sale ANTES del reInit pero DESPUES de los
+        // sample(), para que BMS_OK caiga igual: sin cadena no hay medida del
+        // pack, y eso es un fallo (EV5.8.13) aunque sea intencionado.
+        if (bqSleeping) return;
         if ((now - tLastReinit) >= BMS_REINIT_RETRY_MS) {
             tLastReinit = now;
             canNumTriesReset++;
@@ -1200,7 +1210,21 @@ void handleSerial()
         Serial.println(F("Fallos BQ limpiados."));
         break;
 
+    case 'S':
+        // Manda TODA la cadena a SHUTDOWN (CONTROL1[GOTO_SHUTDOWN]). Los BQ
+        // pierden la configuracion: para volver hay que re-inicializar con 'i'
+        // (hace WAKE + auto-address + _initDevices).
+        // ⚠ Sin cadena NO hay medida del pack -> BMS_OK cae (correcto: pérdida
+        //   de medida = fallo, EV5.8.13). Es un comando de banco, no de pista.
+        bms.shutdown();
+        bqSleeping = true;      // inhibe el reInit automatico (si no, WAKE los despierta)
+        bmsInitOk  = false;     // ya no hay cadena que leer
+        Serial.println(F("[BQ] SHUTDOWN enviado a la cadena. BMS_OK caera (sin medida)."));
+        Serial.println(F("[BQ] Reactivar con 'i' (re-init)."));
+        break;
+
     case 'i':
+        bqSleeping = false;     // despertar: vuelve a permitirse el reInit automatico
         if (bms.reInit()) {
             bmsInitOk   = true;
             tLastReinit = millis();   // reset cadencia auto
