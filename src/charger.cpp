@@ -206,6 +206,11 @@ static bool everRead = false;
 // Solo el primer caso justifica un auto-address — ver readPack().
 static bool chainMute = false;
 
+// Comando 'S': cadena mandada a SHUTDOWN a proposito. Inhibe tryReinit(), o el
+// pulso WAKE del reInit la despertaria sola en un par de segundos. Se limpia
+// con 'i' (re-init manual) o con un reset del MCU.
+static bool bqSleeping = false;
+
 // SDC / TSON / precarga (misma máquina que main.cpp::updateTson).
 static bool          bmsSafe          = false;  ///< última evaluación de seguridad (= safe del loop)
 static bool          sdcTson          = false;  ///< estado del latch TSON (= nivel de PIN_SDC_TSON)
@@ -297,7 +302,7 @@ void setup()
                   CELL_VMIN_HARD_V, CELL_VMAX_HARD_V,
                   CELL_TMIN_CHG_C, CELL_TMAX_CHG_C);
     Serial.println(F("ARRANCA SIN CARGAR. Comandos:"));
-    Serial.println(F("  g=start x=stop c,<I>=corriente  v=voltajes t=temps  m=panel j=panel(JSON)  q=diag  f,<ms>=ventana  d=datos r=restart"));
+    Serial.println(F("  g=start x=stop c,<I>=corriente  v=voltajes t=temps  m=panel j=panel(JSON)  q=diag  f,<ms>=ventana  S=dormir BQ i=re-init  d=datos r=restart"));
 
     IWatchdog.begin(WDG_TIMEOUT_US);
     tLastChgRx = millis();
@@ -395,6 +400,9 @@ void loop()
 // ============================================================================
 bool tryReinit(unsigned long now)
 {
+    // Dormidos a proposito ('S'): no reconectar. Cubre los tres caminos que
+    // llaman aqui (reconexion temprana, precarga y ultimo cartucho).
+    if (bqSleeping) return false;
     if ((now - tLastReinit) < CHG_REINIT_RETRY_MS) return false;
     tLastReinit = now;
 
@@ -994,6 +1002,26 @@ void handleSerial()
         Serial.printf("[UI] modo %s\n", scrutiMode ? "SCRUTI (diag comms en silencio)"
                                                    : "DEV (todo visible)");
         break;
+    case 'S':
+        // Manda TODA la cadena a SHUTDOWN (CONTROL1[GOTO_SHUTDOWN]). Los BQ
+        // pierden la configuracion: para volver hay que re-inicializar con 'i'.
+        // ⚠ Sin cadena NO hay medida del pack -> BMS_OK cae al agotarse la
+        //   ventana de gracia (correcto: perdida de medida = fallo) y la carga
+        //   se cancela. Comando de banco.
+        bms.shutdown();
+        bqSleeping = true;      // inhibe tryReinit (si no, el WAKE los despierta)
+        bmsInitOk  = false;     // ya no hay cadena que leer
+        Serial.println(F("[BQ] SHUTDOWN enviado a la cadena. BMS_OK caera (sin medida)."));
+        Serial.println(F("[BQ] Reactivar con 'i' (re-init)."));
+        break;
+
+    case 'i':
+        bqSleeping = false;     // despertar: vuelve a permitirse el reInit automatico
+        tLastReinit = 0;        // sin esperar al rate-limit
+        bmsInitOk = bms.reInit();
+        Serial.println(bmsInitOk ? F("[BQ] Re-init OK.") : F("[BQ] Re-init FALLO."));
+        break;
+
     case 'r':
         Serial.println(F("Restart..."));
         delay(100);
