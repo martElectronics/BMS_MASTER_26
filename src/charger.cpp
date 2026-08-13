@@ -182,6 +182,15 @@ static const DashConfig dashCfg = {
 };
 static TelemetryDashboard dash(Serial, bms, hall, dashSoc, dashFan, dashCfg);
 
+// Campos extra del JSON, propios del cargador (ver setJsonExtra en el .h). Los
+// consume tools/TelemetryWeb para pintar el panel de carga y saber si el
+// firmware ha aceptado la peticion. Se registra en setup().
+//   requested : el usuario pidio cargar ('g'); se cancela solo ante fallo o al
+//               perder el TSON, por eso puede diferir de charging.
+//   charging  : lo que se esta mandando de verdad al OBC (control=0).
+//   iMax      : tope duro del firmware -> la web capa su input con este valor.
+static void dashChargerJson(Stream& io);
+
 static CAN_BUS* gCan   = nullptr;
 static bool     gCanOk = false;
 static bool     bmsInitOk = false;
@@ -303,6 +312,8 @@ void setup()
                   CELL_TMIN_CHG_C, CELL_TMAX_CHG_C);
     Serial.println(F("ARRANCA SIN CARGAR. Comandos:"));
     Serial.println(F("  g=start x=stop c,<I>=corriente  v=voltajes t=temps  m=panel j=panel(JSON)  q=diag  f,<ms>=ventana  S=dormir BQ i=re-init  d=datos r=restart"));
+
+    dash.setJsonExtra(dashChargerJson);   // el panel web necesita el estado de carga
 
     IWatchdog.begin(WDG_TIMEOUT_US);
     tLastChgRx = millis();
@@ -741,6 +752,26 @@ void updateTson()
             Serial.println(F("[PRE] aviso: PRECHARGE_DONE no llego a tiempo."));
         }
     }
+}
+
+// ============================================================================
+//  Campos extra del JSON del dashboard — estado de carga (los lee TelemetryWeb)
+// ============================================================================
+static void dashChargerJson(Stream& io)
+{
+    const bool rxAlive = (millis() - tLastChgRx) < RX_TIMEOUT_MS;
+    io.print("\"chg\":{");
+    io.print("\"requested\":");  io.print(chargeRequested ? "true" : "false");
+    io.print(",\"charging\":");  io.print(charging        ? "true" : "false");
+    io.print(",\"i\":");         io.print(chgCurrentA, 1);
+    io.print(",\"iMax\":");      io.print(CHG_MAX_CURRENT_A, 1);
+    io.print(",\"vSet\":");      io.print(CHG_TERM_VOLT_V, 1);
+    io.print(",\"tson\":");      io.print(sdcTson ? "true" : "false");
+    io.print(",\"rxAlive\":");   io.print(rxAlive ? "true" : "false");
+    io.print(",\"outV\":");      io.print(chgOutV, 1);
+    io.print(",\"outI\":");      io.print(chgOutI, 1);
+    io.print(",\"st\":");        io.print(chgStatus);
+    io.print("}");
 }
 
 // ============================================================================

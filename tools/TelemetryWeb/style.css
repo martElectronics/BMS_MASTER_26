@@ -405,3 +405,53 @@ main {
 ::-webkit-scrollbar { width: 6px; }
 ::-webkit-scrollbar-track { background: var(--bg); }
 ::-webkit-scrollbar-thumb { background: var(--bg3); border-radius: 3px; }
+
+/* ── Charger control ──────────────────────────────────────────────────
+   Panel de carga: solo se muestra cuando el firmware publica "chg" en el
+   JSON (charger.cpp). Con main.cpp queda oculto vía [hidden].          */
+.charge-panel {
+    border-top: 1px solid var(--border);
+    padding-top: 1.25rem;
+}
+.charge-panel h2 { margin-bottom: 0.75rem; }
+
+.charge-current-row {
+    display: flex;
+    gap: 0.5rem;
+    align-items: center;
+    margin-top: 0.35rem;
+}
+.num-input {
+    flex: 1;
+    min-width: 0;
+    background: var(--bg3);
+    border: 1px solid var(--border);
+    border-radius: 6px;
+    color: var(--text);
+    font-family: 'JetBrains Mono', monospace;
+    font-size: 1rem;
+    padding: 0.5rem 0.65rem;
+}
+.num-input:focus {
+    outline: none;
+    border-color: var(--accent);
+}
+
+.charge-actions {
+    display: flex;
+    gap: 0.5rem;
+}
+.charge-actions .btn { flex: 1; }
+
+.hint {
+    display: block;
+    color: var(--text-dim);
+    font-size: 0.78rem;
+    line-height: 1.4;
+    margin-top: 0.35rem;
+}
+.mt-1 { margin-top: 0.75rem; }
+
+/* Estado del cargador */
+.value.ok   { color: var(--green);  }
+.value.warn { color: var(--yellow); }

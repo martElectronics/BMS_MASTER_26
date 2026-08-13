@@ -45,6 +45,57 @@ const faultEls = {
     init: document.getElementById('faultINIT'),
 };
 
+// ── Charger control (solo si el firmware publica "chg" en el JSON) ────
+const chargePanel     = document.getElementById('chargePanel');
+const chgStateText    = document.getElementById('chgStateText');
+const chgTsonText     = document.getElementById('chgTsonText');
+const chgVoutText     = document.getElementById('chgVoutText');
+const chgIoutText     = document.getElementById('chgIoutText');
+const chgCurrentInput = document.getElementById('chgCurrentInput');
+const chgCurrentHint  = document.getElementById('chgCurrentHint');
+const chgSetCurrentBtn= document.getElementById('chgSetCurrentBtn');
+const chgStartBtn     = document.getElementById('chgStartBtn');
+const chgStopBtn      = document.getElementById('chgStopBtn');
+
+// ── Envío de comandos al firmware ─────────────────────────────────────
+// El writable es independiente del readable, así que se puede usar sin tocar
+// el reader. Hay que soltar el lock tras cada escritura o la siguiente falla.
+async function sendCmd(cmd) {
+    if (!port || !port.writable) return false;
+    const w = port.writable.getWriter();
+    try {
+        await w.write(new TextEncoder().encode(cmd + '\n'));
+        return true;
+    } catch (e) {
+        console.warn('Serial write error:', e.message);
+        return false;
+    } finally {
+        w.releaseLock();
+    }
+}
+
+// 'g' = solicitar carga. El firmware solo la concede si la seguridad da OK y
+// el TSON está armado, y la cancela ante cualquier fallo — este botón NO puede
+// forzar una carga insegura. Aun así se pide confirmación: es 400 V.
+chgStartBtn?.addEventListener('click', () => {
+    if (confirm('¿Iniciar la carga?\n\nSe enviará la petición al BMS; solo arrancará '
+              + 'si la seguridad da OK y el TSON está armado.')) {
+        sendCmd('g');
+    }
+});
+
+chgStopBtn?.addEventListener('click', () => sendCmd('x'));
+
+// 'c,<I>' = fijar corriente DC. El firmware la capa a CHG_MAX_CURRENT_A de
+// todos modos; aquí se capa también para no mandar valores absurdos.
+chgSetCurrentBtn?.addEventListener('click', () => {
+    const max = parseFloat(chgCurrentInput.max) || 0;
+    let v = parseFloat(chgCurrentInput.value);
+    if (!isFinite(v) || v < 0) v = 0;
+    if (v > max) { v = max; chgCurrentInput.value = v; }
+    sendCmd('c,' + v.toFixed(1));
+});
+
 // ── Connect / Disconnect ─────────────────────────────────────────────
 connectBtn.addEventListener('click', () => { port ? disconnect() : connect(); });
 
@@ -107,6 +158,43 @@ async function readLoop() {
 }
 
 // ── UI rendering ─────────────────────────────────────────────────────
+// Panel de carga. `requested` es lo que pediste; `charging` lo que el firmware
+// está mandando de verdad al OBC. Que difieran NO es un bug: significa que la
+// seguridad o el TSON están bloqueando la petición, y es justo lo que interesa
+// ver de un vistazo.
+let chgCurrentTouched = false;   // no pisar el input mientras el usuario escribe
+chgCurrentInput?.addEventListener('input', () => { chgCurrentTouched = true; });
+
+function updateCharger(c) {
+    chargePanel.hidden = false;
+
+    let estado, cls;
+    if (c.charging)       { estado = 'CARGANDO';         cls = 'ok';    }
+    else if (c.requested) { estado = 'esperando permiso'; cls = 'warn'; }
+    else                  { estado = 'parado';            cls = '';     }
+    chgStateText.textContent = estado;
+    chgStateText.className   = 'value mono ' + cls;
+
+    chgTsonText.textContent = c.tson ? 'armado' : 'abierto';
+    chgTsonText.className   = 'value mono ' + (c.tson ? 'ok' : 'warn');
+
+    if (c.rxAlive) {
+        chgVoutText.textContent = c.outV.toFixed(1) + ' V';
+        chgIoutText.textContent = c.outI.toFixed(1) + ' A';
+    } else {
+        chgVoutText.textContent = 'sin OBC';
+        chgIoutText.textContent = 'sin OBC';
+    }
+
+    // El tope lo manda el firmware: la UI no puede pedir más que el límite real.
+    if (c.iMax !== undefined) {
+        chgCurrentInput.max = c.iMax;
+        chgCurrentHint.textContent = 'tope ' + c.iMax.toFixed(1) + ' A · Vmax '
+                                   + (c.vSet !== undefined ? c.vSet.toFixed(0) : '?') + ' V';
+    }
+    if (!chgCurrentTouched) chgCurrentInput.value = c.i;
+}
+
 function updateUI(d) {
     // ── Hero row ──────────────────────────────────────────────────────
     const ok = d.bmsOk;
@@ -133,6 +221,11 @@ function updateUI(d) {
     colourV(vMaxText, d.vMax);
     colourT(tMinText, d.tMin);
     colourT(tMaxText, d.tMax);
+
+    // ── Charger ───────────────────────────────────────────────────────
+    // El bloque "chg" solo lo publica charger.cpp, así que el panel aparece
+    // únicamente cuando estás conectado al cargador (en main.cpp no existe).
+    if (d.chg) updateCharger(d.chg);
 
     // ── Faults ────────────────────────────────────────────────────────
     const f = d.faults;

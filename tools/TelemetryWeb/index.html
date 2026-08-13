@@ -83,6 +83,52 @@
                     <div class="fault-badge ok" id="faultINIT">INIT</div>
                 </div>
 
+                <!-- Panel de CARGA: solo aparece si el firmware publica "chg"
+                     en el JSON (es decir, si estás conectado al charger). -->
+                <div id="chargePanel" class="charge-panel mt-2" hidden>
+                    <h2>Charger Control</h2>
+
+                    <div class="extremes-grid">
+                        <div class="stat-box">
+                            <span class="label">Estado</span>
+                            <span class="value mono" id="chgStateText">—</span>
+                        </div>
+                        <div class="stat-box">
+                            <span class="label">TSON</span>
+                            <span class="value mono" id="chgTsonText">—</span>
+                        </div>
+                        <div class="stat-box">
+                            <span class="label">OBC Vout</span>
+                            <span class="value mono" id="chgVoutText">—</span>
+                        </div>
+                        <div class="stat-box">
+                            <span class="label">OBC Iout</span>
+                            <span class="value mono" id="chgIoutText">—</span>
+                        </div>
+                    </div>
+
+                    <div class="charge-current mt-2">
+                        <label class="label" for="chgCurrentInput">Corriente DC (A)</label>
+                        <div class="charge-current-row">
+                            <input type="number" id="chgCurrentInput" class="num-input"
+                                   min="0" max="14" step="0.5" value="3">
+                            <button id="chgSetCurrentBtn" class="btn">Aplicar</button>
+                        </div>
+                        <span class="hint" id="chgCurrentHint">tope —</span>
+                    </div>
+
+                    <div class="charge-actions mt-2">
+                        <button id="chgStartBtn" class="btn primary">▶ Iniciar carga</button>
+                        <button id="chgStopBtn"  class="btn danger">■ Parar</button>
+                    </div>
+
+                    <p class="hint mt-1">
+                        El botón solo <strong>solicita</strong> la carga: el firmware la
+                        concede si la seguridad da OK y el TSON está armado, y la
+                        cancela solo ante cualquier fallo.
+                    </p>
+                </div>
+
                 <div class="info-box mt-2">
                     <p>Flash <code>mainsim</code>, open the Serial monitor and press <strong>'j'</strong> to start JSON streaming. Then connect here.</p>
                     <p>Baud: <strong>115200</strong></p>

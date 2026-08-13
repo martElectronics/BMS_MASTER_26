@@ -223,5 +223,8 @@ void TelemetryDashboard::renderJson_(const DashFaults& f) {
         io_.print("]}");
         if (m < cfg_.numModules - 1) io_.print(",");
     }
-    io_.print("]}\n");
+    io_.print("]");
+    // Campos propios del firmware (el charger publica aquí el estado de carga).
+    if (jsonExtra_) { io_.print(","); jsonExtra_(io_); }
+    io_.print("}\n");
 }

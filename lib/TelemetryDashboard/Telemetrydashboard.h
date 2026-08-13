@@ -84,6 +84,21 @@ public:
     void setJsonMode(bool json) { jsonMode_ = json; }
     bool isJsonMode() const { return jsonMode_; }
 
+    /**
+     * @brief Hook opcional para añadir campos propios al JSON.
+     *
+     * Se llama al final de renderJson_(), justo antes de cerrar el objeto, con
+     * una coma ya emitida. La función debe escribir pares `"clave":valor`
+     * SIN llave de cierre ni coma final. Ej.:
+     *     io.print("\"chg\":{\"on\":true}");
+     *
+     * Existe para que cada firmware publique lo suyo sin acoplar esta clase:
+     * el charger añade el estado de carga (§ setJsonExtra en charger.cpp) y
+     * main no registra nada, así que su JSON no cambia.
+     */
+    using DashExtraFn = void (*)(Stream& io);
+    void setJsonExtra(DashExtraFn fn) { jsonExtra_ = fn; }
+
     /// Llamar cada loop. Si está activo y venció el periodo, redibuja.
     /// Si está inactivo no hace nada (coste ~0).
     void update(const DashFaults& f);
@@ -104,4 +119,5 @@ private:
     bool           active_ = false;
     bool           jsonMode_ = false;
     uint32_t       lastMs_ = 0;
+    DashExtraFn    jsonExtra_ = nullptr;   ///< campos extra del firmware (ver setJsonExtra)
 };
