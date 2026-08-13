@@ -202,6 +202,10 @@ static unsigned long tLastReinit = 0;
 // (arranque con la cadena muda) BMS_OK debe quedarse LOW desde el principio.
 static bool everRead = false;
 
+// Ultima lectura: ¿la cadena no respondio (COMM) o respondio sucia (CRC)?
+// Solo el primer caso justifica un auto-address — ver readPack().
+static bool chainMute = false;
+
 // SDC / TSON / precarga (misma máquina que main.cpp::updateTson).
 static bool          bmsSafe          = false;  ///< última evaluación de seguridad (= safe del loop)
 static bool          sdcTson          = false;  ///< estado del latch TSON (= nivel de PIN_SDC_TSON)
@@ -430,6 +434,11 @@ bool readVT()
     bool okV = (rV == BQResult::OK);
     bool okT = (rT == BQResult::OK);
 
+    // ¿La cadena esta MUDA (no respondio) o solo llego SUCIA (CRC)? Lo consume
+    // readPack para decidir si el auto-address tiene sentido: ante CRC el board
+    // esta vivo y direccionado, asi que re-direccionar no arregla nada.
+    chainMute = (rV == BQResult::COMM_ERROR) || (rT == BQResult::COMM_ERROR);
+
     if (!scrutiMode && !okV) Serial.printf("[BQ] V FALLO %s en board %d\n",
                             rV == BQResult::CRC_ERROR ? "CRC" : "COMM",
                             bms.getLastReadFailBoard());
@@ -457,6 +466,7 @@ bool readPack()
     // reInit() no la recuperó) no hay nada que leer: cuenta como fallo de
     // comms más y va al MISMO debounce, no a BMS_OK directo.
     bool readOk = bmsInitOk && readVT();
+    if (!bmsInitOk) chainMute = true;     // sin direccionar: el auto-address es justo lo que falta
     if (readOk) everRead = true;          // ya hay medida buena que conservar
     fComm.sample(!readOk, now);
     if (readOk) return true;
@@ -468,7 +478,12 @@ bool readPack()
     //   · declarar fallo (BMS_OK LOW, para la carga) -> CONSERVADOR
     // Usar el mismo valor para ambos obliga a elegir entre "reconecta tarde" o
     // "corta pronto". Aqui el veredicto lo sigue decidiendo commWindowMs abajo.
-    if (!prechargeRunning && fComm.confirmed(now, CHG_COMM_REINIT_MS)
+    // ⚠ Solo si la cadena esta MUDA (chainMute). Ante CRC el board respondio:
+    //   esta vivo y direccionado, y re-direccionar no arregla el ruido, ciega
+    //   1-5 s y usa el MISMO bus sucio (la secuencia de auto-address es mucho
+    //   mas larga que una lectura, asi que se corrompe antes y puede dejar la
+    //   cadena con direcciones inconsistentes). Ante CRC: seguir pidiendo.
+    if (!prechargeRunning && chainMute && fComm.confirmed(now, CHG_COMM_REINIT_MS)
         && tryReinit(now)) {
         now = millis();                   // reInit() bloquea
         if (readVT()) {
@@ -488,7 +503,7 @@ bool readPack()
     //   la ventana de gracia igual que fuera de precarga (si se retornara false
     //   aqui, un fallo de comms en precarga abriria el SDC AL INSTANTE, que es
     //   justo lo contrario de lo que se busca).
-    if (prechargeRunning && tryReinit(now)) {
+    if (prechargeRunning && chainMute && tryReinit(now)) {
         now = millis();                   // reInit() bloquea
         if (readVT()) {
             everRead = true;

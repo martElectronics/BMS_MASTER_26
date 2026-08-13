@@ -283,6 +283,48 @@ Aplicado al caso real del **board 0 en la precarga**: si falla **solo** el bit 0
 sabes que es el base y no la cadena; si se encienden todos, es la cadena entera.
 Hoy los dos casos son indistinguibles.
 
+### 9.3b Escalar según el TIPO de error (CRC vs COMM) — ✅ IMPLEMENTADO
+
+Complementaria a la 9.3 (que escala según **cuántos** boards fallan): esta
+escala según **qué tipo** de fallo es. La información ya estaba en
+`lastResV`/`lastResT`, solo que no se usaba — ambos errores disparaban el mismo
+`reInit()`.
+
+| Error | Qué significa | Auto-address |
+|---|---|---|
+| **CRC_ERROR** | El board **respondió**: vivo, direccionado y contestando. Solo llegó sucio | **Inútil** — no hay dirección que reasignar |
+| **COMM_ERROR** | No respondió nada: puede haber **perdido la dirección** (reset por EMI/brownout), estar sin alimentación, o cadena rota | **Útil** si perdió la dirección |
+
+**Tres razones para NO re-direccionar ante CRC:**
+
+1. **No arregla el problema.** El board ya tiene dirección y responde; lo que
+   falla es la integridad de la señal.
+2. **Ciega el BMS 1-5 s.** Durante el auto-address no se lee V ni T. Se cambia
+   "una lectura corrupta" por "cinco segundos sin ninguna medida".
+3. **⚠ Puede dejar la cadena PEOR.** El auto-address usa **el mismo bus sucio**,
+   y su secuencia es mucho más larga y crítica que una lectura (ECC dummy →
+   CONFIG → CONTROL1 → 20 escrituras de dirección → base/top → verificación). Si
+   el ruido corrompe una trama de 18 bytes, corromperá eso también, y una
+   secuencia interrumpida a medias puede dejar boards con direcciones
+   inconsistentes. **No es una operación gratuita: tiene riesgo.**
+
+Ante CRC, seguir pidiendo es **barato y reversible**: se reintenta cada ciclo y
+en cuanto el ruido pasa se recupera al instante, sin ventana ciega.
+
+**Implementación (main):**
+```c
+bool chainMute = (lastResV == BQResult::COMM_ERROR) ||
+                 (lastResT == BQResult::COMM_ERROR);
+bool reinitNow = prechargeRunning ? (readErr && chainMute)
+                                  : (chainMute && fComm.confirmed(now, COMM_REINIT_MS));
+```
+En charger, `readVT()` publica `chainMute` y `readPack()` lo exige en los dos
+puntos de reconexión (temprana y precarga). Si `!bmsInitOk` se fuerza a `true`:
+sin direccionar, el auto-address es justo lo que falta.
+
+**Resultado:** ruido (CRC) → sigue leyendo hasta que pase, o hasta que
+`FAULT_COMM_MS` declare fallo. Cadena muda (COMM) → reconecta.
+
 ### 9.4 Mejora C — recuperación escalonada
 
 Entre "reintentar trama" (~1 ms) y "reinicializar la cadena" (~5 s) **no hay

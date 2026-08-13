@@ -539,8 +539,21 @@ void sampleAndEvaluate()
     // ⚠ Usa COMM_REINIT_MS (recuperación), NO FAULT_COMM_MS (veredicto): el
     // reInit es un INTENTO, no una decisión de seguridad. El nivel de BMS_OK lo
     // sigue decidiendo updateBmsOk() con FAULT_COMM_MS, mucho más tarde.
-    bool reinitNow = prechargeRunning ? readErr
-                                      : fComm.confirmed(now, COMM_REINIT_MS);
+    //
+    // ⚠⚠ Y SOLO si la cadena está MUDA (COMM_ERROR). Ante CRC_ERROR el board SÍ
+    // respondió: está vivo y direccionado, solo llegó sucio. Re-direccionar
+    // entonces es contraproducente:
+    //   · no arregla nada (no hay dirección que reasignar),
+    //   · ciega el BMS 1-5 s (durante el auto-address no se lee V ni T),
+    //   · y usa EL MISMO bus sucio: si el ruido corrompe una lectura de 18
+    //     bytes, corromperá también la secuencia de auto-address (que es mucho
+    //     más larga), pudiendo dejar la cadena con direcciones inconsistentes.
+    // Ante CRC lo correcto es SEGUIR PIDIENDO: es barato, reversible, y en
+    // cuanto el ruido pase se recupera al instante.
+    bool chainMute = (lastResV == BQResult::COMM_ERROR) ||
+                     (lastResT == BQResult::COMM_ERROR);
+    bool reinitNow = prechargeRunning ? (readErr && chainMute)
+                                      : (chainMute && fComm.confirmed(now, COMM_REINIT_MS));
     if (reinitNow && (now - tLastReinit) >= BMS_REINIT_RETRY_MS) {
             tLastReinit = now;
             canNumTriesReset++;
