@@ -91,3 +91,81 @@ con la cadena muerta dura indefinidamente).
   watchdog exige hacer `reInit` no bloqueante.
 - Pérdida de comms BQ = pérdida de medida → fallo (EV5.8.13). El debounce ya filtra
   glitches; **no** subir las ventanas en producción (usa el env `bms_bench` de `testing`).
+
+## Banco de inyección de fallos (`env:fault_bench`)
+
+Valida **en HW real** que las ventanas de debounce y el escalado de recuperación
+de comms se comportan como dice el diseño.
+
+```
+pio run -e fault_bench -t upload
+pio device monitor -e fault_bench      # luego '?' para la ayuda
+```
+
+⚠ **El binario del banco fuerza `BMS_OK` a LOW a propósito. NO SUBIRLO AL COCHE.**
+Está deliberadamente fuera de `default_envs`, así que `pio run` nunca lo construye.
+
+### Cómo está montado
+No duplica lógica. Compila el **`main.cpp` de producción tal cual** más
+`src/fault_inject.cpp`, con `-D BMS_FAULT_INJECT`, y solo intercepta las
+**entradas** de `sampleAndEvaluate()` (resultado de las lecturas, condiciones
+`badV`/`badT`/`badNtc`, flag de precarga) observando las **salidas** (fallos
+confirmados). Las ventanas contra las que compara salen de
+`include/bms_timing.h`, las mismas que usa el firmware — si el banco tuviera su
+propia copia, aprobar no demostraría nada.
+
+Sin el flag, los ganchos de `include/fault_inject.h` son funciones inline vacías
+que devuelven su argumento. **Verificado**: el `firmware.bin` de producción es
+byte a byte idéntico con y sin los ganchos en el fuente (mismo md5, 92568 B).
+Los dos ganchos que el optimizador no puede eliminar solo (la llamada a
+`millis()` que cronometra el `reInit`, y el `struct FiState`) van bajo `#ifdef`
+por eso.
+
+### Escenarios (miden y dan PASS/FAIL con el valor medido)
+| | Qué prueba | Esperado |
+|---|---|---|
+| `1` | debounce V | `FAULT_V_MS` (500 ms) |
+| `2` | debounce T | `FAULT_T_MS` (1000 ms) |
+| `3` | NTC abierto | `FAULT_NTC_MS` (1000 ms) |
+| `4` | ventana de comms completa | `FAULT_COMM_MS` (30 s) |
+| `5` | una lectura buena reinicia el reloj | fallo a ~42 s, no a 30 s |
+| `6` | fase blanda: 1er auto-address | `COMM_SOFT_RETRY_MS` (1 s) |
+| `7` | fase dura: cadencia | `COMM_REINIT_RETRY_MS` (2 s) |
+| `8` | glitch V < ventana | **no** debe confirmar |
+| `9` | rearme V tras hueco de comms | `FAULT_V_MS` desde la recuperación |
+| `0` | precarga | auto-address al primer error |
+| `A` | todos en secuencia (~2 min) | |
+
+`X` aborta y limpia · `Z` traza on/off · `?` ayuda.
+Inyección manual (toggles): `Q` badV · `W` badT · `E` badNtc · `Y` lectura V
+falla · `U` lectura T falla · `P` precarga.
+
+**Requiere la cadena BQ conectada e inicializada.** Sin ella `sampleAndEvaluate()`
+hace `return` antes de leer y no hay entradas que interceptar; los escenarios se
+niegan a arrancar con un mensaje explícito.
+
+### Traza en tiempo real
+```
+[FI] ---------- ESCENARIO #4 ----------
+[FI]      +0 ms  INYECTA lecturas V y T fallando (ventana 30000 ms)
+[FI]   +2900 ms  REINIT #1  ini=+1800 ms  BLOQUEO=1100 ms  separacion=0 ms  ok=1
+[FI]   +5000 ms  ... 4900/30000 ms  badRun=255  reInit=2
+[FI]  +30900 ms  SUBE faultCOMM
+[FI]  +30900 ms  SUBE bmsFault   (BMS_OK -> LOW)
+[FI] === #4 ventana comms      PASS  medido=30900 ms  esperado=30000 +-2500
+```
+`BLOQUEO` es la duración real medida del `reInit()` — sirve para contrastar en HW
+la estimación de ~1,5 s con la cadena muerta / ~1,1 s con cadena viva.
+
+### Tolerancias
+Son anchas a propósito y **siempre se imprime el valor medido** para poder
+juzgar a ojo. Las dos fuentes de desviación esperables:
+- El primer muestreo cae en el siguiente múltiplo de `SAMPLE_V_MS`/`SAMPLE_T_MS`
+  (hasta +100 ms).
+- El `reInit()` bloquea el loop, así que cruzar la ventana puede detectarse hasta
+  ~1,5 s tarde (por eso `#4` tolera ±2500 ms).
+
+Los escenarios `6` y `0` esperan a que el rate-limit de `COMM_REINIT_RETRY_MS`
+esté libre antes de medir: si el episodio arrancase dentro de la sombra de un
+auto-address anterior, el primero se retrasaría por una razón legítima que no es
+la que se quiere probar.
