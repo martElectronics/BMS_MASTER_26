@@ -23,6 +23,12 @@
  *     persistir ≥500 ms; T cada 1000 ms y ≥1000 ms. Un error que se corrige
  *     antes de su ventana NO dispara fallo en BMS_OK.
  *   · Pérdida de medida (NTC abierto, comms BQ caídas) → fallo (EV5.8.13).
+ *   · Comms BQ: ventana MUY relajada (FAULT_COMM_MS, 30 s) frente a las de
+ *     celda. Solo cae BMS_OK si en esos 30 s no se logra NI UN ciclo de
+ *     lectura bueno; cualquier ciclo bueno reinicia el reloj a 0. Dentro de
+ *     la ventana se re-lee y se re-direcciona la cadena en bucle hasta
+ *     recuperarla (ver sampleAndEvaluate). ⚠ Consecuencia asumida: hasta 30 s
+ *     con datos de celda rancios y BMS_OK aún HIGH, TS encendido incluido.
  *   · Sobre-I la gestiona HallSensor (debounce 500 ms propio).
  *
  * ⚠ TOTALBOARDS (en BQ79606.h) debe ser EXACTAMENTE el nº de ICs del HW.
@@ -32,7 +38,8 @@
  *
  * ── COMANDOS SERIE ──────────────────────────────────────────────────────────
  *   v=voltajes  t=temps  g=CSV módulos (app registro)  a=amperimetro
- *   s=status  f=fallos  c=limpiar fallos BQ  i=re-init BQ  r=restart MCU
+ *   s=status  f=fallos  k=estado comms BQ  c=limpiar fallos BQ  i=re-init BQ
+ *   r=restart MCU
  *   d=volcar log FRAM  D=reset índice log  C=reset contadores fallo (ID 16)
  *
  * ── PENDIENTE ───────────────────────────────────────────────────────────────
@@ -130,13 +137,68 @@ static TelemetryDashboard dash(Serial, bms, hall, soc, fan, dashCfg);
 #define FAULT_V_MS     500UL    ///< V debe persistir ≥500 ms
 #define FAULT_T_MS    1000UL    ///< T debe persistir ≥1000 ms
 #define FAULT_NTC_MS  1000UL    ///< NTC abierto (pérdida de medida, clase T)
-// COMM/INIT: ventanas "medias" (2-3 s) para tolerar glitches de ruido del BQ
-// sin abrir el SDC ni relanzar el auto-address a la primera. NO son fallos de
-// celda FS (esos son V/T/NTC arriba, sin tocar). El reInit ahora se dispara
-// SOLO cuando fComm lleva confirmado FAULT_COMM_MS (ver sampleAndEvaluate) →
-// ante ruido se vuelve a pedir datos, no se re-inicializa la cadena.
-#define FAULT_COMM_MS 1000UL    ///< Comms BQ caídas sin recuperar 
-#define FAULT_INIT_MS 200UL    ///< Init BQ fallido persistente (antes: inmediato)
+
+// Rearme del debounce V/T/NTC tras un hueco largo de datos. fV/fT/fNtc solo se
+// muestrean cuando la lectura sale OK; si las comms se caen, su badRun/tStart
+// quedan CONGELADOS. Sin este rearme, tras un apagón de 30 s bastarían k
+// muestras malas para confirmar AL INSTANTE (now - tStart ≫ ventana) en vez de
+// re-medir los 500/1000 ms contra datos frescos. El umbral se pone por encima
+// de la cadencia de muestreo para que un fallo de lectura AISLADO (ruido) NO
+// rearme y no retrase un fallo de celda real que se estaba acumulando.
+#define FAULT_REARM_GAP_MS 1000UL  ///< hueco sin lectura buena que invalida el debounce
+
+// ---- COMUNICACIÓN CON LA CADENA BQ ----------------------------------------
+// Ventana LARGA y deliberadamente relajada: NO es un fallo de celda FS (esos
+// son V/T/NTC arriba, con sus 500/1000 ms intocables). El criterio es
+// "¿sigue viva la cadena?", y merece tiempo para recuperarse sola.
+//
+//   BMS_OK cae por comms SOLO si pasan FAULT_COMM_MS enteros sin UN SOLO ciclo
+//   de lectura bueno (V y T OK en la misma pasada). Cualquier ciclo bueno
+//   REINICIA el reloj a 0 (FaultTimer::sample(false) borra badRun y tStart), y
+//   el proceso entero puede repetirse si vuelve a fallar.
+//
+// Escalado de la recuperación DENTRO de la ventana (peldaños, doc §9.4):
+//   t < COMM_SOFT_RETRY_MS  → solo RE-LEER. El driver ya reintenta la trama
+//                             (BQ_READ_ATTEMPTS); casi todo episodio es ruido y
+//                             muere aquí, sin tocar el direccionamiento.
+//   t ≥ COMM_SOFT_RETRY_MS  → además AUTO-ADDRESS (reInit) cada
+//                             COMM_REINIT_RETRY_MS, con lecturas normales entre
+//                             intento e intento. Se repite hasta que un ciclo
+//                             bueno reinicie el reloj o expire la ventana.
+// ⚠ reInit() BLOQUEA ~1.5 s por intento de auto-address con la cadena muerta
+//   (240 ms de WAKE + 600 ms de delays fijos + ~450 ms de verificación a 10 ms
+//   de timeout por board + trazas por serie; ~1.65 s con TOTALBOARDS=24), y
+//   aquí se le llama repetidamente durante hasta FAULT_COMM_MS. Con los 5
+//   intentos del driver serían ~7.5 s (~8.2 s a 24 boards) contra los 8 s de
+//   WDG_TIMEOUT_US → COMM_REINIT_ATTEMPTS=1. La repetición la da la ventana,
+//   no los reintentos internos del driver.
+// ⚠ Coste asumido — el loop se para mientras reInit bloquea. Con cadencia 2 s y
+//   bloqueo 1.5 s el loop está parado ~75 % del episodio, y eso tiene DOS
+//   efectos, ambos acotados por la DURACIÓN DEL BLOQUEO (1.5 s), no por la
+//   cadencia:
+//     · hall.update() se queda ciego a ratos: una sobreintensidad TRANSITORIA
+//       (HALL_FAULT_MS=250 ms) que empiece y acabe dentro de un bloqueo se
+//       pierde entera (el debounce del Hall es wall-time y repinea tStart, así
+//       que una sobre-I que PERSISTA solo se detecta tarde, no se pierde).
+//     · una ventana de comms BUENA más corta que el bloqueo puede caer entera
+//       dentro de él → no se muestrea y NO reinicia el reloj de 30 s. Solo
+//       afecta a comms intermitentes: una cadena que se recupera y SE QUEDA se
+//       detecta en la primera lectura tras el bloqueo.
+//   Subir COMM_REINIT_RETRY_MS baja el % de tiempo ciego (3 s → 50 %) pero NO
+//   el peor caso, que lo fija el bloqueo. La solución de fondo es el reInit no
+//   bloqueante (doc §9.5, mejora D).
+#define FAULT_COMM_MS        30000UL  ///< 30 s sin NI UNA comunicación buena → fallo
+#define COMM_SOFT_RETRY_MS    1000UL  ///< fase blanda: solo re-leer, sin reInit
+#define COMM_REINIT_RETRY_MS  2000UL  ///< cadencia entre auto-address en la fase dura
+#define COMM_REINIT_ATTEMPTS       1  ///< intentos de auto-address por llamada a reInit()
+#define BQ_AUTOADDR_ATTEMPTS       5  ///< default del driver, restaurado tras cada reInit()
+
+// INIT: el arranque NO entra en la ventana relajada de comms. Si la cadena no
+// está al boot, BMS_OK debe caer YA: el firmware nunca ha hablado con el stack,
+// no puede afirmar salud. Es inocuo — el TSON no puede armar con BMS_OK LOW.
+// La relajación de 30 s cubre PERDER una cadena que ya funcionaba, no el nunca
+// haberla tenido.
+#define FAULT_INIT_MS 200UL     ///< Init BQ fallido persistente (antes: inmediato)
 
 // Cadencias de muestreo: 2× respecto al mínimo FS para tener ≥2 muestras
 // dentro de cada ventana de debounce → mejor filtrado de ruido transitorio.
@@ -174,7 +236,13 @@ static bool bmsFault = false;     ///< fallo confirmado AHORA (no latcheado)
 // reintenta reInit() con rate-limit (no en cada flanco).
 static bool          bmsInitOk    = false;   ///< true tras begin()/reInit() OK
 static unsigned long tLastReinit  = 0;       ///< ms del último intento de reInit
-#define BMS_REINIT_RETRY_MS  2000UL          ///< cadencia mín. entre reintentos
+static bool          reinitLogged = false;   ///< ya se logueó el 1er reInit de ESTE episodio
+// Cadencia del camino de ARRANQUE (!bmsInitOk). El camino de pérdida de comms
+// en caliente tiene la suya (COMM_REINIT_RETRY_MS): son escenarios distintos y
+// se afinan por separado. tLastReinit lo comparten porque son excluyentes (el
+// camino de arranque hace return antes de llegar al de comms).
+#define BMS_REINIT_RETRY_MS  2000UL          ///< cadencia mín. entre reintentos al boot
+#define BOOT_REINIT_ATTEMPTS      1          ///< auto-address por reintento (WDG: ver sampleAndEvaluate)
 
 // Lecturas
 static BQResult lastResV = BQResult::OK, lastResT = BQResult::OK;
@@ -206,6 +274,17 @@ static uint16_t      canMaxFailMs     = 0;   ///< máx duración de episodio vis
 // el episodio general: cuenta desde la primera lectura fallida.
 static uint16_t      canLastCommFailMs= 0;   ///< duración (ms) del episodio de comms actual/último
 static uint16_t      canMaxCommFailMs = 0;   ///< máx duración de episodio de comms vista
+
+// ── Estadísticas de COMMS para el monitor serie ─────────────────────────────
+// Espejo en 32 bits de los dos de arriba, SIN su clamp de 16 bits: con la
+// ventana de FAULT_COMM_MS un episodio puede durar indefinidamente (la cadena
+// no vuelve) y canLast/canMaxCommFailMs saturan a 65535 ms = 65,5 s. Estos no.
+// Se actualizan en updateBmsOk() y los vuelca printCommStatus().
+static unsigned long commCurFailMs   = 0;   ///< duración del episodio EN CURSO (0 = comms OK)
+static unsigned long commMaxFailMs   = 0;   ///< episodio de comms más largo desde el boot
+static unsigned long commAccumFailMs = 0;   ///< tiempo TOTAL acumulado en fallo de comms (incl. el episodio en curso)
+static uint16_t      commEpisodes    = 0;   ///< nº de episodios, INCLUIDOS los que no llegaron a confirmar
+static unsigned long tLastGoodComm   = 0;   ///< millis() del último ciclo de lectura bueno (0 = ninguno aún)
 
 // Contadores por causa (ID 16): nº de veces que cada fallo confirmado ha
 // disparado desde el último reset. Se incrementan en el FLANCO DE SUBIDA
@@ -256,6 +335,7 @@ void updateTson();
 void updateCanTx();
 void handleSerial();
 void printStatus();
+static void printCommStatus();
 static void buildDebugFlags(uint8_t out[4]);
 static FaultRecord buildFaultRecord(uint8_t eventType, uint8_t firstFlt);
 
@@ -373,7 +453,7 @@ void setup()
         logger.log(buildFaultRecord(FaultLogger::EVT_BOOT, 0));
     }
 
-    Serial.println(F("Cmd: v t a s f c i r  F=fans100%  d=dump log  D=clear log  C=clear cnt  m=ansi  j=json"));
+    Serial.println(F("Cmd: v t a s f c i r  k=comms  F=fans100%  d=dump log  D=clear log  C=clear cnt  m=ansi  j=json"));
 
     // Arrancar el watchdog AL FINAL (tras el init/calibración acotados).
     // Una vez iniciado NO se puede parar (es independiente por HW).
@@ -435,6 +515,9 @@ void loop()
 void sampleAndEvaluate()
 {
     static unsigned long tV = 0, tT = 0;
+    // Wall-time de la última lectura BUENA de cada camino. Alimenta el rearme
+    // del debounce V/T/NTC tras un hueco largo (ver FAULT_REARM_GAP_MS).
+    static unsigned long tGoodV = 0, tGoodT = 0;
     unsigned long now = millis();
 
     // Si el BQ no está inicializado, NO leer (driver no configurado).
@@ -450,9 +533,31 @@ void sampleAndEvaluate()
             // FRAM: persistir el intento (útil para ver cuánto le costó
             // recuperar la cadena tras un episodio comm).
             logger.log(buildFaultRecord(FaultLogger::EVT_REINIT_TRY, 4));
-            if (bms.reInit()) {
+            // ⚠ Aquí el WDG YA está armado (se arma al final de setup(), después
+            //   del begin() en frío). reInit() BLOQUEA ~1.5 s por intento de
+            //   auto-address con la cadena muerta → con los 5 del driver serían
+            //   ~7.5 s (y ~8.2 s con TOTALBOARDS=24) contra WDG_TIMEOUT_US=8 s:
+            //   reset del micro y bucle de arranque infinito. Se acota a
+            //   BOOT_REINIT_ATTEMPTS y se refresca el WDG a ambos lados. La
+            //   repetición la da la cadencia BMS_REINIT_RETRY_MS, no los
+            //   reintentos internos del driver.
+            bms.setMaxAttempts(BOOT_REINIT_ATTEMPTS);
+            IWatchdog.reload();
+            bool okBoot = bms.reInit();
+            IWatchdog.reload();
+            bms.setMaxAttempts(BQ_AUTOADDR_ATTEMPTS);   // restaurar default
+            if (okBoot) {
                 bmsInitOk = true;
                 fInit.sample(false, now);   // recuperado: limpia el debounce de init
+                // Handoff al régimen normal: fComm venía acumulando desde el
+                // boot (arriba se muestrea true en cada pasada) solo para el
+                // reloj de comms de ID 13 — NO era la ventana de seguridad
+                // viva, que al arranque la manda fInit. Si no se limpiara, su
+                // tStart quedaría a decenas de segundos y el PRIMER fallo de
+                // lectura tras recuperar confirmaría AL INSTANTE (now - tStart
+                // ≫ 30 s) en vez de estrenar la ventana de 30 s. Es el mismo
+                // criterio de rancidez que FAULT_REARM_GAP_MS aplica a V/T/NTC.
+                fComm.sample(false, now);
                 Serial.println(F("[OK] BQ recuperado."));
             }
         }
@@ -475,6 +580,12 @@ void sampleAndEvaluate()
                           lastResV == BQResult::CRC_ERROR ? "CRC" : "COMM",
                           bms.getLastReadFailBoard());
         if (lastResV == BQResult::OK) {
+            // Rearme tras hueco: si la última V buena fue hace más de
+            // FAULT_REARM_GAP_MS, el badRun/tStart de fV es de ANTES del apagón
+            // → borrarlo para que la ventana de 500 ms se mida contra datos
+            // frescos, no contra un tStart rancio que la daría por cumplida.
+            if ((now - tGoodV) > FAULT_REARM_GAP_MS) fV.sample(false, now);
+            tGoodV = now;
             bool badV = (bms.getMinVoltage() < CELL_UV_V) ||
                         (bms.getMaxVoltage() > CELL_OV_V);
             fV.sample(badV, now);
@@ -492,6 +603,12 @@ void sampleAndEvaluate()
                           lastResT == BQResult::CRC_ERROR ? "CRC" : "COMM",
                           bms.getLastReadFailBoard());
         if (lastResT == BQResult::OK) {
+            // Rearme tras hueco — misma razón que en V, para fT y fNtc.
+            if ((now - tGoodT) > FAULT_REARM_GAP_MS) {
+                fT.sample(false, now);
+                fNtc.sample(false, now);
+            }
+            tGoodT = now;
             bool badT = (bms.getMinTemp() < CELL_UT_C) ||
                         (bms.getMaxTemp() > CELL_OT_C);
             fT.sample(badT, now);
@@ -500,45 +617,72 @@ void sampleAndEvaluate()
         }
     }
 
-    // ── Pérdida de comunicación BQ ──────────────────────────────────────
-    // sample() cada loop: el FaultTimer pinea tStart al primer error y
-    // confirma tras FAULT_COMM_MS de wall-time (sustituye al
-    // commLost/tCommLost manual; mismo efecto, código uniforme).
+    // ── Pérdida de comunicación BQ — ventana relajada + recuperación activa ──
+    // Un ciclo es BUENO solo si V y T salieron OK en la MISMA pasada. Un ciclo
+    // bueno llama a sample(false) → borra badRun y tStart, es decir REINICIA el
+    // reloj de FAULT_COMM_MS a 0, y todo el proceso puede repetirse desde cero
+    // si vuelve a fallar. Si se agota la ventana sin un solo ciclo bueno,
+    // fComm.confirmed() pasa a true y updateBmsOk() tumba BMS_OK.
+    // (Criterio estricto a propósito: con "vale cualquier lectura suelta", un
+    //  camino muerto de forma permanente quedaría enmascarado por el otro.)
     bool readErr = (lastResV != BQResult::OK) || (lastResT != BQResult::OK);
     fComm.sample(readErr, now);
 
-    // Auto-address (reInit) SOLO si el fallo de comms está CONFIRMADO por el
-    // debounce (persistente FAULT_COMM_MS), no ante un error de lectura suelto.
-    // Antes bastaba un readErr aislado (ruido) para relanzar el auto-address;
-    // ahora ante ruido las lecturas periódicas siguen pidiendo datos y solo se
-    // re-inicializa la cadena si las comms siguen caídas toda la ventana.
-    // reInit: FUERA de precarga, solo si el fallo de comms lleva confirmado
-    // FAULT_COMM_MS (no re-inicializar ante ruido suelto). DURANTE la precarga
-    // (ventana ruidosa: el transitorio de HV puede dejar mudo el board base) se
-    // intenta reconectar YA al PRIMER fallo — el WAKE del reInit puede resucitarlo
-    // antes de que fComm confirme y tumbe BMS_OK.
-    bool reinitNow = prechargeRunning ? readErr
-                                      : fComm.confirmed(now, FAULT_COMM_MS);
-    if (reinitNow && (now - tLastReinit) >= BMS_REINIT_RETRY_MS) {
-            tLastReinit = now;
-            canNumTriesReset++;
-        // En precarga: UN solo intento de auto-address. Un reInit que falla con
-        // 5 intentos bloquea ~5 s y rompería el timing de precarga + el watchdog.
-        // Si no recupera, fComm sigue contando y acaba tumbando BMS_OK igual.
-        bms.setMaxAttempts(prechargeRunning ? 1 : 5);
+    // ── Escalado de la recuperación DENTRO de la ventana ────────────────────
+    // Fase BLANDA (t < COMM_SOFT_RETRY_MS): no se hace nada especial — las
+    //   lecturas periódicas de arriba ya siguen pidiendo datos y el driver ya
+    //   reintenta cada trama (BQ_READ_ATTEMPTS). Ahí muere el ruido, sin tocar
+    //   el direccionamiento de la cadena.
+    // Fase DURA (t ≥ COMM_SOFT_RETRY_MS): además, auto-address cada
+    //   COMM_REINIT_RETRY_MS. Entre intento e intento el loop sigue leyendo
+    //   normal, así que la recuperación puede venir por cualquiera de las dos
+    //   vías. Se repite mientras dure la racha mala — también DESPUÉS de que la
+    //   ventana expire y BMS_OK ya haya caído: el fallo no es latcheado y hay
+    //   que seguir intentando recuperar la cadena para que rearme.
+    // PRECARGA: se salta la fase blanda y se intenta YA al primer error. El
+    //   transitorio de HV puede dejar mudo el board base y el pulso de WAKE del
+    //   reInit lo resucita; con PRECHARGE_TIMEOUT_MS de 5 s no hay margen para
+    //   esperar la fase blanda.
+    unsigned long commBadMs = fComm.badRun ? (now - fComm.tStart) : 0;
+    bool escalate = prechargeRunning
+                        ? readErr
+                        : (fComm.badRun && commBadMs >= COMM_SOFT_RETRY_MS);
+
+    if (escalate && (now - tLastReinit) >= COMM_REINIT_RETRY_MS) {
+        tLastReinit = now;
+        canNumTriesReset++;
+        // FRAM: solo el PRIMER intento de cada episodio. Loguear los ~14 de una
+        // ventana de 30 s (o uno cada 2 s indefinidamente si la cadena está
+        // muerta) llenaría las 2047 entradas y borraría el post-mortem útil.
+        if (!reinitLogged) {
+            reinitLogged = true;
+            logger.log(buildFaultRecord(FaultLogger::EVT_REINIT_TRY, 4));
+        }
+        // UN solo intento de auto-address por llamada (COMM_REINIT_ATTEMPTS):
+        // reInit() BLOQUEA ~0.9 s por intento, y aquí se le llama en bucle
+        // durante toda la ventana. Con los 5 del driver bloquearía ~4.5 s de
+        // los 8 s del WDG y el loop no atendería Hall/CAN/TSON. La repetición
+        // la da esta ventana, no los reintentos internos del driver.
+        bms.setMaxAttempts(COMM_REINIT_ATTEMPTS);
         IWatchdog.reload();               // reInit bloquea; no dejar caer el WDG
         bool okReinit = bms.reInit();
         IWatchdog.reload();
-        bms.setMaxAttempts(5);            // restaurar default
+        bms.setMaxAttempts(BQ_AUTOADDR_ATTEMPTS);   // restaurar default
         if (okReinit) {
-                bmsInitOk = true;
-                fInit.sample(false, now);
-            fComm.sample(false, now);     // recuperado: rompe la racha (evita confirm -> BMS_OK LOW)
-            Serial.println(F("[OK] BQ recuperado."));
-            }
+            bmsInitOk = true;
+            fInit.sample(false, millis());   // sample(false) solo limpia; `now` está rancio
+            // ⚠ NO se toca fComm aquí: un auto-address OK dice que la cadena
+            //   responde al direccionamiento, no que se puedan LEER celdas. El
+            //   reloj de 30 s lo reinicia solo un ciclo de lectura bueno (que
+            //   llega en la siguiente pasada del loop si de verdad recuperó).
+            Serial.println(F("[OK] BQ re-direccionado; esperando lectura buena."));
         }
     }
-    // (else: fComm.sample(false) ya reseteó badRun/tStart arriba)
+
+    // Fin del episodio: la racha mala se rompió (un ciclo bueno ya reinició el
+    // reloj arriba) → rearmar el log para el próximo episodio.
+    if (!fComm.badRun) reinitLogged = false;
+}
 
 
 // ============================================================================
@@ -571,8 +715,11 @@ void updateBmsOk()
 
     // Init fallido dispara fault vía fInit debounced (FAULT_INIT_MS): un glitch
     // de init al arrancar ya NO baja BMS_OK al instante; debe persistir. Nota:
-    // durante !bmsInitOk también se muestrea fComm, que confirma antes
-    // (FAULT_COMM_MS < FAULT_INIT_MS) → BMS_OK cae por la vía comm.
+    // durante !bmsInitOk también se muestrea fComm, pero su ventana es ahora
+    // MUCHO más larga (30 s vs 200 ms) → al boot manda fInit, que es lo
+    // buscado: la relajación de comms cubre PERDER una cadena que funcionaba,
+    // no arrancar sin ella. Al perderla en caliente bmsInitOk sigue true, así
+    // que ahí manda fComm y su ventana de 30 s.
     bmsFault = faultV || faultT || faultNtc || faultComm || faultHall || faultInit;
 
     // ── DURACIÓN DEL EPISODIO (IDs 13/14) ───────────────────────────────────
@@ -617,6 +764,29 @@ void updateBmsOk()
         canLastCommFailMs = (d > 65535UL) ? 65535 : (uint16_t)d;
         if (canLastCommFailMs > canMaxCommFailMs) canMaxCommFailMs = canLastCommFailMs;
     }
+
+    // ── Estadísticas de comms para el serie (32 bits, sin clamp) ────────────
+    // El acumulado se suma INCREMENTALMENTE (no al cerrar el episodio): así ya
+    // incluye el episodio en curso y no se pierde el tramo que va desde la
+    // última pasada mala hasta que una buena rompe la racha — tramo que puede
+    // ser de ~1,5 s si justo antes hubo un reInit bloqueante.
+    static bool          commBadPrev = false;
+    static unsigned long tAccumPrev  = 0;
+    bool commBadNow = (fComm.badRun != 0);
+    if (commBadNow) {
+        if (!commBadPrev) {                 // flanco de entrada: nuevo episodio
+            commEpisodes++;
+            tAccumPrev = fComm.tStart;      // contar desde la PRIMERA lectura mala
+        }
+        commAccumFailMs += (now - tAccumPrev);
+        tAccumPrev       = now;
+        commCurFailMs    = now - fComm.tStart;
+        if (commCurFailMs > commMaxFailMs) commMaxFailMs = commCurFailMs;
+    } else {
+        commCurFailMs  = 0;
+        tLastGoodComm  = now;
+    }
+    commBadPrev = commBadNow;
 
     // ── Persistencia FRAM: atada a la TRANSICIÓN REAL del pin ───────────────
     // Esto NO se mueve al criterio de arriba: el log debe registrar cuándo
@@ -1160,6 +1330,12 @@ void handleSerial()
         break;
     }
 
+    case 'k':
+        // Estado de las comunicaciones con la cadena BQ (tiempos de fallo,
+        // contadores y peldaño de recuperación). Va también dentro de 's'.
+        printCommStatus();
+        break;
+
     case 'c':
         bms.clearAllFaults();
         Serial.println(F("Fallos BQ limpiados."));
@@ -1205,7 +1381,13 @@ void handleSerial()
         // Sticky del ID 17 (SDC/TSON): mismo comando de reset.
         stkSdcLost = stkTsonDisarm = stkTsonFail = stkImdLost = stkBmsFault = false;
         cntTsonDisarm = cntSdcLost = cntImdLost = cntBusOff = 0;
-        Serial.println(F("Contadores de fallo (ID 16) reseteados a 0."));
+        // Estadísticas de comms del monitor serie: mismo reset, para poder
+        // arrancar una tanda de banco con los tiempos a cero sin reiniciar.
+        commMaxFailMs = commAccumFailMs = 0;
+        commEpisodes  = 0;
+        canNumCommFails = canNumCrcFails = canNumTriesReset = 0;
+        canMaxCommFailMs = canLastCommFailMs = 0;
+        Serial.println(F("Contadores de fallo (ID 16) y stats de comms reseteados a 0."));
         break;
 
     case 'm':
@@ -1227,6 +1409,70 @@ void handleSerial()
 // ============================================================================
 //  STATUS
 // ============================================================================
+// ============================================================================
+//  ESTADO DE LAS COMUNICACIONES CON LA CADENA BQ (monitor serie)
+// ============================================================================
+//  Vuelca todo lo relevante del canal: estado ahora, los tres tiempos de fallo
+//  (actual / máximo / acumulado desde el boot), cuánto queda de la ventana de
+//  gracia, contadores de error y en qué peldaño de la recuperación estamos
+//  (fases BLANDA/DURA de sampleAndEvaluate).
+static const char* bqResStr(BQResult r)
+{
+    return r == BQResult::OK        ? "OK"
+         : r == BQResult::CRC_ERROR ? "CRC"
+                                    : "COMM";
+}
+
+static void printCommStatus()
+{
+    unsigned long now  = millis();
+    unsigned long bad  = fComm.badRun ? (now - fComm.tStart) : 0;   // episodio en curso
+    bool          conf = fComm.confirmed(now, FAULT_COMM_MS);
+
+    // Peldaño de recuperación AHORA (ver el escalado de sampleAndEvaluate).
+    const char* fase;
+    if      (!fComm.badRun)            fase = "-- (sin fallo)";
+    else if (prechargeRunning)         fase = "PRECARGA (auto-address al 1er error)";
+    else if (bad < COMM_SOFT_RETRY_MS) fase = "BLANDA (solo re-leer)";
+    else                               fase = "DURA (auto-address periodico)";
+
+    Serial.println(F("--- COMMS BQ -------------------------------------------"));
+    Serial.printf("Estado : %-16s  init=%d autoaddr=%d  ultV=%s ultT=%s\n",
+                  conf ? "FALLO CONFIRMADO" : (fComm.badRun ? "DEGRADADO" : "OK"),
+                  bmsInitOk, bms.isOK(), bqResStr(lastResV), bqResStr(lastResT));
+    // Los tres tiempos que pide el diagnóstico: el del episodio de AHORA, el
+    // peor episodio visto, y el total sumado desde que arrancó el programa.
+    Serial.printf("Tiempo : actual=%lu ms | max=%lu ms | acumulado=%lu ms (%.2f%% del uptime)\n",
+                  commCurFailMs, commMaxFailMs, commAccumFailMs,
+                  now ? (100.0f * (float)commAccumFailMs / (float)now) : 0.0f);
+    // Cuánto se ha consumido de la ventana de gracia antes de tumbar BMS_OK.
+    Serial.printf("Ventana: %lu/%lu ms consumidos%s | ult.ciclo bueno hace %.1f s\n",
+                  bad > FAULT_COMM_MS ? FAULT_COMM_MS : bad, FAULT_COMM_MS,
+                  conf ? " (AGOTADA)" : "",
+                  (now - tLastGoodComm) / 1000.0f);
+    // episodios = TODOS (incl. los que se despejaron dentro de la ventana);
+    // confirmados = los que llegaron a tumbar BMS_OK (contador del ID 16).
+    Serial.printf("Racha  : badRun=%u  episodios=%u (%u confirmados)\n",
+                  fComm.badRun, commEpisodes, cntFltComm);
+    Serial.printf("Errores: COMM=%u CRC=%u  ult.board que fallo=%d\n",
+                  canNumCommFails, canNumCrcFails, bms.getLastReadFailBoard());
+    Serial.printf("Recuper: %s  auto-address=%u intentos", fase, canNumTriesReset);
+    unsigned long sinceReinit = now - tLastReinit;
+    // "proximo en" solo si de verdad se va a escalar: en la fase BLANDA no hay
+    // auto-address aunque el rate-limit ya esté cumplido, así que anunciarlo
+    // engañaría. La condición es la misma `escalate` de sampleAndEvaluate.
+    bool escalando = fComm.badRun && (prechargeRunning || bad >= COMM_SOFT_RETRY_MS);
+    if (escalando)
+        Serial.printf("  proximo en %lu ms\n",
+                      sinceReinit >= COMM_REINIT_RETRY_MS
+                          ? 0UL : COMM_REINIT_RETRY_MS - sinceReinit);
+    else if (canNumTriesReset)
+        Serial.printf("  ultimo hace %.1f s\n", sinceReinit / 1000.0f);
+    else
+        Serial.println();
+    Serial.println(F("--------------------------------------------------------"));
+}
+
 void printStatus()
 {
     Serial.println(F("\n=== BMS STATUS ==="));
@@ -1249,6 +1495,7 @@ void printStatus()
                   fNtc.confirmed(millis(), FAULT_NTC_MS),
                   fComm.confirmed(millis(), FAULT_COMM_MS),
                   !hall.isOK());
+    printCommStatus();
     Serial.printf("Sticky(ID17): SDC_perdido=%d(%u) TSON_desarm=%d(%u) TSON_FAIL=%d "
                   "IMD_perdido=%d(%u) BMS_fallo=%d\n",
                   stkSdcLost, cntSdcLost, stkTsonDisarm, cntTsonDisarm, stkTsonFail,

@@ -325,31 +325,149 @@ seguridad ante pérdida de medida. Merecen su sesión de banco.
 
 | Parámetro | main.cpp | charger.cpp | Normativa FS |
 |---|---|---|---|
-| `FAULT_V_MS` | 150000 ⚠ | 150 | **500** |
-| `FAULT_T_MS` | 150000 ⚠ | 500 | **1000** |
-| `FAULT_NTC_MS` | 150000 ⚠ | 1000 | 1000 |
-| `FAULT_COMM_MS` | 6000 | 1000 (`f,<ms>`) | — |
+| `FAULT_V_MS` | 500 | 200 | **500** |
+| `FAULT_T_MS` | 1000 | 400 | **1000** |
+| `FAULT_NTC_MS` | 1000 | 400 | 1000 |
+| `FAULT_REARM_GAP_MS` | 1000 | — | — |
+| `FAULT_COMM_MS` | **30000** | 1000 (`f,<ms>`) | — |
+| `COMM_SOFT_RETRY_MS` | 1000 | — | — |
+| `COMM_REINIT_RETRY_MS` | 2000 | — | — |
+| `COMM_REINIT_ATTEMPTS` | 1 | — | — |
 | `FAULT_INIT_MS` | 200 | — | — |
-| `SAMPLE_V_MS` / `SAMPLE_MS` | 250 | 250 | — |
-| `SAMPLE_T_MS` | 500 | 250 | — |
+| `BMS_REINIT_RETRY_MS` | 2000 (solo boot) | — | — |
+| `SAMPLE_V_MS` / `SAMPLE_MS` | 100 | 250 | — |
+| `SAMPLE_T_MS` | 100 | 250 | — |
 | `BQ_READ_ATTEMPTS` | 3 | 3 | — |
-| `k` de `FaultTimer::confirmed` | 2 | 2 | — |
+| `k` de `FaultTimer::confirmed` | 5 (default) | 5 (default) | — |
 
-⚠ Los marcados son valores **de banco**, muy por encima de la normativa.
-Revertir a 500/1000/1000 antes de rodar.
+⚠ El default de `k` en `FaultTimer.h` es **5**, no 2, y **ningún** call site pasa
+`k` explícitamente: el default gobierna los ~25 `confirmed()` de los dos
+firmwares. Los tests `test_dos_malas_y_ventana` y `test_overflow_millis` de
+`test/test_faulttimer/` siguen escritos para k=2 y **fallan** por eso.
+
+`confirmed()` exige **las dos** condiciones a la vez, así que el tiempo real de
+confirmación es `max(ventana, (k−1) × periodo_de_muestreo)`. **k solo manda
+cuando `(k−1) × periodo > ventana`**; si no, es inerte:
+
+| fw | timer | periodo | ventana | k=2 | k=5 |
+|---|---|---|---|---|---|
+| main | `fV` | 100 | 500 | 500 ms | 500 ms |
+| main | `fT` / `fNtc` | 100 | 1000 | 1000 ms | 1000 ms |
+| main | `fComm` / `fInit` | cada loop | 30000 / 200 | igual | igual |
+| charger | `fV` | 250 | 200 | 250 ms | **1000 ms** |
+| charger | `fT` / `fNtc` | 250 | 400 | 500 ms | **1000 ms** |
+| charger | `fComm` | 250 | 1000 | 1000 ms | 1000 ms |
+
+En **main** k es inerte: k=2 y k=5 dan exactamente lo mismo. En **charger**
+(`SAMPLE_MS`=250, más lento que sus ventanas) k=5 **cuadruplica** la
+confirmación de V (250 → 1000 ms) y duplica T/NTC (500 → 1000 ms), por encima
+del límite FS de 500 ms para tensión. La intención del diseño era k=2: lo dicen
+los tests, y tres comentarios del charger (`FAULT_COMM_MIN_MS` "suelo: <
+`SAMPLE_MS` no da ni 2 muestras", y "≥2 muestras" en las líneas 108 y 545).
+
+Coste de margen: con k=5 la cadencia no puede pasar de `ventana/4` sin retrasar
+la confirmación. `SAMPLE_V_MS` está en 100 ms contra un techo de 125 ms — subirlo
+a 150 ms rompería el límite FS de 500 ms **en silencio**. Con k=2 el techo es la
+propia ventana (500 ms).
+
+### 10.1 Comunicación BQ: ventana relajada + recuperación escalonada
+
+Las comms **no** son un fallo de celda FS, así que tienen un criterio propio y
+mucho más laxo que V/T/NTC:
+
+> BMS_OK cae por comms solo si pasan **`FAULT_COMM_MS` (30 s) enteros sin un
+> solo ciclo de lectura bueno**. Ciclo bueno = `readVoltages()` **y**
+> `readTemperatures()` OK en la misma pasada. Cualquier ciclo bueno reinicia el
+> reloj a 0 (`FaultTimer::sample(false)` borra `badRun` y `tStart`) y el proceso
+> puede repetirse entero si vuelve a fallar.
+
+Escalado **dentro** de la ventana (peldaños de §9.4):
+
+| Fase | Cuándo | Qué hace |
+|---|---|---|
+| Trama | siempre | `BQ_READ_ATTEMPTS`=3 reintentos dentro del driver (~ms) |
+| Blanda | t < `COMM_SOFT_RETRY_MS` (1 s) | solo re-leer; no se toca el direccionamiento |
+| Dura | t ≥ `COMM_SOFT_RETRY_MS` | + auto-address cada `COMM_REINIT_RETRY_MS` (2 s), con lecturas normales entre intentos |
+| Fallo | t ≥ `FAULT_COMM_MS` (30 s) | `bmsFault` → BMS_OK LOW. El escalado **sigue** (fallo no latcheado, debe poder rearmar) |
+
+`COMM_REINIT_ATTEMPTS`=1: `reInit()` **bloquea ~1,5 s** por intento de
+auto-address con la cadena muerta (240 ms de WAKE `delay(12×TOTALBOARDS)` +
+600 ms de delays fijos + ~450 ms de verificación a 10 ms de timeout por board +
+trazas por serie; ~1,65 s con `TOTALBOARDS`=24). Con los 5 del driver serían
+**~7,5 s** (**~8,2 s a 24 boards**) contra los 8 s de `WDG_TIMEOUT_US`. La
+repetición la da la ventana, no los reintentos del driver.
+
+⚠ **Coste del bloqueo.** Con cadencia 2 s y bloqueo 1,5 s el loop está parado
+~75 % del episodio. Dos efectos, ambos acotados por la **duración del bloqueo**,
+no por la cadencia:
+
+- `hall.update()` se queda ciego a ratos. Una sobreintensidad **transitoria**
+  (`HALL_FAULT_MS`=250 ms) que empiece y acabe dentro de un bloqueo se pierde
+  entera. Una que **persista** solo se detecta tarde (el debounce del Hall es
+  wall-time y repinea `tStart`), no se pierde.
+- Una ventana de comms **buena más corta que el bloqueo** puede caer entera
+  dentro de él → no se muestrea y **no reinicia el reloj de 30 s**. Medido en
+  simulación: la ventana buena mínima siempre detectable es ~1,5 s,
+  independientemente de la cadencia. Solo afecta a comms **intermitentes**; una
+  cadena que se recupera y se queda se detecta en la primera lectura tras el
+  bloqueo.
+
+Subir `COMM_REINIT_RETRY_MS` baja el % de tiempo ciego (3 s → 50 %) pero **no**
+el peor caso. La solución de fondo es §9.5 (reInit no bloqueante).
+
+### 10.2 Watchdog en el camino de ARRANQUE
+
+El `bms.begin()` de `setup()` corre **antes** de `IWatchdog.begin()`, así que ahí
+los 5 intentos son seguros. Pero el reintento de `sampleAndEvaluate()` cuando
+`!bmsInitOk` corre con el **WDG ya armado**: llamaba a `reInit()` con los 5
+intentos del driver y **sin** `IWatchdog.reload()` → ~7,5 s de bloqueo contra los
+8 s del WDG (y ~8,2 s con `TOTALBOARDS`=24 → **reset garantizado**, bucle de
+arranque infinito con la cadena ausente). Corregido: `BOOT_REINIT_ATTEMPTS`=1 y
+`reload()` a ambos lados; la repetición la da `BMS_REINIT_RETRY_MS`.
+
+Al recuperar la cadena por esa vía se limpia también `fComm`: durante el arranque
+se muestrea a `true` en cada pasada solo para el reloj de comms de ID 13 — no es
+la ventana de seguridad viva (al boot manda `fInit`). Sin limpiarlo, su `tStart`
+quedaría a decenas de segundos y el primer fallo de lectura tras recuperar
+confirmaría al instante en vez de estrenar la ventana de 30 s.
+
+Un auto-address OK **no** reinicia el reloj de 30 s: dice que la cadena responde
+al direccionamiento, no que se puedan leer celdas. Solo lo reinicia una lectura
+buena de verdad.
+
+⚠ **Consecuencia asumida (decisión de equipo):** hasta 30 s con datos de celda
+rancios y BMS_OK aún HIGH, **con el TS encendido incluido**. FS EV5.8.13 trata
+la pérdida de medida como fallo; el bit `failCondition` (ID 15 B3) sí se
+enciende de inmediato vía `fComm.cond`, mucho antes del confirm.
+
+**Rearme del debounce V/T/NTC** (`FAULT_REARM_GAP_MS`): `fV`/`fT`/`fNtc` solo se
+muestrean con lectura OK, así que durante un apagón su `badRun`/`tStart` quedan
+congelados. Si la última lectura buena fue hace más de 1 s, se borran antes de
+meter el primer dato fresco — si no, tras un apagón de 30 s bastarían k muestras
+malas para confirmar al instante (`now - tStart` ≫ ventana) en vez de re-medir
+los 500/1000 ms. El umbral (1 s) está por encima de la cadencia de muestreo para
+que un fallo de lectura **aislado** no rearme y no retrase un fallo de celda real
+que se estaba acumulando.
 
 ### Tiempo hasta el auto-address (reInit)
 
-`fComm.sample()` se llama **cada iteración del loop**, así que las 2 muestras
+`fComm.sample()` se llama **cada iteración del loop**, así que las k muestras
 consecutivas se cumplen en microsegundos → **manda la ventana**.
 
 | Firmware | Situación | Tiempo |
 |---|---|---|
-| main | Normal | **6 s** (`FAULT_COMM_MS`) desde el primer error |
+| main | Normal | **1 s** (`COMM_SOFT_RETRY_MS`), luego cada 2 s |
 | main | Durante precarga | **Inmediato** (1er error), rate-limit 2 s |
 | main | BQ sin init al boot | Cada **2 s** (`BMS_REINIT_RETRY_MS`) |
 | charger | Normal | **1 s** (`commWindowMs`), rate-limit 2 s |
 | charger | Durante precarga | **Inmediato**, rate-limit 2 s |
 
-En precarga se usa además `setMaxAttempts(1)`: un solo intento de auto-address
-(~1 s) en vez de 5 (~5 s), para no comerse el `PRECHARGE_TIMEOUT_MS`.
+En precarga (main) se salta la fase blanda: el transitorio de HV puede dejar mudo
+el board base y el pulso de WAKE del reInit lo resucita; con
+`PRECHARGE_TIMEOUT_MS`=5 s no hay margen para esperar. `setMaxAttempts` ya es 1
+en todos los caminos de recuperación en caliente.
+
+**FRAM:** en el camino de comms solo se loguea el **primer** `EVT_REINIT_TRY` de
+cada episodio. Loguear los ~14 de una ventana de 30 s (o uno cada 2 s
+indefinidamente con la cadena muerta) llenaría las 2047 entradas y borraría el
+post-mortem. El boot sí loguea cada intento (son pocos y acotados).

@@ -45,9 +45,36 @@ Estado general (0x0A), GEN_STATUS bitmap por módulo (0x0C), señales de SDC/TSO
 contador de fallos por causa (ID16), V/T, SOC. Ver [docs/CAN_Solo2DL.md](../CAN_Solo2DL.md).
 
 ## Comandos serie (115200)
-`v` voltajes · `t` temps · `a` amperímetro · `s` status · `f` fallos · `c` limpiar
-fallos BQ · `i` re-init BQ · `r` restart · `d` volcar log FRAM · `D` reset índice log
-· `C` reset contadores.
+`v` voltajes · `t` temps · `a` amperímetro · `s` status · `f` fallos · **`k` estado
+de comms BQ** · `c` limpiar fallos BQ · `i` re-init BQ · `r` restart · `d` volcar log
+FRAM · `D` reset índice log · `C` reset contadores (incluye las stats de comms).
+
+### `k` — estado de las comunicaciones
+También sale dentro de `s` y del volcado periódico (cada `PRINT_MS`):
+
+```
+--- COMMS BQ -------------------------------------------
+Estado : DEGRADADO         init=1 autoaddr=0  ultV=COMM ultT=COMM
+Tiempo : actual=12400 ms | max=12400 ms | acumulado=17270 ms (2.29% del uptime)
+Ventana: 12400/30000 ms consumidos | ult.ciclo bueno hace 12.4 s
+Racha  : badRun=255  episodios=15 (1 confirmados)
+Errores: COMM=190 CRC=9  ult.board que fallo=0
+Recuper: DURA (auto-address periodico)  auto-address=9 intentos  proximo en 800 ms
+--------------------------------------------------------
+```
+
+| Campo | Significado |
+|---|---|
+| `Estado` | `OK` / `DEGRADADO` (racha mala en curso, ventana aún no agotada) / `FALLO CONFIRMADO` (BMS_OK LOW por comms) |
+| `init` / `autoaddr` | `bmsInitOk` y `bms.isOK()`: pueden diverger — tras un `reInit()` fallido el driver queda sin direccionar (`autoaddr=0`) pero se sigue intentando leer |
+| `Tiempo` | **actual** = episodio en curso · **max** = episodio más largo desde el boot · **acumulado** = suma de todo el tiempo en fallo desde el boot (incluye el episodio en curso) |
+| `Ventana` | cuánto se lleva consumido de `FAULT_COMM_MS` antes de tumbar BMS_OK; `(AGOTADA)` cuando ya confirmó |
+| `Racha` | `badRun` del `FaultTimer`; **episodios** = todos, incluidos los que se despejaron dentro de la ventana; **confirmados** = los que llegaron a tumbar BMS_OK (`cntFltComm`, ID 16) |
+| `Recuper` | peldaño actual: `BLANDA` (solo re-leer) / `DURA` (auto-address periódico) / `PRECARGA`. `proximo en` solo aparece si de verdad se va a escalar |
+
+Los tres tiempos son `unsigned long` **sin** el clamp de 16 bits de los campos CAN
+(`canLastCommFailMs` / `canMaxCommFailMs` saturan a 65535 ms = 65,5 s; un episodio
+con la cadena muerta dura indefinidamente).
 
 ## Configuración que tocarás
 | Qué | Dónde | Nota |
