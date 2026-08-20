@@ -22,7 +22,7 @@
 //             detector de NTC roto/desconectado (lectura espuria muy baja).
 //   OT  60 °C — coincide con FS EV5.8.4 y máx. del datasheet. Fans saturan
 //             al 100 % a 50 °C → 10 °C de margen real antes del trip.
-#define CELL_UV_V      2.8f     ///< Undervoltage (V)
+#define CELL_UV_V      3.2f     ///< Undervoltage (V)
 #define CELL_OV_V      5.2f     ///< Overvoltage (V)
 #define CELL_UT_C    -20.0f     ///< Undertemperature (°C)
 #define CELL_OT_C     60.0f     ///< Overtemperature (°C) — EV5.8.4: ≤60

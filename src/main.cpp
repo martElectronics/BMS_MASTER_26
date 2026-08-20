@@ -183,6 +183,21 @@ static unsigned long commAccumFailMs = 0;   ///< tiempo TOTAL acumulado en fallo
 static uint16_t      commEpisodes    = 0;   ///< nº de episodios, INCLUIDOS los que no llegaron a confirmar
 static unsigned long tLastGoodComm   = 0;   ///< millis() del último ciclo de lectura bueno (0 = ninguno aún)
 
+// ── Diagnóstico del HALL — sticky + instantánea ─────────────────────────────
+// El fallo del Hall es TRANSITORIO: dura lo justo para confirmar (HALL_FAULT_MS
+// = 250 ms) y se despeja antes del siguiente printStatus (2 s), así que en el
+// volcado periódico siempre se ve "Hall=OK" y solo delata el contador del ID 16.
+// HallSensor distingue 4 causas independientes, pero solo las publicaba por CAN
+// (ID 15 B1 b0-4) — inservible con el bus en BUS-OFF. Aquí se latchean para
+// poder saber CUÁL abrió el SDC, y se guarda una foto del instante del disparo.
+static bool          stkHallDisc = false, stkHallStuck = false;
+static bool          stkHallNoisy= false, stkHallOver  = false, stkHallAdcSat = false;
+static bool          stkHallOffsetBad = false;
+static unsigned long tHallFault   = 0;      ///< millis() del último flanco 0→1 de !isOK()
+static uint8_t       hallFaultWhy = 0;      ///< bitmap en el disparo: b0 disc b1 stuck b2 noisy b3 over b4 adcSat b5 offset
+static float         hallFaultI   = 0.0f;   ///< corriente SIN filtrar en el disparo
+static bool          hallFaultLow = true;   ///< rango activo en el disparo
+
 // Contadores por causa (ID 16): nº de veces que cada fallo confirmado ha
 // disparado desde el último reset. Se incrementan en el FLANCO DE SUBIDA
 // (así captan episodios cortos que no verías en vivo). uint8 saturado a 255.
@@ -233,6 +248,7 @@ void updateCanTx();
 void handleSerial();
 void printStatus();
 static void printCommStatus();
+static void printHallStatus();
 static void buildDebugFlags(uint8_t out[4]);
 static FaultRecord buildFaultRecord(uint8_t eventType, uint8_t firstFlt);
 
@@ -350,7 +366,7 @@ void setup()
         logger.log(buildFaultRecord(FaultLogger::EVT_BOOT, 0));
     }
 
-    Serial.println(F("Cmd: v t a s f c i r  k=comms  F=fans100%  d=dump log  D=clear log  C=clear cnt  m=ansi  j=json"));
+    Serial.println(F("Cmd: v t a s f c i r  k=comms  h=hall  F=fans100%  d=dump log  D=clear log  C=clear cnt  m=ansi  j=json"));
 
     // Arrancar el watchdog AL FINAL (tras el init/calibración acotados).
     // Una vez iniciado NO se puede parar (es independiente por HW).
@@ -601,7 +617,46 @@ void updateBmsOk()
     bool faultT    = fT.confirmed(now,  FAULT_T_MS);
     bool faultNtc  = fNtc.confirmed(now, FAULT_NTC_MS);
     bool faultComm = fComm.confirmed(now, FAULT_COMM_MS);
-    bool faultHall = !hall.isOK();      // HallSensor ya debounced 500 ms
+    bool faultHall = !hall.isOK();      // debounce propio del HallSensor (HALL_FAULT_MS)
+
+    // Sticky de las 4 causas del Hall + foto del instante del disparo. Sin esto
+    // un episodio de 250 ms solo deja el contador del ID 16 y es imposible saber
+    // cuál de las cuatro abrió el SDC (ver printCommStatus/printHallStatus).
+    if (hall.isDisconnected())  stkHallDisc   = true;
+    if (hall.isStuck())         stkHallStuck  = true;
+    if (hall.isNoisy())         stkHallNoisy  = true;
+    if (hall.isOverCurrent())   stkHallOver   = true;
+    if (hall.isAdcSaturated())  stkHallAdcSat = true;
+    if (!hall.isOffsetValid())  stkHallOffsetBad = true;
+    {
+        static bool hallPrev = false;
+        if (faultHall && !hallPrev) {           // flanco: congelar la foto
+            tHallFault   = now;
+            hallFaultI   = hall.getCurrentRaw();
+            hallFaultLow = hall.isLowRange();
+            hallFaultWhy = (hall.isDisconnected() ? (1 << 0) : 0)
+                         | (hall.isStuck()        ? (1 << 1) : 0)
+                         | (hall.isNoisy()        ? (1 << 2) : 0)
+                         | (hall.isOverCurrent()  ? (1 << 3) : 0)
+                         | (hall.isAdcSaturated() ? (1 << 4) : 0)
+                         | (hall.isOffsetValid()  ? 0 : (1 << 5));
+            // CAUSA = solo lo que de verdad puede tumbar isOK(); el resto es
+            // contexto. Mezclarlos haria pensar que un "CONGELADO" abrio el SDC.
+            Serial.printf("\n[HALL] *** FALLO CONFIRMADO t=%lu ms  causa=%s%s%s "
+                          "I=%.2f A rango=%s ***\n", now,
+                          (hallFaultWhy & (1<<0)) ? "DESCONECTADO " : "",
+                          (hallFaultWhy & (1<<3)) ? "SOBRE-I "      : "",
+                          (hallFaultWhy & (1<<5)) ? "OFFSET-MALO "  : "",
+                          hallFaultI, hallFaultLow ? "30A" : "350A");
+            Serial.printf("[HALL]     contexto (NO abren el SDC): congelado=%d ruido=%d adcSat=%d\n",
+                          !!(hallFaultWhy & (1<<1)), !!(hallFaultWhy & (1<<2)),
+                          !!(hallFaultWhy & (1<<4)));
+            if ((hallFaultWhy & ((1<<0)|(1<<3)|(1<<5))) == 0)
+                Serial.println(F("[HALL] ^ NINGUNA causa activa al confirmar: el flag se "
+                                 "despejo entre _updateFaultTimers() y esta lectura."));
+        }
+        hallPrev = faultHall;
+    }
     bool faultInit = fInit.confirmed(now, FAULT_INIT_MS);  // init fallido persistente
 
     // Contadores por causa (ID 16): incrementar en el FLANCO de subida de
@@ -760,7 +815,25 @@ void updateTson()
     {
         bool imdOkRaw = digitalRead(PIN_IMD_OK);
         static bool sdcPrev = true, imdPrev = true, tsonFailPrev = false;
-        if (sdcPrev && !sdc3v3) { stkSdcLost = true; if (cntSdcLost < 255) cntSdcLost++; }
+        if (sdcPrev && !sdc3v3) {
+            stkSdcLost = true; if (cntSdcLost < 255) cntSdcLost++;
+            // Sello de tiempo del flanco CRUDO, para poder ORDENAR este evento
+            // contra el "[HALL] *** FALLO CONFIRMADO t=... ***" de updateBmsOk.
+            // Sin esto es imposible saber quien fue causa y quien consecuencia:
+            //   · t(HALL) < t(SDC)              -> el BMS abrio el SDC.
+            //   · t(SDC)  < t(HALL)             -> lo abrio OTRO nodo y el Hall
+            //                                      salto por el transitorio.
+            //   · t(HALL) - t(SDC) ~= HALL_FAULT_MS -> caso anterior, confirmado:
+            //     el Hall tardo EXACTAMENTE su debounce en caer tras la apertura.
+            // bmsOk aqui es el nivel que el BMS esta pidiendo AHORA (!bmsFault):
+            // si sale 1, el SDC se abrio con el BMS diciendo "estoy sano".
+            Serial.printf("\n[SDC] *** CAIDA t=%lu ms  (nº %u)  bmsOk=%d hall=%d "
+                          "IMD_OK=%d TSON_FAIL=%d HV_ACCU=%d SDC_TSON=%d ***\n",
+                          millis(), cntSdcLost, !bmsFault, hall.isOK(),
+                          imdOkRaw, tsonFail, digitalRead(PIN_HV_ACCU_VIL), sdcTson);
+        }
+        if (!sdcPrev && sdc3v3)
+            Serial.printf("[SDC] recuperado t=%lu ms\n", millis());
         if (imdPrev && !imdOkRaw) { stkImdLost = true; if (cntImdLost < 255) cntImdLost++; }
         if (!tsonFailPrev && tsonFail) stkTsonFail = true;
         sdcPrev = sdc3v3; imdPrev = imdOkRaw; tsonFailPrev = tsonFail;
@@ -1262,6 +1335,11 @@ void handleSerial()
         printCommStatus();
         break;
 
+    case 'h':
+        // Estado del Hall + STICKY de las 4 causas. Va también dentro de 's'.
+        printHallStatus();
+        break;
+
     case 'c':
         bms.clearAllFaults();
         Serial.println(F("Fallos BQ limpiados."));
@@ -1311,6 +1389,9 @@ void handleSerial()
         // arrancar una tanda de banco con los tiempos a cero sin reiniciar.
         commMaxFailMs = commAccumFailMs = 0;
         commEpisodes  = 0;
+        stkHallDisc = stkHallStuck = stkHallNoisy = stkHallOver = false;
+        stkHallAdcSat = stkHallOffsetBad = false;
+        tHallFault = 0; hallFaultWhy = 0;
         canNumCommFails = canNumCrcFails = canNumTriesReset = 0;
         canMaxCommFailMs = canLastCommFailMs = 0;
         Serial.println(F("Contadores de fallo (ID 16) y stats de comms reseteados a 0."));
@@ -1401,6 +1482,52 @@ static void printCommStatus()
     Serial.println(F("--------------------------------------------------------"));
 }
 
+// ============================================================================
+//  ESTADO DEL AMPERIMETRO HALL (monitor serie)
+// ============================================================================
+//  faultHall entra en bmsFault SIN debounce a nivel main: el unico filtro es el
+//  HALL_FAULT_MS interno del HallSensor. Y el episodio es tan corto que el
+//  volcado periodico siempre lo pilla ya despejado. Por eso mandan los STICKY:
+//  dicen que llego a dispararse aunque ya no este activo.
+//
+//  Dos bloques separados A PROPOSITO:
+//    FALLO = desconexion y sobre-I. Son las UNICAS que tumban isOK() -> BMS_OK
+//            -> abren el SDC (latch HW, hasta reset manual).
+//    DIAG  = congelado, ruido, adcSat. Se siguen midiendo pero NO abren nada.
+//  Antes iban mezclados y un "CONGELADO" parecia la causa de una apertura.
+static void printHallStatus()
+{
+    Serial.println(F("--- HALL -----------------------------------------------"));
+    Serial.printf("Ahora  : %s  I=%.2f A (raw %.2f)  rango=%s  offset=%s\n",
+                  hall.isOK() ? "OK" : "FALLO", hall.getCurrent(), hall.getCurrentRaw(),
+                  hall.isLowRange() ? "30A" : "350A",
+                  hall.isOffsetValid() ? "valido" : "INVALIDO");
+    // Solo estas dos (mas un offset de boot malo) tumban isOK() -> BMS_OK.
+    Serial.printf("FALLO  : desconectado=%d sobre-I=%d      [STICKY: %d / %d]\n",
+                  hall.isDisconnected(), hall.isOverCurrent(),
+                  stkHallDisc, stkHallOver);
+    // Se siguen midiendo, pero NO abren el SDC (ver _updateFaultTimers).
+    Serial.printf("DIAG   : congelado=%d ruido=%d adcSat=%d  [STICKY: %d / %d / %d]  (no abren SDC)\n",
+                  hall.isStuck(), hall.isNoisy(), hall.isAdcSaturated(),
+                  stkHallStuck, stkHallNoisy, stkHallAdcSat);
+    if (tHallFault) {
+        Serial.printf("ULT.FALLO: t=%lu ms (hace %.1f s)  I=%.2f A  rango=%s  causa=%s%s%s%s\n",
+                      tHallFault, (millis() - tHallFault) / 1000.0f,
+                      hallFaultI, hallFaultLow ? "30A" : "350A",
+                      (hallFaultWhy & (1<<0)) ? "DESCONECTADO " : "",
+                      (hallFaultWhy & (1<<3)) ? "SOBRE-I "      : "",
+                      (hallFaultWhy & (1<<5)) ? "OFFSET-MALO "  : "",
+                      (hallFaultWhy & ((1<<0)|(1<<3)|(1<<5))) ? "" : "(ninguna activa al confirmar)");
+    } else {
+        Serial.println(F("ULT.FALLO: ninguno desde el boot"));
+    }
+    Serial.printf("Umbrales: [FALLO] railBajo<%d railAlto>%d sobre-I>%.0fA debounce=%lums | "
+                  "[diag] dither<=%dLSB/%lums ruido>%.0fA\n",
+                  HALL_WD_ADC_MIN, HALL_WD_ADC_MAX, HALL_I_MAX_DISCHARGE, HALL_FAULT_MS,
+                  HALL_WD_STUCK_ADC_LSB, HALL_WD_STUCK_US / 1000UL, HALL_WD_NOISE_DELTA_A);
+    Serial.println(F("--------------------------------------------------------"));
+}
+
 void printStatus()
 {
     Serial.println(F("\n=== BMS STATUS ==="));
@@ -1424,6 +1551,7 @@ void printStatus()
                   fComm.confirmed(millis(), FAULT_COMM_MS),
                   !hall.isOK());
     printCommStatus();
+    printHallStatus();
     Serial.printf("Sticky(ID17): SDC_perdido=%d(%u) TSON_desarm=%d(%u) TSON_FAIL=%d "
                   "IMD_perdido=%d(%u) BMS_fallo=%d\n",
                   stkSdcLost, cntSdcLost, stkTsonDisarm, cntTsonDisarm, stkTsonFail,

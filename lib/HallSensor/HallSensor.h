@@ -13,7 +13,21 @@
  *   · Filtro EMA (Exponential Moving Average)
  *   · Watchdog: detección de desconexión (incl. fallo de UN canal),
  *     sensor congelado y ruido extremo
- *   · Timer de fallo de 500ms según norma Formula Student EV 5.8
+ *   · Timer de fallo (HALL_FAULT_MS) según norma Formula Student EV 5.8
+ *
+ * ── QUÉ CUENTA COMO FALLO (isOK() == false) ─────────────────────────────────
+ *   SOLO dos causas, más el offset del boot:
+ *     · DESCONEXIÓN     — un canal railado sin corroboración física
+ *     · SOBREINTENSIDAD — |I| fuera de los límites FS
+ *     · offset del begin() implausible (se evalúa UNA vez, al arrancar)
+ *
+ *   "Congelado" (isStuck) y "ruido extremo" (isNoisy) se siguen calculando y
+ *   publicando, pero son SOLO DIAGNÓSTICO: no tumban isOK() ni, por tanto,
+ *   BMS_OK. Sus umbrales son heurísticos y siguen [TUNE] sin validar contra el
+ *   ruido real del HW, y aquí un falso positivo no degrada nada: abre el SDC, y
+ *   ese latch es HARDWARE y LATCHING → el coche se queda parado hasta reset
+ *   manual. Desconexión y sobre-I sí tienen un criterio físico, no estadístico.
+ *   Ver _updateFaultTimers() en el .cpp.
  *
  * ── PORTABILIDAD (IMPORTANTE) ───────────────────────────────────────────────
  *   begin() llama analogReadResolution(12). STM32duino usa 10-bit por
@@ -22,10 +36,12 @@
  * ── ESTADO: PENDIENTE DE AJUSTE EN BANCO ────────────────────────────────────
  *   La lógica está corregida, pero los umbrales del watchdog DEPENDEN del
  *   ruido real del HW y NO se ajustan a ojo. Marcados con [TUNE] abajo:
- *     · HALL_WD_STUCK_ADC_LSB   (congelado vs. dither real del ADC)
- *     · HALL_WD_NOISE_DELTA_A   (ruido/EMI vs. dI/dt legítimo de un acelerón)
- *     · HALL_WD_DISC_CORROB_A   (raíl por desconexión vs. por sobre-rango real)
+ *     · HALL_WD_STUCK_ADC_LSB   (congelado vs. dither real del ADC)   [solo diag.]
+ *     · HALL_WD_NOISE_DELTA_A   (ruido/EMI vs. dI/dt legítimo)        [solo diag.]
+ *     · HALL_WD_DISC_CORROB_A   (raíl por desconexión vs. sobre-rango real)
  *   Validar/afinar con el sensor montado y el coche en condiciones reales.
+ *   Los dos primeros ya NO abren el SDC, así que afinarlos dejó de ser urgente:
+ *   basta con mirar sus contadores. El tercero SÍ es camino de seguridad.
  *
  * Uso:
  * @code
@@ -33,7 +49,8 @@
  *   void setup() { hall.begin(); }            // autocalibración (~1s en reposo)
  *   void loop()  { hall.update();             // en cada ciclo
  *                  float I = hall.getCurrent();
- *                  bool ok = hall.isOK(); }   // false si fallo confirmado >500ms
+ *                  bool ok = hall.isOK(); }   // false si desconexion/sobre-I
+ *                                             // confirmadas HALL_FAULT_MS
  * @endcode
  *
  * LÍMITES (Formula Student):
@@ -168,7 +185,8 @@ public:
     // ─── Estado de fallos ─────────────────────────────────────────────────────
 
     /** @return true si NO hay fallo confirmado Y el offset del boot es válido.
-     *  Usar para gobernar BMS_OK. */
+     *  Usar para gobernar BMS_OK. Solo lo tumban DESCONEXIÓN y SOBREINTENSIDAD
+     *  (más un offset de boot implausible); congelado y ruido NO. */
     bool isOK() const { return _offsetValid && !_faultConfirmed; }
 
     /** @return true si el offset calibrado al arrancar cayó en rango plausible. */
@@ -177,10 +195,12 @@ public:
     /** @return true si el sensor parece desconectado (raíl sin corroborar). */
     bool isDisconnected() const { return _sensorDisconnected; }
 
-    /** @return true si el canal activo está congelado (ADC sin dither 500ms). */
+    /** @return true si el canal activo está congelado (ADC sin dither 500ms).
+     *  ⚠ SOLO DIAGNÓSTICO: no entra en isOK() ni tumba BMS_OK. */
     bool isStuck() const { return _sensorStuck; }
 
-    /** @return true si ΔI entre lecturas supera HALL_WD_NOISE_DELTA_A. */
+    /** @return true si ΔI entre lecturas supera HALL_WD_NOISE_DELTA_A.
+     *  ⚠ SOLO DIAGNÓSTICO: no entra en isOK() ni tumba BMS_OK. */
     bool isNoisy() const { return _sensorNoisy; }
 
     /** @return true si la corriente sale de los límites FS >500ms. */

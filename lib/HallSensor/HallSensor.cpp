@@ -223,7 +223,23 @@ void HallSensor::_updateWatchdog(int raw30, int raw350, float i30, float i350)
 
 
 // ============================================================================
-//  TIMERS DE FALLO (500ms según norma FS EV 5.8)
+//  TIMERS DE FALLO
+// ============================================================================
+//  ⚠ SOLO DOS CAUSAS ABREN EL SDC: desconexión y sobreintensidad.
+//
+//  "Congelado" y "ruido extremo" se SIGUEN calculando (isStuck()/isNoisy(),
+//  telemetría CAN ID 15 B1 b1-b2 y bloque '--- HALL ---' del serie) pero YA NO
+//  entran en _faultConfirmed. Motivo: sus umbrales son heurísticos y siguen
+//  marcados [TUNE] sin validar contra el ruido real del HW, y un falso positivo
+//  aquí no degrada nada — TUMBA BMS_OK y el latch del SDC es HARDWARE y
+//  LATCHING, así que un episodio de 250 ms deja el coche parado hasta reset
+//  manual. Desconexión y sobre-I son las dos que sí significan "no me puedo
+//  fiar de la medida de corriente" con un criterio físico, no estadístico.
+//
+//  Los dos timers que quedan mantienen la misma semántica no-latching: una
+//  sola lectura buena pone su contador a 0 y la ventana vuelve a empezar
+//  entera. _faultConfirmed se recalcula desde cero en cada pasada, así que
+//  isOK() se rearma solo en cuanto la condición se despeja.
 // ============================================================================
 
 void HallSensor::_updateFaultTimers()
@@ -231,7 +247,7 @@ void HallSensor::_updateFaultTimers()
     unsigned long now = millis();
     _faultConfirmed   = false;
 
-    // ── Desconexión ───────────────────────────────────────────────────────────
+    // ── Desconexión ─────────────────────────────── CAUSA DE FALLO ───────────
     if (_sensorDisconnected) {
         if (_tFaultDisconnected == 0) _tFaultDisconnected = now;
         if ((now - _tFaultDisconnected) >= HALL_FAULT_MS) _faultConfirmed = true;
@@ -239,23 +255,17 @@ void HallSensor::_updateFaultTimers()
         _tFaultDisconnected = 0;
     }
 
-    // ── Sensor congelado ──────────────────────────────────────────────────────
-    if (_sensorStuck) {
-        if (_tFaultStuck == 0) _tFaultStuck = now;
-        if ((now - _tFaultStuck) >= HALL_FAULT_MS) _faultConfirmed = true;
-    } else {
-        _tFaultStuck = 0;
-    }
+    // ── Congelado y ruido: SOLO DIAGNÓSTICO, no abren el SDC ─────────────────
+    // Se dejan los timers vivos para poder medir CUÁNTO duran los episodios
+    // (isStuck()/isNoisy() y los sticky del main), pero no tocan
+    // _faultConfirmed. Si el banco demuestra que sus umbrales son fiables,
+    // reintroducirlos aquí es una línea.
+    if (_sensorStuck) { if (_tFaultStuck == 0) _tFaultStuck = now; }
+    else              { _tFaultStuck = 0; }
+    if (_sensorNoisy) { if (_tFaultNoisy == 0) _tFaultNoisy = now; }
+    else              { _tFaultNoisy = 0; }
 
-    // ── Ruido extremo ─────────────────────────────────────────────────────────
-    if (_sensorNoisy) {
-        if (_tFaultNoisy == 0) _tFaultNoisy = now;
-        if ((now - _tFaultNoisy) >= HALL_FAULT_MS) _faultConfirmed = true;
-    } else {
-        _tFaultNoisy = 0;
-    }
-
-    // ── Sobreintensidad ───────────────────────────────────────────────────────
+    // ── Sobreintensidad ─────────────────────────── CAUSA DE FALLO ───────────
     // Sobre la corriente SIN filtrar: el lag del EMA (~130ms) NO debe
     // comerse el presupuesto de 500ms de EV5.8. Descarga > 170A,
     // carga < -7A (negativo = carga).
@@ -286,10 +296,12 @@ void HallSensor::printStatus() const
                   _currentFiltered, _currentRaw,
                   _usingLowRange ? "rango 30A" : "rango 350A");
     Serial.printf("isOK():       %s\n",  isOK()              ? "SI" : "NO (FALLO)");
+    Serial.println(F("-- causas de FALLO (tumban isOK -> BMS_OK -> SDC) --"));
     Serial.printf("Desconexion:  %s\n",  _sensorDisconnected ? "SI" : "no");
+    Serial.printf("Sobreintens.: %s\n",  _overCurrent        ? "SI" : "no");
+    Serial.println(F("-- diagnostico (NO abren el SDC) --"));
     Serial.printf("Congelado:    %s\n",  _sensorStuck        ? "SI" : "no");
     Serial.printf("Ruido:        %s\n",  _sensorNoisy        ? "SI" : "no");
-    Serial.printf("Sobreintens.: %s\n",  _overCurrent        ? "SI" : "no");
     Serial.printf("ADC sat. 30A: %s  |  ADC sat. 350A: %s\n",
                   _adcSat30  ? "SI" : "no",
                   _adcSat350 ? "SI" : "no");
