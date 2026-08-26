@@ -180,7 +180,7 @@ void BQ79606::shutdown()
 // (respondió pero siempre corrupto) — misma semántica que el camino anterior,
 // solo que ahora un glitch aislado se re-pide en vez de tumbar la lectura.
 BQResult BQ79606::_readBoardRetry(byte board, uint16_t addr, byte* buf,
-                                  size_t bufSize, byte len)
+                                  size_t bufSize, byte len, uint16_t* retriesOut)
 {
     BQResult last = BQResult::COMM_ERROR;
     for (uint8_t attempt = 0; attempt < BQ_READ_ATTEMPTS; attempt++) {
@@ -188,14 +188,23 @@ BQResult BQ79606::_readBoardRetry(byte board, uint16_t addr, byte* buf,
         int res = _readRegImpl(board, addr, buf, bufSize, len, 0, FRMWRT_SGL_R);
         if (res <= 0)            { last = BQResult::COMM_ERROR; continue; }
         if (!checkCRC(buf, res)) { last = BQResult::CRC_ERROR;  continue; }
+        // Éxito en el intento 'attempt': attempt>0 reintentos consumidos.
+        if (attempt > 0) {
+            if (retriesOut) *retriesOut += attempt;
+            _totalRetries += attempt;
+        }
         return BQResult::OK;     // frame válido: buf ya tiene los datos buenos
     }
-    return last;                 // agotados los reintentos: último tipo de fallo
+    // Agotados todos los intentos: se consumieron BQ_READ_ATTEMPTS-1 reintentos.
+    if (retriesOut) *retriesOut += (BQ_READ_ATTEMPTS - 1);
+    _totalRetries += (BQ_READ_ATTEMPTS - 1);
+    return last;
 }
 
 BQResult BQ79606::readVoltages()
 {
     byte buf[MAXBYTES + 6];
+    _lastVReadRetries = 0;   // §3.1: reset al empezar el ciclo de lectura
 
     // NOTA OCV: si _balHwRunning==true, los voltajes NO son OCV fiable.
     // Hay corriente circulando por los FETs de balanceo y la tensión
@@ -211,7 +220,7 @@ BQResult BQ79606::readVoltages()
     }
 
     for (uint8_t board = 0; board < TOTALBOARDS; board++) {
-        BQResult r = _readBoardRetry(board, VCELL1H, buf, sizeof(buf), MAXBYTES);
+        BQResult r = _readBoardRetry(board, VCELL1H, buf, sizeof(buf), MAXBYTES, &_lastVReadRetries);
         if (r != BQResult::OK) { _lastReadFailBoard = board; return r; }
 
         for (uint8_t c = 0; c < 6; c++) {
@@ -227,6 +236,7 @@ BQResult BQ79606::readVoltages()
 BQResult BQ79606::readTemperatures()
 {
     byte buf[MAXBYTES + 6];
+    _lastTReadRetries = 0;   // §3.1: reset al empezar el ciclo de lectura
 
     // Disparo del AUX ADC SIEMPRE, también durante el balanceo:
     //  - El AUX ADC es solo on-demand (datasheet §8.3.4.4.1: "does not support
@@ -266,7 +276,7 @@ BQResult BQ79606::readTemperatures()
     }
 
     for (uint8_t board = 0; board < TOTALBOARDS; board++) {
-        BQResult r = _readBoardRetry(board, AUX_GPIO1H, buf, sizeof(buf), MAXBYTES);
+        BQResult r = _readBoardRetry(board, AUX_GPIO1H, buf, sizeof(buf), MAXBYTES, &_lastTReadRetries);
         if (r != BQResult::OK) { _lastReadFailBoard = board; return r; }
 
         uint8_t ntcs = NTCS_PER_BOARD[board % 2];

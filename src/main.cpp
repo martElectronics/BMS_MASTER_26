@@ -753,7 +753,7 @@ void updateTson()
     if (!sdcTson && btnRising && !bmsFault && !hvAccu && sdcOk && !tsonFail) {
         sdcTson = true;
         Serial.println(F("[TSON] armado."));
-        delay(2000);
+        delay(300);
     }
     tsonBtnPrev = tsonBtn;
     digitalWrite(PIN_SDC_TSON, sdcTson ? HIGH : LOW);
@@ -1308,6 +1308,8 @@ void printStatus()
                   fNtc.confirmed(millis(), FAULT_NTC_MS),
                   fComm.confirmed(millis(), FAULT_COMM_MS),
                   !hall.isOK());
+    Serial.printf("Retries: V=%u T=%u total=%lu  [ruido sin llegar a fallo — §3.1]\n",
+                  bms.getLastVReadRetries(), bms.getLastTReadRetries(), bms.getTotalRetries());
     Serial.printf("Sticky(ID17): SDC_perdido=%d(%u) TSON_desarm=%d(%u) TSON_FAIL=%d "
                   "IMD_perdido=%d(%u) BMS_fallo=%d\n",
                   stkSdcLost, cntSdcLost, stkTsonDisarm, cntTsonDisarm, stkTsonFail,

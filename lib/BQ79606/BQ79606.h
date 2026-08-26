@@ -649,6 +649,9 @@ public:
     float getTemperature(uint8_t board, uint8_t ntc) const;
 
     int  getLastReadFailBoard() const { return _lastReadFailBoard; }      ///< Board donde falló la última lectura V/T (-1 = ninguna). Diagnóstico de comms.
+    uint16_t getLastVReadRetries() const { return _lastVReadRetries; }    ///< §3.1: reintentos en la última V. Sube ANTES de que la lectura falle del todo.
+    uint16_t getLastTReadRetries() const { return _lastTReadRetries; }    ///< idem T
+    uint32_t getTotalRetries()     const { return _totalRetries; }        ///< acumulado desde boot
 
     // Estadísticas globales — se calculan automáticamente en cada readVoltages/readTemperatures
     float getMinVoltage()   const { return _vMin; }                       ///< Voltaje mínimo de todas las celdas (V)
@@ -989,6 +992,11 @@ private:
     int8_t   _ntcOpenBoard = -1;          ///< Primer board con NTC abierto (para el mensaje)
     int8_t   _ntcOpenCell  = -1;          ///< Primer NTC abierto en ese board (índice 0..5)
     int8_t   _lastReadFailBoard = -1;     ///< Board donde falló la última lectura V/T (diagnóstico)
+    // §3.1 doc ruido: reintentos consumidos por _readBoardRetry. Aditivo puro —
+    // no cambia ninguna decisión, solo mide para diagnosticar ANTES de que falle.
+    uint16_t _lastVReadRetries  = 0;      ///< reintentos consumidos en la última readVoltages() (0 = todo a la 1ª)
+    uint16_t _lastTReadRetries  = 0;      ///< idem para readTemperatures()
+    uint32_t _totalRetries      = 0;      ///< acumulado desde boot, post-mortem (nunca resetea salvo reboot)
     bool     _safetyLatched = false;      ///< true tras un trip confirmado; sticky hasta clear
     bool     _bmsOkState    = false;      ///< Último estado escrito en pinBmsOk
 
@@ -1009,7 +1017,7 @@ private:
     int      _writeFrame(byte id, uint16_t addr, byte* data, byte len, byte type); ///< Construye y envía una trama completa con CRC
     int      _readFrameReq(byte id, uint16_t addr, byte bytesToReturn, byte type); ///< Envía la petición de lectura y limpia el buffer
     int      _readRegImpl(byte id, uint16_t addr, byte* buf, size_t bufSize, byte len, uint32_t timeout, byte type); ///< Impl real de readReg: valida la longitud esperada contra bufSize (no contra _pFrame)
-    BQResult _readBoardRetry(byte board, uint16_t addr, byte* buf, size_t bufSize, byte len); ///< single-read de un board con reintentos ante COMM/CRC (ruido); deja frame válido en buf
+    BQResult _readBoardRetry(byte board, uint16_t addr, byte* buf, size_t bufSize, byte len, uint16_t* retriesOut = nullptr); ///< single-read de un board con reintentos ante COMM/CRC (ruido); deja frame válido en buf. Si retriesOut, acumula reintentos consumidos (§3.1)
     uint16_t _crc16(byte* buf, int len);            ///< Calcula CRC-16 ITU-T (tabla de 256 entradas)
     float    _complement(uint16_t raw, float mult); ///< Convierte valor ADC raw (complemento a 2) a voltios
     float    _voltToTemp(float voltage);            ///< Convierte voltaje de NTC a temperatura en °C (curva del PCB)
