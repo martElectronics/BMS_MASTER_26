@@ -337,9 +337,11 @@ nada**. Faltan peldaños intermedios y baratos:
 | 3 | Releer solo el board problemático con más reintentos | ~ms | ❌ |
 | 4 | Auto-address completo | 1-5 s | ✅ es lo único que hay hoy |
 
-⚠ `_commClear()` tal como está deja el TX en LOW y **no reabre la UART**: habría
-que completarlo (o usar `_commReset()`, que sí renegocia el baudrate) antes de
-meterlo en el camino de recuperación.
+✅ `_commClear()` ya reabre la UART al baudrate activo tras el pulso (antes
+dejaba el TX en LOW y el bus sordo — bug corregido). `_commReset()` sigue
+siendo la opción si además hace falta renegociar baudrate. Pendiente:
+`_commClear()` sigue sin usarse en ningún camino de recuperación (nivel 2 de
+la tabla de arriba).
 
 ### 9.5 Mejora D — `reInit()` no bloqueante
 

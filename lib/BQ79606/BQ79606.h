@@ -582,10 +582,40 @@ public:
     /**
      * @brief Envía la orden de SHUTDOWN a todos los ICs de la cadena.
      *
-     * Escribe CONTROL1 bit1=1 mediante broadcast FRMWRT_ALL_NR.
+     * Escribe CONTROL1 bit3=1 (GOTO_SHUTDOWN) mediante broadcast FRMWRT_ALL_NR.
      * Los ICs pasan a bajo consumo hasta recibir un pulso de WAKE.
+     *
+     * ⚠ Es un broadcast tipo NR: por protocolo NO hay respuesta posible, así
+     *   que esta función no puede saber si algún IC no recibió la orden (p.ej.
+     *   por ruido en el tramo master↔board0, que no tiene puente ni cable
+     *   corto). Llamar a verifyAsleep() después para comprobarlo de verdad.
      */
     void shutdown();
+
+    /**
+     * @brief Comprueba qué ICs siguen respondiendo tras un shutdown().
+     *
+     * En SHUTDOWN el IC deja de contestar a lecturas normales — solo
+     * escucha el pin/tono WAKE (datasheet SLUSDQ4 §8.4.1.2, Table 6:
+     * "Communications" no disponible en SHUTDOWN). Esta función intenta
+     * una lectura mínima (PARTID, 1 byte, con los mismos reintentos
+     * anti-ruido que usa la lectura normal) a CADA board de la cadena SIN
+     * abortar en el primer fallo — a diferencia de readVoltages(), aquí
+     * queremos el mapa completo, no solo el primero que falla.
+     *
+     * Un board que SÍ contesta con CRC válido no ha entrado en SHUTDOWN:
+     * sigue consumiendo ~4 mA de las celdas que monitoriza (vs ~65 µA en
+     * SHUTDOWN, datasheet §6.5) hasta el próximo WAKE o reset.
+     *
+     * ⚠ Solo diagnóstico. NO toca _voltages/_temps, no altera _initialized
+     * ni ningún camino de seguridad — es seguro llamarla en cualquier
+     * momento tras shutdown().
+     *
+     * @param awakeMask  Si no es null, se rellena con bit b = board b sigue
+     *                   despierto (contestó). 0 = nadie contestó.
+     * @return Número de boards que siguen despiertos (0 = cadena dormida OK).
+     */
+    uint8_t verifyAsleep(uint32_t* awakeMask = nullptr);
 
 
     // ─── Lectura de datos ─────────────────────────────────────────────────────
@@ -1008,7 +1038,7 @@ private:
     // No deben llamarse desde fuera de la clase.
 
     void     _wakeUp();               ///< Genera el pulso de WAKE (LOW 300µs → HIGH)
-    void     _commClear();            ///< Pone TX a LOW el tiempo de 17 bits para limpiar el bus
+    void     _commClear();            ///< Pone TX a LOW 17 bit-periods para limpiar el bus y reabre la UART al baudrate activo (no renegocia, a diferencia de _commReset())
     void     _commSleepToWake();      ///< Transición de sleep a activo
     void     _commReset(int baud);    ///< Reset del bus + negociación de baudrate con todos los ICs
     bool     _autoAddress();          ///< Secuencia completa de autoadressing con verificación CRC

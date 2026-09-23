@@ -170,6 +170,28 @@ void BQ79606::shutdown()
     writeReg(0x00, CONTROL1, 0x08, 1, FRMWRT_ALL_NR);
 }
 
+uint8_t BQ79606::verifyAsleep(uint32_t* awakeMask)
+{
+    uint32_t mask   = 0;
+    uint8_t  nAwake = 0;
+    byte     buf[1 + 6];
+
+    // Recorre TODOS los boards, sin abortar en el primero que conteste:
+    // aquí interesa el mapa completo de quién sigue despierto, no el primer
+    // fallo (eso es lo que hace readVoltages() y por lo que no sirve para
+    // este diagnóstico). PARTID (1 byte) en vez de VCELL1H: más barato,
+    // solo queremos saber si contesta, no qué mide.
+    for (uint8_t board = 0; board < TOTALBOARDS; board++) {
+        BQResult r = _readBoardRetry(board, PARTID, buf, sizeof(buf), 1);
+        if (r == BQResult::OK) {
+            mask |= (1UL << board);
+            nAwake++;
+        }
+    }
+    if (awakeMask) *awakeMask = mask;
+    return nAwake;
+}
+
 // ============================================================
 //  LECTURA DE DATOS
 // ============================================================
@@ -850,6 +872,12 @@ void BQ79606::_commClear()
     pinMode(BQ_DPIN(_cfg.pinTx), OUTPUT);
     digitalWrite(BQ_DPIN(_cfg.pinTx), LOW);
     delayMicroseconds(17UL * (1000000UL / _cfg.baudrate));
+    // Reabrir la UART al baudrate ya negociado con la cadena: sin esto la
+    // función dejaba el bus sordo (ver doc ruido §9.4) — cualquier llamada
+    // posterior a writeReg/readReg se perdía porque _uart nunca volvía a
+    // estar abierta. _commReset() no sirve aquí porque renegocia el
+    // baudrate (baja a 250k); _commClear() debe conservar el ya activo.
+    _uart.begin(_cfg.baudrate);
 }
 
 void BQ79606::_commSleepToWake()

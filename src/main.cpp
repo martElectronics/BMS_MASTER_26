@@ -1210,18 +1210,38 @@ void handleSerial()
         Serial.println(F("Fallos BQ limpiados."));
         break;
 
-    case 'S':
+    case 'S': {
         // Manda TODA la cadena a SHUTDOWN (CONTROL1[GOTO_SHUTDOWN]). Los BQ
         // pierden la configuracion: para volver hay que re-inicializar con 'i'
         // (hace WAKE + auto-address + _initDevices).
         // ⚠ Sin cadena NO hay medida del pack -> BMS_OK cae (correcto: pérdida
         //   de medida = fallo, EV5.8.13). Es un comando de banco, no de pista.
         bms.shutdown();
+        delay(5);   // margen para que los IC completen la transicion antes de verificar
+        // Verificación: el SHUTDOWN es un broadcast SIN respuesta (FRMWRT_ALL_NR),
+        // así que por protocolo no hay ACK. Si esa trama se pierde justo en el
+        // tramo board0<->master (el que no lleva puente ni cable corto), ese
+        // board se queda en ACTIVE sin que quede rastro — y sigue tirando de
+        // ~4mA de sus celdas hasta el próximo WAKE/reset (doc ruido, sospecha
+        // de la caída de ~1V vista en los paralelos de ese board).
+        uint32_t awakeMask = 0;
+        uint8_t  nAwake    = bms.verifyAsleep(&awakeMask);
+        if (nAwake == 0) {
+            Serial.println(F("[BQ] SHUTDOWN verificado: toda la cadena duerme."));
+        } else {
+            Serial.printf("[BQ] AVISO: %u board(s) SIGUEN DESPIERTOS tras SHUTDOWN:", nAwake);
+            for (uint8_t b = 0; b < TOTALBOARDS; b++)
+                if (awakeMask & (1UL << b)) Serial.printf(" B%d", b);
+            Serial.println();
+            Serial.println(F("[BQ]   -> no recibieron la orden; siguen consumiendo ~4mA de esas celdas."));
+            Serial.println(F("[BQ]   -> reintenta 'S'; si persiste, revisa el enlace board0<->master."));
+        }
         bqSleeping = true;      // inhibe el reInit automatico (si no, WAKE los despierta)
         bmsInitOk  = false;     // ya no hay cadena que leer
         Serial.println(F("[BQ] SHUTDOWN enviado a la cadena. BMS_OK caera (sin medida)."));
         Serial.println(F("[BQ] Reactivar con 'i' (re-init)."));
         break;
+    }
 
     case 'i':
         bqSleeping = false;     // despertar: vuelve a permitirse el reInit automatico

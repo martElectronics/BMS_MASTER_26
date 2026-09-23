@@ -1033,18 +1033,36 @@ void handleSerial()
         Serial.printf("[UI] modo %s\n", scrutiMode ? "SCRUTI (diag comms en silencio)"
                                                    : "DEV (todo visible)");
         break;
-    case 'S':
+    case 'S': {
         // Manda TODA la cadena a SHUTDOWN (CONTROL1[GOTO_SHUTDOWN]). Los BQ
         // pierden la configuracion: para volver hay que re-inicializar con 'i'.
         // ⚠ Sin cadena NO hay medida del pack -> BMS_OK cae al agotarse la
         //   ventana de gracia (correcto: perdida de medida = fallo) y la carga
         //   se cancela. Comando de banco.
         bms.shutdown();
+        delay(5);   // margen para que los IC completen la transicion antes de verificar
+        // Verificación: el SHUTDOWN es un broadcast SIN respuesta (FRMWRT_ALL_NR),
+        // así que por protocolo no hay ACK. Si esa trama se pierde en el tramo
+        // board0<->master (sin puente ni cable corto), ese board se queda en
+        // ACTIVE sin dejar rastro, tirando de ~4mA de sus celdas.
+        uint32_t awakeMask = 0;
+        uint8_t  nAwake    = bms.verifyAsleep(&awakeMask);
+        if (nAwake == 0) {
+            Serial.println(F("[BQ] SHUTDOWN verificado: toda la cadena duerme."));
+        } else {
+            Serial.printf("[BQ] AVISO: %u board(s) SIGUEN DESPIERTOS tras SHUTDOWN:", nAwake);
+            for (uint8_t b = 0; b < TOTALBOARDS; b++)
+                if (awakeMask & (1UL << b)) Serial.printf(" B%d", b);
+            Serial.println();
+            Serial.println(F("[BQ]   -> no recibieron la orden; siguen consumiendo ~4mA de esas celdas."));
+            Serial.println(F("[BQ]   -> reintenta 'S'; si persiste, revisa el enlace board0<->master."));
+        }
         bqSleeping = true;      // inhibe tryReinit (si no, el WAKE los despierta)
         bmsInitOk  = false;     // ya no hay cadena que leer
         Serial.println(F("[BQ] SHUTDOWN enviado a la cadena. BMS_OK caera (sin medida)."));
         Serial.println(F("[BQ] Reactivar con 'i' (re-init)."));
         break;
+    }
 
     case 'i':
         bqSleeping = false;     // despertar: vuelve a permitirse el reInit automatico
