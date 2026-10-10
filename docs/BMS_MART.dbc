@@ -259,7 +259,7 @@ BO_ 769 PDM_Status: 8 PDM
  SG_ PDM_SafetyFloor : 25|1@0+ (1,0) [0|1] "" AIM
 
 CM_ BO_ 14 "Ultimo episodio (ID 0x0E, 500ms). BMS_RetryNet sustituye desde 2026-10-10 al antiguo numTriesReset duplicado: signo = causa del ultimo ciclo (+COMM/-CRC), magnitud = reintentos.";
-CM_ BO_ 15 "BMS_DEBUG (ID 0x0F, 100ms) - el frame clave para diagnosticar caidas de BMS_OK en pista. Ver docs/CAN_Solo2DL.md #9.";
+CM_ BO_ 15 "BMS_DEBUG (ID 0x0F, 100ms) - el frame clave para diagnosticar caidas de BMS_OK en pista. Ver docs/CAN_Solo2DL.md #8.";
 CM_ SG_ 14 BMS_RetryNet "Short AiM: RTRN. +N = N reintentos por COMM (board mudo) en el ultimo ciclo V+T. -N = N reintentos por CRC (dato corrupto). 0 = ciclo limpio. Ver docs/inmunidad_ruido.md #3.3.";
 CM_ SG_ 15 BMS_Flt_Comm "Short AiM: FCOM.";
 CM_ SG_ 15 BMS_Fault "Short AiM: BFLT. OR global de fallo confirmado (no-latching; el latch real del SDC es HW).";
