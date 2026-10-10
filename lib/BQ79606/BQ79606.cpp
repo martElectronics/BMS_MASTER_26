@@ -202,31 +202,47 @@ uint8_t BQ79606::verifyAsleep(uint32_t* awakeMask)
 // (respondió pero siempre corrupto) — misma semántica que el camino anterior,
 // solo que ahora un glitch aislado se re-pide en vez de tumbar la lectura.
 BQResult BQ79606::_readBoardRetry(byte board, uint16_t addr, byte* buf,
-                                  size_t bufSize, byte len, uint16_t* retriesOut)
+                                  size_t bufSize, byte len,
+                                  uint16_t* commRetriesOut, uint16_t* crcRetriesOut)
 {
     BQResult last = BQResult::COMM_ERROR;
+    uint16_t commRetries = 0, crcRetries = 0;
     for (uint8_t attempt = 0; attempt < BQ_READ_ATTEMPTS; attempt++) {
         memset(buf, 0, bufSize);
         int res = _readRegImpl(board, addr, buf, bufSize, len, 0, FRMWRT_SGL_R);
-        if (res <= 0)            { last = BQResult::COMM_ERROR; continue; }
-        if (!checkCRC(buf, res)) { last = BQResult::CRC_ERROR;  continue; }
-        // Éxito en el intento 'attempt': attempt>0 reintentos consumidos.
-        if (attempt > 0) {
-            if (retriesOut) *retriesOut += attempt;
-            _totalRetries += attempt;
+        bool ok;
+        if (res <= 0)                 { last = BQResult::COMM_ERROR; ok = false; }
+        else if (!checkCRC(buf, res)) { last = BQResult::CRC_ERROR;  ok = false; }
+        else                          { ok = true; }
+        if (!ok) {
+            // Solo cuenta como "reintento" a partir del 2º intento (attempt>0):
+            // el intento inicial no es un "re"-intento, igual que antes del
+            // split. 'last' ya tiene la causa de ESTE intento en concreto.
+            if (attempt > 0) {
+                if (last == BQResult::COMM_ERROR) commRetries++;
+                else                               crcRetries++;
+            }
+            continue;
         }
+        if (commRetriesOut) *commRetriesOut += commRetries;
+        if (crcRetriesOut)  *crcRetriesOut  += crcRetries;
+        _totalCommRetries += commRetries;
+        _totalCrcRetries  += crcRetries;
         return BQResult::OK;     // frame válido: buf ya tiene los datos buenos
     }
-    // Agotados todos los intentos: se consumieron BQ_READ_ATTEMPTS-1 reintentos.
-    if (retriesOut) *retriesOut += (BQ_READ_ATTEMPTS - 1);
-    _totalRetries += (BQ_READ_ATTEMPTS - 1);
+    // Agotados todos los intentos: igual que antes, se consumieron
+    // BQ_READ_ATTEMPTS-1 reintentos en total, ahora repartidos por causa.
+    if (commRetriesOut) *commRetriesOut += commRetries;
+    if (crcRetriesOut)  *crcRetriesOut  += crcRetries;
+    _totalCommRetries += commRetries;
+    _totalCrcRetries  += crcRetries;
     return last;
 }
 
 BQResult BQ79606::readVoltages()
 {
     byte buf[MAXBYTES + 6];
-    _lastVReadRetries = 0;   // §3.1: reset al empezar el ciclo de lectura
+    _lastVCommRetries = 0; _lastVCrcRetries = 0;   // §3.1/§3.3: reset al empezar el ciclo
 
     // NOTA OCV: si _balHwRunning==true, los voltajes NO son OCV fiable.
     // Hay corriente circulando por los FETs de balanceo y la tensión
@@ -242,7 +258,7 @@ BQResult BQ79606::readVoltages()
     }
 
     for (uint8_t board = 0; board < TOTALBOARDS; board++) {
-        BQResult r = _readBoardRetry(board, VCELL1H, buf, sizeof(buf), MAXBYTES, &_lastVReadRetries);
+        BQResult r = _readBoardRetry(board, VCELL1H, buf, sizeof(buf), MAXBYTES, &_lastVCommRetries, &_lastVCrcRetries);
         if (r != BQResult::OK) { _lastReadFailBoard = board; return r; }
 
         for (uint8_t c = 0; c < 6; c++) {
@@ -258,7 +274,7 @@ BQResult BQ79606::readVoltages()
 BQResult BQ79606::readTemperatures()
 {
     byte buf[MAXBYTES + 6];
-    _lastTReadRetries = 0;   // §3.1: reset al empezar el ciclo de lectura
+    _lastTCommRetries = 0; _lastTCrcRetries = 0;   // §3.1/§3.3: reset al empezar el ciclo
 
     // Disparo del AUX ADC SIEMPRE, también durante el balanceo:
     //  - El AUX ADC es solo on-demand (datasheet §8.3.4.4.1: "does not support
@@ -298,7 +314,7 @@ BQResult BQ79606::readTemperatures()
     }
 
     for (uint8_t board = 0; board < TOTALBOARDS; board++) {
-        BQResult r = _readBoardRetry(board, AUX_GPIO1H, buf, sizeof(buf), MAXBYTES, &_lastTReadRetries);
+        BQResult r = _readBoardRetry(board, AUX_GPIO1H, buf, sizeof(buf), MAXBYTES, &_lastTCommRetries, &_lastTCrcRetries);
         if (r != BQResult::OK) { _lastReadFailBoard = board; return r; }
 
         uint8_t ntcs = NTCS_PER_BOARD[board % 2];

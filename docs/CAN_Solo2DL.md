@@ -43,9 +43,17 @@
 
 ## 3. Resumen de IDs
 
+> ⚠ **ID 10 (0x0A, BMS_Status) ELIMINADO 2026-10-10**: 6 de sus 8 flags eran
+> duplicado exacto de bits ya presentes en el ID 15 (BMS_Debug) — `StsFail`=
+> `BMS_Fault`, `CommErr`=`Flt_Comm`, `VoltErr`=`Flt_V`, `SDC`=`Pin_SDC_3V3`,
+> `AutoAddrOk`=`State_AutoAddr` — y `Ok` era el complemento trivial de
+> `StsFail`. `AmpErr` se reconstruye en RaceStudio como canal calculado = OR
+> de los 5 `Hall_*` del ID 15. Se pierde `CondNow` (sin sustituto directo,
+> bajo valor diagnóstico frente a los ya confirmados). Libera 8 canales de
+> RaceStudio, usados para añadir `INV_FaultCode` e `INV_MotorStill` (§21).
+
 | ID dec | ID hex | DLC | Periodo | Contenido |
 |---|---|---|---|---|
-| 10 | 0x0A | 1  | 100 ms | Estado general (8 flags) |
 | 11 | 0x0B | 8  | 100 ms | MaxT, MaxV, MinV, MinT |
 | 12 | 0x0C | 6  | 799 ms | Status V / Status T (bitmap por módulo) + V_DELTA (mV) |
 | 13 | 0x0D | 8  | 500 ms | maxFailTime, numTriesReset, max/lastCommFailTime |
@@ -70,16 +78,16 @@
 >
 > ⚠ **Endianness**: `setPacket()` convierte a **big-endian** cada elemento del
 > array. Para los IDs con `uint16` (11, 12, 13, 14, 386-389) eso da el "uint16
-> BE" que indican las tablas. Para los de `uint8` (10, 15, 16, 17, 390, 391,
+> BE" que indican las tablas. Para los de `uint8` (15, 16, 17, 390, 391,
 > 392) la conversión es no-op → los bytes van en el orden escrito.
 >
 > ⚠ **Trampa de `configurePacketTimersByPriority()`**: asigna el periodo
 > **invertido** — `ratio = 1 - (id-minId)/(maxId-minId)`, así que el ID **más
-> bajo** se lleva el intervalo **más largo** (ID 10 → 800 ms) y los altos 50 ms.
-> Es al revés de lo que sugiere la prioridad CAN. Por eso los IDs del estado de
-> seguridad (10, 11, 13, 14, 15, 16, 17) llevan `setPacketTimer()` **explícito**
-> después de esa llamada. Si añades un ID nuevo que importe, ponle su timer a
-> mano o se irá a ~800 ms sin que te des cuenta.
+> bajo** se lleva el intervalo **más largo** y los altos 50 ms. Es al revés de
+> lo que sugiere la prioridad CAN. Por eso los IDs del estado de seguridad
+> (11, 13, 14, 15, 16, 17) llevan `setPacketTimer()` **explícito** después de
+> esa llamada. Si añades un ID nuevo que importe, ponle su timer a mano o se
+> irá a ~800 ms sin que te des cuenta.
 
 **Paginado (386-391):** un módulo distinto por ronda (~556 ms entre módulos
 del mismo ID). Con 12 módulos, cada módulo se actualiza cada ~6.7 s.
@@ -87,30 +95,7 @@ El campo `IDmod` (byte 0-1) te dice de cuál es la trama.
 
 ---
 
-## 4. ID 10 (0x0A) — Estado general · 1 byte · 100 ms
-
-```
-Byte 0:  [b7][b6][b5][b4][b3][b2][b1][b0]
-          AUTO AMP VOLT COMM cond SDC BMS Sts
-          ADDR             Now         ok  Fail
-```
-
-| Canal | Short | Byte | Bit | Len | Tipo | Descripción |
-|---|---|---|---|---|---|---|
-| BMS_StsFail    | SFAI | 0 | 0 | 1 | bool | `bmsFault` global (OR confirmado) |
-| BMS_Ok         | BMOK | 0 | 1 | 1 | bool | `!bmsFault` (pack sano) |
-| BMS_SDC        | PSDC | 0 | 2 | 1 | bool | SDC presente (`PIN_SDC_3V3` HIGH) |
-| BMS_CondNow    | FCON | 0 | 3 | 1 | bool | Alguna condición SAMPLE activa (sin debounce) |
-| BMS_CommErr    | ECOM | 0 | 4 | 1 | bool | `fComm.confirmed` (≥500 ms) |
-| BMS_VoltErr    | EVOL | 0 | 5 | 1 | bool | `fV.confirmed` (≥500 ms) |
-| BMS_AmpErr     | EAMP | 0 | 6 | 1 | bool | `!hall.isOK()` |
-| BMS_AutoAddrOk | EAUT | 0 | 7 | 1 | bool | AutoAddress completado |
-
-> Sin bit propio para `fT`, `fNtc`, `!bmsInitOk` — usar **ID 15** para esos.
->
-> Nota nomenclatura: he renombrado los antiguos `*ErrorLatch` por `*Err`
-> porque el firmware nuevo es **no-latching** (el latch es HW). Mantén los
-> short names ECOL/EVOL si prefieres compatibilidad con tu config previa.
+## 4. (ID 10 eliminado — ver nota en §3)
 
 ---
 
@@ -210,7 +195,8 @@ Bytes 6-7: lastCommFailMs (uint16 BE, ms)   — duración del episodio de comms 
 Bytes 0-1: lastFailMs (uint16 BE)           — duración del episodio actual/último
 Bytes 2-3: numCommFails (uint16 BE)
 Bytes 4-5: numCrcFails (uint16 BE)
-Bytes 6-7: numTriesReset (uint16 BE)        — idéntico al de ID 13
+Byte  6  : retryNet (int8)                  — §3.1/§3.3 doc ruido, ver nota abajo
+Byte  7  : relleno (0xFF)
 ```
 
 | Canal | Short | Byte | Bit | Len | Tipo | Escala | Unidad |
@@ -218,11 +204,31 @@ Bytes 6-7: numTriesReset (uint16 BE)        — idéntico al de ID 13
 | BMS_LastFailMs  | LTFT | 0 | 0 | 16 | uint16 BE | 1 | ms |
 | BMS_NumCommFail | NCFA | 2 | 0 | 16 | uint16 BE | 1 | —  |
 | BMS_NumCrcFail  | NCRC | 4 | 0 | 16 | uint16 BE | 1 | —  |
-| BMS_NumTryRst14 | NTRR | 6 | 0 | 16 | uint16 BE | 1 | —  |
+| BMS_RetryNet    | RTRN | 6 | 0 | 8  | **int8**  | 1 | —  |
 
-> Los 3 primeros short names (LTFT/NCFA/NCRC) coinciden con tu config previa.
-> El 4º (NTRR) es nuevo. Si te pide nombre único, usa `NTRR` en ID 14 y
-> `NTR_` en ID 13 — son el mismo contador pero distintos slots.
+> ✅ **Cambio (2026-10-10):** el 4º campo (antes `numTriesReset`, duplicado
+> byte a byte del de ID 13 — ver §7) se sustituyó por `retryNet`: reintentos
+> de `_readBoardRetry` del **último ciclo** V+T (§3.1), con **signo** en vez
+> de dos canales separados, para no gastar un canal nuevo de RaceStudio
+> (el límite del equipo es nº de canales, no bytes):
+> - **`retryNet > 0`** → `N` reintentos por **COMM** (board mudo) en el
+>   último ciclo.
+> - **`retryNet < 0`** → `N` reintentos por **CRC** (dato corrupto) en el
+>   último ciclo. Lee el valor absoluto como el recuento.
+> - **`retryNet = 0`** → ciclo limpio, ningún reintento.
+> - Es `(comm_retries) − (crc_retries)` saturado a `[-128, 127]`. En todas
+>   las pruebas de banco COMM y CRC no han aparecido a la vez en el mismo
+>   ciclo, así que la resta no cancela en la práctica. Si predominan los
+>   positivos → candidato a §5.2 (`BQ_READ_ATTEMPTS`); si predominan los
+>   negativos → candidato a §5.1 (mediana/slew-rate) — ver el árbol de
+>   decisión del doc de pruebas de ruido.
+> - **Marca el canal como Signed en RaceStudio**, o leerás los valores CRC
+>   como 128-255 en vez de negativos.
+>
+> `BMS_NumTryReset` (reintentos de `reInit()`) se queda **solo en el ID 13**
+> — si lo tenías también dado de alta como `NTRR` en el ID 14, bórralo de
+> RaceStudio y da de alta `BMS_RetryNet`/`RTRN` en su lugar (mismo byte 6,
+> ahora `int8` en vez de la mitad alta de un `uint16`).
 
 ---
 
@@ -611,17 +617,7 @@ y `Data Format` (`U` = Unsigned, `S` = Signed).
 > Recordatorios: Byte Order = **Big Endian (Motorola)** en todos. Gain = 1
 > salvo tensiones en mV → **0.001**. Offset = 0. Temperaturas = **Signed**.
 
-### ID 0x0A — Estado general (DLC 1) · flags 1 bit
-| Name | Short | Start Bit | Bits | Fmt |
-|---|---|---|---|---|
-| BMS_StsFail | SFAI | 0 | 1 | U |
-| BMS_Ok | BMOK | 1 | 1 | U |
-| BMS_SDC | PSDC | 2 | 1 | U |
-| BMS_CondNow | FCON | 3 | 1 | U |
-| BMS_CommErr | ECOM | 4 | 1 | U |
-| BMS_VoltErr | EVOL | 5 | 1 | U |
-| BMS_AmpErr | EAMP | 6 | 1 | U |
-| BMS_AutoAddrOk | EAUT | 7 | 1 | U |
+### ID 0x0A — eliminado (ver nota en §3)
 
 ### ID 0x0B — Métricas V/T (DLC 8)
 | Name | Short | Start Bit | Bits | Fmt | Gain | Ud |
@@ -651,7 +647,10 @@ y `Data Format` (`U` = Unsigned, `S` = Signed).
 | BMS_LastFailMs | LTFT | 8 | 16 | U |
 | BMS_NumCommFail | NCFA | 24 | 16 | U |
 | BMS_NumCrcFail | NCRC | 40 | 16 | U |
-| BMS_NumTryRst14 | NTRR | 56 | 16 | U |
+| BMS_RetryNet | RTRN | 48 | 8 | **S** |
+
+> `BMS_RetryNet` es de 8 bits (no 16 como los anteriores) y **Signed** — es
+> el campo nuevo que sustituye al `NTRR` duplicado (ver §8).
 
 ### ID 0x0F — BMS_DEBUG (DLC 8)
 | Name | Short | Start Bit | Bits | Fmt |
@@ -788,42 +787,49 @@ El AiM es un **logger**: del inversor lee lo que **transmite** (§21.1). Los
 
 ### 21.1 Transmitido por el inversor (el AiM lo lee)
 
+> ⚠ **CORRECCIÓN 2026-10-10** — Releído el manual DTI v2.5 §3.2/§3.6
+> directamente con `pdftotext` (Tablas 4-8). **Todos los campos multi-byte
+> de esta tabla estaban mal** (los de 1 byte — ControlMode, MotorStill,
+> FaultCode, Throttle, Brake, DriveEnable, CANmapVer y los bits sueltos del
+> 0x481 — ya estaban bien). El error era apuntar el Start Bit al **último**
+> byte del campo en vez de al **primero** (el más significativo, porque el
+> inversor manda en Big Endian). Verificado con los 4 ejemplos numéricos
+> reales del propio manual: ERPM=9310, Duty=11.3%, Vin=390V, AC=9.2A,
+> DC=1.7A, CtrlTemp=33.9°C, MotorTemp=27.9°C, Iq=6.58A — todos solo cuadran
+> empezando en el byte inicial. La nota anterior sobre `INV_TargetIq`
+> (decía que el correcto era 16) iba al revés: **8 era el bueno**.
+
 | ID | Packet | Canal | Start Bit | Bits | Fmt | Gain | Ud |
 |---|---|---|---|---|---|---|---|
 | 0x3E1 | 0x1F | INV_ControlMode | 0  | 8  | U | 1    | enum |
-| 0x3E1 | 0x1F | INV_TargetIq    | 16 | 16 | S | 0.1  | A |
-| 0x3E1 | 0x1F | INV_MotorPos    | 32 | 16 | U | 0.1  | ° |
+| 0x3E1 | 0x1F | INV_TargetIq    | 8  | 16 | S | 0.1  | A |
+| 0x3E1 | 0x1F | INV_MotorPos    | 24 | 16 | U | 0.1  | ° |
 | 0x3E1 | 0x1F | INV_MotorStill  | 40 | 8  | U | 1    | bool |
-| 0x401 | 0x20 | INV_ERPM        | 24 | 32 | S | 1    | ERPM |
-| 0x401 | 0x20 | INV_Duty        | 40 | 16 | S | 0.1  | % |
-| 0x401 | 0x20 | INV_VinDC       | 56 | 16 | S | 1    | V |
-| 0x421 | 0x21 | INV_AC_Current  | 8  | 16 | S | 0.1  | A |
-| 0x421 | 0x21 | INV_DC_Current  | 24 | 16 | S | 0.1  | A |
-| 0x441 | 0x22 | INV_CtrlTemp    | 8  | 16 | S | 0.1  | °C |
-| 0x441 | 0x22 | INV_MotorTemp   | 24 | 16 | S | 0.1  | °C |
+| 0x401 | 0x20 | INV_ERPM        | 0  | 32 | S | 1    | ERPM |
+| 0x401 | 0x20 | INV_Duty        | 32 | 16 | S | 0.1  | % |
+| 0x401 | 0x20 | INV_VinDC       | 48 | 16 | S | 1    | V |
+| 0x421 | 0x21 | INV_AC_Current  | 0  | 16 | S | 0.1  | A |
+| 0x421 | 0x21 | INV_DC_Current  | 16 | 16 | S | 0.1  | A |
+| 0x441 | 0x22 | INV_CtrlTemp    | 0  | 16 | S | 0.1  | °C |
+| 0x441 | 0x22 | INV_MotorTemp   | 16 | 16 | S | 0.1  | °C |
 | 0x441 | 0x22 | INV_FaultCode   | 32 | 8  | U | 1    | enum |
-| 0x461 | 0x23 | INV_Id          | 24 | 32 | S | 0.01 | A |
-| 0x461 | 0x23 | INV_Iq          | 56 | 32 | S | 0.01 | A |
+| 0x461 | 0x23 | INV_Id          | 0  | 32 | S | 0.01 | A |
+| 0x461 | 0x23 | INV_Iq          | 32 | 32 | S | 0.01 | A |
 | 0x481 | 0x24 | INV_Throttle    | 0  | 8  | S | 1    | % |
 | 0x481 | 0x24 | INV_Brake       | 8  | 8  | S | 1    | % |
 | 0x481 | 0x24 | INV_DriveEnable | 24 | 1  | U | 1    | bool |
 | 0x481 | 0x24 | INV_CANmapVer   | 56 | 8  | U | 1    | — |
-| 0x4A1 | 0x25 | INV_MaxAC_cfg   | 8  | 16 | S | 0.1  | A |
-| 0x4A1 | 0x25 | INV_MaxAC_avail | 24 | 16 | S | 0.1  | A |
-| 0x4A1 | 0x25 | INV_MinAC_cfg   | 40 | 16 | S | 0.1  | A |
-| 0x4A1 | 0x25 | INV_MinAC_avail | 56 | 16 | S | 0.1  | A |
-| 0x4C1 | 0x26 | INV_MaxDC_cfg   | 8  | 16 | S | 0.1  | A |
-| 0x4C1 | 0x26 | INV_MaxDC_avail | 24 | 16 | S | 0.1  | A |
-| 0x4C1 | 0x26 | INV_MinDC_cfg   | 40 | 16 | S | 0.1  | A |
-| 0x4C1 | 0x26 | INV_MinDC_avail | 56 | 16 | S | 0.1  | A |
+| 0x4A1 | 0x25 | INV_MaxAC_cfg   | 0  | 16 | S | 0.1  | A |
+| 0x4A1 | 0x25 | INV_MaxAC_avail | 16 | 16 | S | 0.1  | A |
+| 0x4A1 | 0x25 | INV_MinAC_cfg   | 32 | 16 | S | 0.1  | A |
+| 0x4A1 | 0x25 | INV_MinAC_avail | 48 | 16 | S | 0.1  | A |
+| 0x4C1 | 0x26 | INV_MaxDC_cfg   | 0  | 16 | S | 0.1  | A |
+| 0x4C1 | 0x26 | INV_MaxDC_avail | 16 | 16 | S | 0.1  | A |
+| 0x4C1 | 0x26 | INV_MinDC_cfg   | 32 | 16 | S | 0.1  | A |
+| 0x4C1 | 0x26 | INV_MinDC_avail | 48 | 16 | S | 0.1  | A |
 
 **INV_ControlMode (0x3E1 byte 0):** 1=SPEED · 2=CURRENT · 3=CURRENT_BRAKE ·
 4=POS · 7=NONE (0, 5, 6 sin usar). **INV_MotorStill:** 1=parado, 0=girando.
-
-⚠ **`INV_TargetIq` va en los bytes 1-2**, no en 0-1 — es el único campo del
-inversor que no arranca en byte par, así que su Start Bit es **16** (el del
-byte bajo, byte 2). El doc lo daba antes como 8; si lo configuraste con 8
-estabas leyendo Control mode + el byte alto de Target Iq. Verifícalo en el bus.
 
 **INV_FaultCode (0x441 byte 4):** 0=OK · 1=Overvoltage · 2=Undervoltage ·
 3=DRV · 4=Overcurrent · 5=Ctrl OverTemp · 6=Motor OverTemp · 7=Sensor wire ·

@@ -34,6 +34,7 @@
  *   v=voltajes  t=temps  g=CSV módulos (app registro)  a=amperimetro
  *   s=status  f=fallos  c=limpiar fallos BQ  i=re-init BQ  r=restart MCU
  *   d=volcar log FRAM  D=reset índice log  C=reset contadores fallo (ID 16)
+ *   L=armar/parar log de ruido en FRAM (no depende del USB, ver EVT_NOISE_SAMPLE)
  *
  * ── PENDIENTE ───────────────────────────────────────────────────────────────
  *   · Umbrales de celda (UV/OV/UT/OT) y [TUNE] del HallSensor: confirmar
@@ -122,14 +123,14 @@ static TelemetryDashboard dash(Serial, bms, hall, soc, fan, dashCfg);
 //   OT  60 °C — coincide con FS EV5.8.4 y máx. del datasheet. Fans saturan
 //             al 100 % a 50 °C → 10 °C de margen real antes del trip.
 #define CELL_UV_V      2.8f     ///< Undervoltage (V)
-#define CELL_OV_V      5.2f     ///< Overvoltage (V)
+#define CELL_OV_V      4.2f     ///< Overvoltage (V)
 #define CELL_UT_C    -20.0f     ///< Undertemperature (°C)
 #define CELL_OT_C     60.0f     ///< Overtemperature (°C) — EV5.8.4: ≤60
 
 // Debounce por normativa FS EV5.8
-#define FAULT_V_MS     15000UL    ///< V debe persistir ≥500 ms
-#define FAULT_T_MS    15000UL    ///< T debe persistir ≥1000 ms
-#define FAULT_NTC_MS  15000UL    ///< NTC abierto (pérdida de medida, clase T)
+#define FAULT_V_MS     1000UL    ///< V debe persistir ≥500 ms
+#define FAULT_T_MS    1000UL    ///< T debe persistir ≥1000 ms
+#define FAULT_NTC_MS  1000UL    ///< NTC abierto (pérdida de medida, clase T)
 // COMM/INIT: ventanas "medias" (2-3 s) para tolerar glitches de ruido del BQ
 // sin abrir el SDC ni relanzar el auto-address a la primera. NO son fallos de
 // celda FS (esos son V/T/NTC arriba, sin tocar). El reInit ahora se dispara
@@ -163,6 +164,15 @@ static TelemetryDashboard dash(Serial, bms, hall, soc, fan, dashCfg);
 #define SAMPLE_V_MS    250UL
 #define SAMPLE_T_MS    500UL
 #define PRINT_MS      2000UL
+
+// Prueba de inmunidad al ruido (doc "pruebas_ruido"): registro periódico en
+// FRAM, armado/parado con el comando 'L', para NO depender del USB conectado
+// durante el test (ver EVT_NOISE_SAMPLE en FaultLogger.h). 250 ms = igual que
+// SAMPLE_V_MS, para no perderse ningún ciclo de lectura V. A esa cadencia el
+// ring de 2047 registros da ~8.5 min antes de dar la vuelta y empezar a
+// pisar eventos anteriores (BOOT, fallos...) — de sobra para un test de
+// 1 min; no dejarlo armado indefinidamente.
+#define NOISE_LOG_MS   250UL
 
 // Watchdog HW independiente: si el loop() se cuelga y no se refresca,
 // el IWDG resetea el MCU → BMS_OK cae a LOW (fail-safe). 8 s: por encima
@@ -213,7 +223,7 @@ static constexpr bool prechargeFail = false;
 static unsigned long tPrechargeStart  = 0;
 
 // ============================================================================
-//  TELEMETRÍA CAN (resumen IDs 10-14; ver docs/Mapa_CAN.txt)
+//  TELEMETRÍA CAN (resumen IDs 11-14; ver docs/Mapa_CAN.txt)
 //  El CAN_BUS se construye en setup() (su ctor hace HAL FDCAN init y
 //  debe correr tras el SystemClock del core → NO como global static).
 // ============================================================================
@@ -270,6 +280,14 @@ static uint8_t       resetCauseSnapshot = 0;
 // intentos de reInit, fallo de precarga. Lectura con comando 'd' (Serial).
 static FaultLogger   logger;
 
+// Prueba de inmunidad al ruido: armado/parado con 'L' (ver NOISE_LOG_MS y
+// EVT_NOISE_SAMPLE). El estado armado/parado vive en logger (persistido en
+// FRAM, NO aquí en RAM): se observó en banco que conectar/desconectar el USB
+// resetea el MCU, y un flag en RAM se perdería justo a mitad del test. Solo
+// tNoiseLog (el temporizador de cadencia) es RAM — reiniciar la cadencia
+// tras un reset no rompe nada, como mucho la 1ª muestra sale algo antes.
+static unsigned long tNoiseLog = 0;
+
 // ============================================================================
 //  PROTOTIPOS
 // ============================================================================
@@ -281,6 +299,7 @@ void handleSerial();
 void printStatus();
 static void buildDebugFlags(uint8_t out[4]);
 static FaultRecord buildFaultRecord(uint8_t eventType, uint8_t firstFlt);
+static FaultRecord buildNoiseSampleRecord();
 
 // ============================================================================
 //  SETUP
@@ -371,12 +390,10 @@ void setup()
         gCan->configurePacketTimersByPriority();   // BMS_DEBUG (todos los fallos por bits)
         // ⚠ TRAMPA: configurePacketTimersByPriority() asigna el intervalo
         // INVERTIDO — ratio = 1 - (id-minId)/(maxId-minId) → el ID MÁS BAJO se
-        // lleva el intervalo MÁS LARGO (ID 10 → 800 ms) y los altos 50 ms.
-        // Los IDs 10 y 11 son justo los del estado de seguridad (BMS_OK y
-        // min/max V/T), así que se sobreescriben aquí: a 800 ms un episodio
-        // corto de BMS_OK (que auto-rearma al despejarse) no llegaba a verse
-        // en el log del datalogger.
-        gCan->setPacketTimer(10, 100);             // ID 10 estado general (BMS_OK)
+        // lleva el intervalo MÁS LARGO y los altos 50 ms. El ID 11 es el del
+        // estado de seguridad (min/max V/T), así que se sobreescribe aquí: a
+        // un intervalo largo un episodio corto de BMS_OK (que auto-rearma al
+        // despejarse) no llegaba a verse en el log del datalogger.
         gCan->setPacketTimer(11, 100);             // ID 11 min/max V/T (excursión que dispara el fallo)
         gCan->setPacketTimer(16, 100);             // ID 16 contadores de fallo: 100 ms (post-mortem: 5x resolucion)
         gCan->setPacketTimer(17, 100);             // ID 17 sticky SDC/TSON: 100 ms
@@ -386,7 +403,7 @@ void setup()
         gCan->setPacketTimer(13, 500);             // ID 13 diagnóstico
         gCan->setPacketTimer(14, 500);             // ID 14 tiempos/contadores de comms
         gCan->setPacketTimer(15, 100);             // ID 15 BMS_DEBUG: 100 ms (era 500 → un episodio corto caia entre tramas)
-        Serial.println(F("[CAN] FDCAN listo (125k, IDs 10-17, 386-392)."));
+        Serial.println(F("[CAN] FDCAN listo (125k, IDs 11-17, 386-392)."));
     }
 
     // ── FRAM logger (MB85RC256V): si está, loguear evento BOOT con
@@ -394,9 +411,13 @@ void setup()
     //    no responde — la telemetría sigue funcionando por CAN/Serial.
     if (logger.begin()) {
         logger.log(buildFaultRecord(FaultLogger::EVT_BOOT, 0));
+        // Si el log de ruido seguía armado de antes de este boot (persistido
+        // en FRAM — ver logger.setNoiseLogArmed), retomar la cadencia ya
+        // mismo en vez de esperar a que tNoiseLog (recién puesto a 0) cuadre.
+        if (logger.isNoiseLogArmed()) tNoiseLog = millis();
     }
 
-    Serial.println(F("Cmd: v t a s f c i r  F=fans100%  S=dormir BQ  d=dump log  D=clear log  C=clear cnt  m=ansi  j=json"));
+    Serial.println(F("Cmd: v t a s f c i r  F=fans100%  S=dormir BQ  L=armar/parar log ruido  d=dump log  D=clear log  C=clear cnt  m=ansi  j=json"));
 
     // Arrancar el watchdog AL FINAL (tras el init/calibración acotados).
     // Una vez iniciado NO se puede parar (es independiente por HW).
@@ -412,6 +433,17 @@ void loop()
     hall.update();        // amperímetro cada ciclo (máxima resolución)
 
     sampleAndEvaluate();  // V/T en cadencia + debounce de fallos
+
+    // Prueba de inmunidad al ruido: si está armado ('L'), registra en FRAM.
+    // logger.isNoiseLogArmed() persiste en FRAM -> sigue armado solo aunque
+    // el USB reseteé el MCU a mitad del test (ver comentario junto a
+    // tNoiseLog). Justo aquí, tras sampleAndEvaluate(), los retries del
+    // último ciclo ya están estables (no a medio actualizar).
+    if (logger.isNoiseLogArmed() && (millis() - tNoiseLog) >= NOISE_LOG_MS) {
+        tNoiseLog = millis();
+        logger.log(buildNoiseSampleRecord());
+    }
+
     // voltsReliable: solo fiar la V (para el re-snap OCV) si el BQ está
     // inicializado Y la última lectura de tensión fue OK. Si no, getMinVoltage()
     // devuelve 0/rancio y en reposo arrastraría el SOC hacia un valor falso.
@@ -424,7 +456,7 @@ void loop()
     fan.update(bms.getMaxTemp(), hall.getCurrent(), fanFS || fanForceMax);  // curva + FF; 'F' fuerza 100%
     updateBmsOk();         // BMS_OK no-latching (auto-rearma). Antes que updateTson.
     updateTson();          // máquina TSON + precarga (usa bmsFault de updateBmsOk)
-    updateCanTx();         // telemetría CAN IDs 10-16 (throttled por timer)
+    updateCanTx();         // telemetría CAN IDs 11-17, 386-392 (throttled por timer)
     
     DashFaults df;
     df.bmsOk = !bmsFault;
@@ -880,11 +912,49 @@ static FaultRecord buildFaultRecord(uint8_t eventType, uint8_t firstFlt)
     return r;
 }
 
+// Prueba de inmunidad al ruido (EVT_NOISE_SAMPLE, ver FaultLogger.h): mismo
+// registro de 16 B, pero firstFault/flagsConf/flagsHall/resetCause llevan
+// retriesV/retriesT/corriente en vez de su significado habitual — flagsSnap
+// (CRC/COMM de lastResV/lastResT) y flagsState SÍ mantienen su significado
+// normal via buildDebugFlags(), igual que minV/maxV/maxT.
+static FaultRecord buildNoiseSampleRecord()
+{
+    uint8_t flags[4];
+    buildDebugFlags(flags);
+
+    // retriesV/retriesT: BQ_READ_ATTEMPTS=3 y hasta TOTALBOARDS boards por
+    // ciclo acotan esto muy por debajo de 255 en la práctica, pero se satura
+    // explícito (sin macro min/max: en STM32duino puede venir como macro de
+    // preprocesador y no siempre es seguro mezclar con otros usos).
+    uint16_t rV = bms.getLastVReadRetries();
+    uint16_t rT = bms.getLastTReadRetries();
+    if (rV > 255) rV = 255;
+    if (rT > 255) rT = 255;
+
+    long currentDa = lroundf(hall.getCurrent() * 10.0f);  // 0.1 A/bit
+    if (currentDa >  32767L) currentDa =  32767L;
+    if (currentDa < -32768L) currentDa = -32768L;
+    const int16_t currentClamped = (int16_t)currentDa;
+
+    FaultRecord r;
+    r.eventType  = FaultLogger::EVT_NOISE_SAMPLE;
+    r.firstFault = (uint8_t)rV;                                            // retriesV
+    r.flagsConf  = (uint8_t)rT;                                            // retriesT
+    r.flagsHall  = (uint8_t)((currentClamped >> 8) & 0xFF);                 // corriente H
+    r.flagsSnap  = flags[2];   // SIN cambios: V/T fuera de rango + CRC/COMM (§3.3)
+    r.flagsState = flags[3];   // SIN cambios: init/CAN/precarga/pines
+    r.resetCause = (uint8_t)(currentClamped & 0xFF);                        // corriente L
+    r.minV_mV    = (uint16_t)lroundf(bms.getMinVoltage() * 1000.0f);
+    r.maxV_mV    = (uint16_t)lroundf(bms.getMaxVoltage() * 1000.0f);
+    r.maxT_C     = (int8_t)lroundf(bms.getMaxTemp());
+    return r;
+}
+
 // ============================================================================
-//  TELEMETRÍA CAN — resumen IDs 10-14 (docs/Mapa_CAN.txt)
+//  TELEMETRÍA CAN — resumen IDs 11-14 (docs/Mapa_CAN.txt)
 //  setPacket() encola; send() emite solo los que su setPacketTimer venció.
 //  Patrón validado en el BMS antiguo (setPacket+send cada loop, throttle
-//  por timer). Bits del ID 10 = fallo CONFIRMADO actual (no-latching;
+//  por timer). Bits del ID 15 = fallo CONFIRMADO actual (no-latching;
 //  el latch del SDC es HW). Detalle por módulo (386-392) y SOC: TODO.
 // ============================================================================
 void updateCanTx()
@@ -907,18 +977,13 @@ void updateCanTx()
         gCan->rebootBusFromError();
     }
 
-    // ── ID 10 (0xA) — estado general (1 byte de flags) ──────────────────────
-    bool condNow = fV.cond || fT.cond || fNtc.cond || fComm.cond || !hall.isOK();
-    uint8_t st = 0;
-    if (bmsFault)                                  st |= (1 << 0); // B0 StsFail
-    if (!bmsFault)                                 st |= (1 << 1); // B1 BMSok (=!bmsFault)
-    if (digitalRead(PIN_SDC_3V3))                  st |= (1 << 2); // B2 SDC presente
-    if (condNow)                                   st |= (1 << 3); // B3 failCondition
-    if (fComm.confirmed(millis(), FAULT_COMM_MS))  st |= (1 << 4); // B4 COMM
-    if (fV.confirmed(millis(), FAULT_V_MS))        st |= (1 << 5); // B5 VOLT
-    if (!hall.isOK())                              st |= (1 << 6); // B6 AMP
-    if (bms.isOK())                                st |= (1 << 7); // B7 AUTOADDR_OK
-    gCan->setPacket((uint32_t)10, &st, 1);
+    // ID 10 (0xA, BMS_Status) eliminado 2026-10-10: 6 de sus 8 flags eran
+    // duplicado exacto de bits ya presentes en el ID 15 (BMS_Debug: Fault,
+    // Flt_Comm, Flt_V, Pin_SDC_3V3, State_AutoAddr) y BMS_Ok era el
+    // complemento trivial de BMS_Fault. AmpErr se reconstruye en RaceStudio
+    // como OR de los 5 Hall_* del ID 15; CondNow (sin debounce) se perdió
+    // sin sustituto, de bajo valor diagnóstico frente a los ya confirmados.
+    // Libera 8 canales de RaceStudio. Ver docs/BMS_MART.dbc / CAN_Solo2DL.md.
 
     // ── ID 11 (0xB) — MaxT(ºC), MaxV(mV), MinV(mV), MinT(ºC) UINT16×4 ───────
     // T puede ser negativa: se envía el patrón int16 en el slot u16.
@@ -968,10 +1033,31 @@ void updateCanTx()
     gCan->setPacket((uint32_t)13, d13, 4);
 
     // ── ID 14 (0xE) — lastFailTime(ms), numCommFails, numCrcFails,
-    //                  numTriesReset  UINT16×4 ─────────────────────────────
-    uint16_t d14[4] = { canLastFailMs, canNumCommFails,
-                        canNumCrcFails, canNumTriesReset };
-    gCan->setPacket((uint32_t)14, d14, 4);
+    //                  retryNet (int8, §3.1/§3.3 doc ruido)  ───────────────
+    // B6 (antes numTriesReset, duplicado byte a byte del ID 13 — ver
+    // docs/CAN_Solo2DL.md §8): reintentos del ÚLTIMO ciclo V+T, con signo
+    // en vez de 2 campos separados para no gastar un canal nuevo de
+    // RaceStudio (límite de canales, no de bytes). +N = N reintentos por
+    // COMM, -N = N reintentos por CRC. En todas las pruebas de banco COMM
+    // y CRC no han aparecido a la vez en el mismo ciclo, así que la resta
+    // no cancela en la práctica — si algún día sí lo hacen, se ve el que
+    // domina con la magnitud reducida por la diferencia.
+    // B7 queda a 0xFF (relleno, igual que el resto de bytes no usados).
+    int32_t retryNet = (int32_t)(bms.getLastVCommRetries() + bms.getLastTCommRetries())
+                      - (int32_t)(bms.getLastVCrcRetries()  + bms.getLastTCrcRetries());
+    if (retryNet >  127) retryNet =  127;
+    if (retryNet < -128) retryNet = -128;
+
+    uint8_t d14[8];
+    d14[0] = (uint8_t)(canLastFailMs >> 8);
+    d14[1] = (uint8_t)(canLastFailMs & 0xFF);
+    d14[2] = (uint8_t)(canNumCommFails >> 8);
+    d14[3] = (uint8_t)(canNumCommFails & 0xFF);
+    d14[4] = (uint8_t)(canNumCrcFails >> 8);
+    d14[5] = (uint8_t)(canNumCrcFails & 0xFF);
+    d14[6] = (uint8_t)(int8_t)retryNet;
+    d14[7] = 0xFF;
+    gCan->setPacket((uint32_t)14, d14, 8, false);
 
     // ── ID 15 (0xF) — BMS_DEBUG: TODOS los fallos por bits (8 bytes) ───────
     // Layout completo en ARQUITECTURA.md §7 (tabla BMS_DEBUG).
@@ -1254,6 +1340,24 @@ void handleSerial()
         }
         break;
 
+    case 'L': {
+        // Prueba de inmunidad al ruido (doc "pruebas_ruido"): arma/para el
+        // registro periódico en FRAM (EVT_NOISE_SAMPLE, cada NOISE_LOG_MS).
+        // Persistido en FRAM (logger.setNoiseLogArmed), no en una variable
+        // local: así sobrevive a un reset del MCU si el USB lo provoca al
+        // conectar/desconectar durante el test.
+        bool newState = !logger.isNoiseLogArmed();
+        logger.setNoiseLogArmed(newState);
+        if (newState) {
+            tNoiseLog = millis();
+            Serial.printf("[RUIDO] Log ARMADO cada %lu ms (persiste aunque el USB reseteé el MCU).\n", NOISE_LOG_MS);
+            Serial.println(F("[RUIDO] 'L' otra vez para parar. 'd' al terminar para volcar."));
+        } else {
+            Serial.println(F("[RUIDO] Log PARADO."));
+        }
+        break;
+    }
+
     case 'F':
         fanForceMax = !fanForceMax;
         Serial.printf("[FAN] forzar 100%% = %s\n", fanForceMax ? "ON" : "OFF");
@@ -1330,6 +1434,8 @@ void printStatus()
                   !hall.isOK());
     Serial.printf("Retries: V=%u T=%u total=%lu  [ruido sin llegar a fallo — §3.1]\n",
                   bms.getLastVReadRetries(), bms.getLastTReadRetries(), bms.getTotalRetries());
+    Serial.printf("  desglose acumulado: COMM=%lu CRC=%lu  [predominio -> §3.3: CRC=mediana/slew-rate, COMM=BQ_READ_ATTEMPTS]\n",
+                  bms.getTotalCommRetries(), bms.getTotalCrcRetries());
     Serial.printf("Sticky(ID17): SDC_perdido=%d(%u) TSON_desarm=%d(%u) TSON_FAIL=%d "
                   "IMD_perdido=%d(%u) BMS_fallo=%d\n",
                   stkSdcLost, cntSdcLost, stkTsonDisarm, cntTsonDisarm, stkTsonFail,

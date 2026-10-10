@@ -66,6 +66,13 @@ que convierte *"falla y no sé por qué"* en *"veo el ruido subir 3 s antes"*.
   o ID 17 B7 ya está ocupado por bus-off → valorar ID nuevo).
 - Coste: bajo. Valor: **alto** — es la única forma de medir el margen real.
 
+✅ **Ampliado**: el contador ahora viene separado por causa —
+`getTotalCommRetries()`/`getTotalCrcRetries()` (y los equivalentes por ciclo
+V/T) — para poder leer el §3.3 (predominio CRC vs COMM) directamente del
+margen de reintentos, sin esperar a que se agote y salga un `FALLO`
+declarado. Visible en `printStatus()` (comando `s`): línea "desglose
+acumulado: COMM=.. CRC=..".
+
 ### 3.2 `BQ_READ_ATTEMPTS` 3 → 6-8
 
 [BQ79606.h:69](../lib/BQ79606/BQ79606.h). Cada reintento es otra oportunidad de

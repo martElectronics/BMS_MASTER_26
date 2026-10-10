@@ -1,0 +1,304 @@
+VERSION ""
+
+NS_ :
+    NS_DESC_
+    CM_
+    BA_DEF_
+    BA_
+    VAL_
+    CAT_DEF_
+    CAT_
+    FILTER
+    BA_DEF_DEF_
+    EV_DATA_
+    ENVVAR_DATA_
+    SGTYPE_
+    SGTYPE_VAL_
+    BA_DEF_SGTYPE_
+    BA_SGTYPE_
+    SIG_TYPE_REF_
+    VAL_TABLE_
+    SIG_GROUP_
+    SIG_VALTYPE_
+    SIGTYPE_VALTYPE_
+    BO_TX_BU_
+    BA_DEF_REL_
+    BA_REL_
+    BA_DEF_DEF_REL_
+    BU_SG_REL_
+    BU_EV_REL_
+    BU_BO_REL_
+    SG_MUL_VAL_
+
+BS_:
+
+BU_: BMS AIM INV VCU PDM
+
+BO_ 11 BMS_VTStats: 8 BMS
+ SG_ BMS_MaxT : 7|16@0- (1,0) [-200|200] "degC" AIM
+ SG_ BMS_MaxV : 23|16@0+ (0.001,0) [0|65.535] "V" AIM
+ SG_ BMS_MinV : 39|16@0+ (0.001,0) [0|65.535] "V" AIM
+ SG_ BMS_MinT : 55|16@0- (1,0) [-200|200] "degC" AIM
+
+BO_ 12 BMS_ModStatus: 8 BMS
+ SG_ BMS_StatusV : 7|16@0+ (1,0) [0|65535] "" AIM
+ SG_ BMS_StatusT : 23|16@0+ (1,0) [0|65535] "" AIM
+ SG_ BMS_VDelta : 39|16@0+ (1,0) [0|65535] "mV" AIM
+
+BO_ 13 BMS_Stats: 8 BMS
+ SG_ BMS_MaxFailMs : 7|16@0+ (1,0) [0|65535] "ms" AIM
+ SG_ BMS_NumTryReset : 23|16@0+ (1,0) [0|65535] "" AIM
+ SG_ BMS_MaxCommFailMs : 39|16@0+ (1,0) [0|65535] "ms" AIM
+ SG_ BMS_LastCommFailMs : 55|16@0+ (1,0) [0|65535] "ms" AIM
+
+BO_ 14 BMS_LastEpisode: 8 BMS
+ SG_ BMS_LastFailMs : 7|16@0+ (1,0) [0|65535] "ms" AIM
+ SG_ BMS_NumCommFail : 23|16@0+ (1,0) [0|65535] "" AIM
+ SG_ BMS_NumCrcFail : 39|16@0+ (1,0) [0|65535] "" AIM
+ SG_ BMS_RetryNet : 55|8@0- (1,0) [-128|127] "" AIM
+
+BO_ 15 BMS_Debug: 8 BMS
+ SG_ BMS_Flt_V : 0|1@0+ (1,0) [0|1] "" AIM
+ SG_ BMS_Flt_T : 1|1@0+ (1,0) [0|1] "" AIM
+ SG_ BMS_Flt_NTC : 2|1@0+ (1,0) [0|1] "" AIM
+ SG_ BMS_Flt_Comm : 3|1@0+ (1,0) [0|1] "" AIM
+ SG_ BMS_Flt_Hall : 4|1@0+ (1,0) [0|1] "" AIM
+ SG_ BMS_Flt_NoInit : 5|1@0+ (1,0) [0|1] "" AIM
+ SG_ BMS_Fault : 7|1@0+ (1,0) [0|1] "" AIM
+ SG_ Hall_Disc : 8|1@0+ (1,0) [0|1] "" AIM
+ SG_ Hall_Stuck : 9|1@0+ (1,0) [0|1] "" AIM
+ SG_ Hall_Noisy : 10|1@0+ (1,0) [0|1] "" AIM
+ SG_ Hall_OverI : 11|1@0+ (1,0) [0|1] "" AIM
+ SG_ Hall_AdcSat : 12|1@0+ (1,0) [0|1] "" AIM
+ SG_ V_UV_now : 16|1@0+ (1,0) [0|1] "" AIM
+ SG_ V_OV_now : 17|1@0+ (1,0) [0|1] "" AIM
+ SG_ T_UT_now : 18|1@0+ (1,0) [0|1] "" AIM
+ SG_ T_OT_now : 19|1@0+ (1,0) [0|1] "" AIM
+ SG_ NTC_open_now : 20|1@0+ (1,0) [0|1] "" AIM
+ SG_ ReadV_CommErr : 21|1@0+ (1,0) [0|1] "" AIM
+ SG_ ReadV_CrcErr : 22|1@0+ (1,0) [0|1] "" AIM
+ SG_ ReadT_Err : 23|1@0+ (1,0) [0|1] "" AIM
+ SG_ State_AutoAddr : 24|1@0+ (1,0) [0|1] "" AIM
+ SG_ State_BmsInit : 25|1@0+ (1,0) [0|1] "" AIM
+ SG_ State_CanOk : 26|1@0+ (1,0) [0|1] "" AIM
+ SG_ SDC_TSON : 27|1@0+ (1,0) [0|1] "" AIM
+ SG_ Precharge_Fail : 28|1@0+ (1,0) [0|1] "" AIM
+ SG_ IMD_OK : 29|1@0+ (1,0) [0|1] "" AIM
+ SG_ Pin_SDC_3V3 : 30|1@0+ (1,0) [0|1] "" AIM
+ SG_ TSON_Fail : 31|1@0+ (1,0) [0|1] "" AIM
+ SG_ FirstFault : 39|8@0+ (1,0) [0|6] "" AIM
+ SG_ EpisodeMs : 47|16@0+ (1,0) [0|65535] "ms" AIM
+ SG_ Rst_LPWR : 56|1@0+ (1,0) [0|1] "" AIM
+ SG_ Rst_WWDG : 57|1@0+ (1,0) [0|1] "" AIM
+ SG_ Rst_IWDG : 58|1@0+ (1,0) [0|1] "" AIM
+ SG_ Rst_SOFT : 59|1@0+ (1,0) [0|1] "" AIM
+ SG_ Rst_BOR : 60|1@0+ (1,0) [0|1] "" AIM
+ SG_ Rst_PIN : 61|1@0+ (1,0) [0|1] "" AIM
+ SG_ Rst_OBL : 63|1@0+ (1,0) [0|1] "" AIM
+
+BO_ 16 BMS_FaultCounters: 8 BMS
+ SG_ BMS_CntV : 7|8@0+ (1,0) [0|255] "" AIM
+ SG_ BMS_CntT : 15|8@0+ (1,0) [0|255] "" AIM
+ SG_ BMS_CntNTC : 23|8@0+ (1,0) [0|255] "" AIM
+ SG_ BMS_CntComm : 31|8@0+ (1,0) [0|255] "" AIM
+ SG_ BMS_CntHall : 39|8@0+ (1,0) [0|255] "" AIM
+ SG_ BMS_CntInit : 47|8@0+ (1,0) [0|255] "" AIM
+
+BO_ 17 BMS_Sticky: 8 BMS
+ SG_ BMS_StkSdcLost : 0|1@0+ (1,0) [0|1] "" AIM
+ SG_ BMS_StkTsonDis : 1|1@0+ (1,0) [0|1] "" AIM
+ SG_ BMS_StkTsonFail : 2|1@0+ (1,0) [0|1] "" AIM
+ SG_ BMS_StkImdLost : 3|1@0+ (1,0) [0|1] "" AIM
+ SG_ BMS_StkPreFail : 4|1@0+ (1,0) [0|1] "" AIM
+ SG_ BMS_StkBmsFault : 5|1@0+ (1,0) [0|1] "" AIM
+ SG_ BMS_CntTsonDis : 15|8@0+ (1,0) [0|255] "" AIM
+ SG_ BMS_CntSdcLost : 23|8@0+ (1,0) [0|255] "" AIM
+ SG_ BMS_CntImdLost : 31|8@0+ (1,0) [0|255] "" AIM
+ SG_ BMS_AliveCnt : 39|8@0+ (1,0) [0|255] "" AIM
+ SG_ BMS_Uptime : 47|16@0+ (1,0) [0|65535] "s" AIM
+ SG_ BMS_CntBusOff : 63|8@0+ (1,0) [0|255] "" AIM
+
+BO_ 386 BMS_ModV1: 8 BMS
+ SG_ Mod_IDmod_386 : 7|16@0+ (1,0) [0|65535] "" AIM
+ SG_ Mod_V1 : 23|16@0+ (0.001,0) [0|65.535] "V" AIM
+ SG_ Mod_V2 : 39|16@0+ (0.001,0) [0|65.535] "V" AIM
+ SG_ Mod_V3 : 55|16@0+ (0.001,0) [0|65.535] "V" AIM
+
+BO_ 387 BMS_ModV2: 8 BMS
+ SG_ Mod_IDmod_387 : 7|16@0+ (1,0) [0|65535] "" AIM
+ SG_ Mod_V4 : 23|16@0+ (0.001,0) [0|65.535] "V" AIM
+ SG_ Mod_V5 : 39|16@0+ (0.001,0) [0|65.535] "V" AIM
+ SG_ Mod_V6 : 55|16@0+ (0.001,0) [0|65.535] "V" AIM
+
+BO_ 388 BMS_ModV3: 8 BMS
+ SG_ Mod_IDmod_388 : 7|16@0+ (1,0) [0|65535] "" AIM
+ SG_ Mod_V7 : 23|16@0+ (0.001,0) [0|65.535] "V" AIM
+ SG_ Mod_V8 : 39|16@0+ (0.001,0) [0|65.535] "V" AIM
+ SG_ Mod_V9 : 55|16@0+ (0.001,0) [0|65.535] "V" AIM
+
+BO_ 389 BMS_ModV4: 8 BMS
+ SG_ Mod_IDmod_389 : 7|16@0+ (1,0) [0|65535] "" AIM
+ SG_ Mod_V10 : 23|16@0+ (0.001,0) [0|65.535] "V" AIM
+ SG_ Mod_V11 : 39|16@0+ (0.001,0) [0|65.535] "V" AIM
+ SG_ Mod_VTotal : 55|16@0+ (0.001,0) [0|65.535] "V" AIM
+
+BO_ 390 BMS_ModT1: 8 BMS
+ SG_ Mod_IDmod_390 : 7|8@0+ (1,0) [0|255] "" AIM
+ SG_ Mod_T1 : 15|8@0- (1,0) [-128|127] "degC" AIM
+ SG_ Mod_T2 : 23|8@0- (1,0) [-128|127] "degC" AIM
+ SG_ Mod_T3 : 31|8@0- (1,0) [-128|127] "degC" AIM
+ SG_ Mod_T4 : 39|8@0- (1,0) [-128|127] "degC" AIM
+ SG_ Mod_T5 : 47|8@0- (1,0) [-128|127] "degC" AIM
+ SG_ Mod_T6 : 55|8@0- (1,0) [-128|127] "degC" AIM
+ SG_ Mod_T7 : 63|8@0- (1,0) [-128|127] "degC" AIM
+
+BO_ 391 BMS_ModT2: 8 BMS
+ SG_ Mod_IDmod_391 : 7|8@0+ (1,0) [0|255] "" AIM
+ SG_ Mod_T8 : 15|8@0- (1,0) [-128|127] "degC" AIM
+ SG_ Mod_T9 : 23|8@0- (1,0) [-128|127] "degC" AIM
+ SG_ Mod_Tmax : 31|8@0- (1,0) [-128|127] "degC" AIM
+ SG_ Mod_Tmin : 39|8@0- (1,0) [-128|127] "degC" AIM
+ SG_ Mod_StatusV : 47|8@0+ (1,0) [0|255] "" AIM
+ SG_ Mod_StatusT : 55|8@0+ (1,0) [0|255] "" AIM
+
+BO_ 392 BMS_SOC: 8 BMS
+ SG_ BMS_SOC : 7|8@0+ (1,0) [0|100] "%" AIM
+
+BO_ 993 INV_CtrlData: 8 INV
+ SG_ INV_ControlMode : 7|8@0+ (1,0) [0|7] "" AIM
+ SG_ INV_TargetIq : 15|16@0- (0.1,0) [-850|850] "A" AIM
+ SG_ INV_MotorPos : 31|16@0+ (0.1,0) [0|359] "deg" AIM
+ SG_ INV_MotorStill : 47|8@0+ (1,0) [0|1] "" AIM
+
+BO_ 1025 INV_SpeedData: 8 INV
+ SG_ INV_ERPM : 7|32@0- (1,0) [-120000|120000] "ERPM" AIM
+ SG_ INV_Duty : 39|16@0- (0.1,0) [-100|100] "%" AIM
+ SG_ INV_VinDC : 55|16@0- (1,0) [-850|850] "V" AIM
+
+BO_ 1057 INV_CurrentData: 8 INV
+ SG_ INV_AC_Current : 7|16@0- (0.1,0) [-850|850] "A" AIM
+ SG_ INV_DC_Current : 23|16@0- (0.1,0) [-850|850] "A" AIM
+
+BO_ 1089 INV_TempFault: 8 INV
+ SG_ INV_CtrlTemp : 7|16@0- (0.1,0) [-55|200] "degC" AIM
+ SG_ INV_MotorTemp : 23|16@0- (0.1,0) [-55|200] "degC" AIM
+ SG_ INV_FaultCode : 39|8@0+ (1,0) [0|10] "" AIM
+
+BO_ 1121 INV_FOCData: 8 INV
+ SG_ INV_Id : 7|32@0- (0.01,0) [-850|850] "A" AIM
+ SG_ INV_Iq : 39|32@0- (0.01,0) [-850|850] "A" AIM
+
+BO_ 1153 INV_IOStatus: 8 INV
+ SG_ INV_Throttle : 7|8@0- (1,0) [0|100] "%" AIM
+ SG_ INV_Brake : 15|8@0- (1,0) [0|100] "%" AIM
+ SG_ INV_DigIn1 : 16|1@0+ (1,0) [0|1] "" AIM
+ SG_ INV_DigIn2 : 17|1@0+ (1,0) [0|1] "" AIM
+ SG_ INV_DigIn3 : 18|1@0+ (1,0) [0|1] "" AIM
+ SG_ INV_DigIn4 : 19|1@0+ (1,0) [0|1] "" AIM
+ SG_ INV_DigOut1 : 20|1@0+ (1,0) [0|1] "" AIM
+ SG_ INV_DigOut2 : 21|1@0+ (1,0) [0|1] "" AIM
+ SG_ INV_DigOut3 : 22|1@0+ (1,0) [0|1] "" AIM
+ SG_ INV_DigOut4 : 23|1@0+ (1,0) [0|1] "" AIM
+ SG_ INV_DriveEnable : 24|1@0+ (1,0) [0|1] "" AIM
+ SG_ INV_CapTempLim : 32|1@0+ (1,0) [0|1] "" AIM
+ SG_ INV_DCcurrLim : 33|1@0+ (1,0) [0|1] "" AIM
+ SG_ INV_DrvEnLim : 34|1@0+ (1,0) [0|1] "" AIM
+ SG_ INV_IGBTaccelLim : 35|1@0+ (1,0) [0|1] "" AIM
+ SG_ INV_IGBTtempLim : 36|1@0+ (1,0) [0|1] "" AIM
+ SG_ INV_VinLim : 37|1@0+ (1,0) [0|1] "" AIM
+ SG_ INV_MotAccelLim : 38|1@0+ (1,0) [0|1] "" AIM
+ SG_ INV_MotTempLim : 39|1@0+ (1,0) [0|1] "" AIM
+ SG_ INV_RPMminLim : 40|1@0+ (1,0) [0|1] "" AIM
+ SG_ INV_RPMmaxLim : 41|1@0+ (1,0) [0|1] "" AIM
+ SG_ INV_PowerLim : 42|1@0+ (1,0) [0|1] "" AIM
+ SG_ INV_CANmapVer : 63|8@0+ (1,0) [0|255] "" AIM
+
+BO_ 1185 INV_ACLimits: 8 INV
+ SG_ INV_MaxAC_cfg : 7|16@0- (0.1,0) [0|850] "A" AIM
+ SG_ INV_MaxAC_avail : 23|16@0- (0.1,0) [0|850] "A" AIM
+ SG_ INV_MinAC_cfg : 39|16@0- (0.1,0) [-850|0] "A" AIM
+ SG_ INV_MinAC_avail : 55|16@0- (0.1,0) [-850|0] "A" AIM
+
+BO_ 1217 INV_DCLimits: 8 INV
+ SG_ INV_MaxDC_cfg : 7|16@0- (0.1,0) [0|850] "A" AIM
+ SG_ INV_MaxDC_avail : 23|16@0- (0.1,0) [0|850] "A" AIM
+ SG_ INV_MinDC_cfg : 39|16@0- (0.1,0) [-850|0] "A" AIM
+ SG_ INV_MinDC_avail : 55|16@0- (0.1,0) [-850|0] "A" AIM
+
+BO_ 1160 VCU_Diag: 8 VCU
+ SG_ VCU_FaultCause : 7|8@0+ (1,0) [0|7] "" AIM
+ SG_ VCU_ResetCause : 15|8@0+ (1,0) [0|6] "" AIM
+ SG_ VCU_Heartbeat : 23|16@0+ (1,0) [0|65535] "" AIM
+
+BO_ 1163 VCU_Apps: 8 VCU
+ SG_ APPS1_pct : 7|16@0+ (0.1,0) [0|100] "%" AIM
+ SG_ APPS2_pct : 23|16@0+ (0.1,0) [0|100] "%" AIM
+ SG_ APPS1_raw : 39|16@0+ (1,0) [0|65535] "ADC" AIM
+ SG_ APPS2_raw : 55|16@0+ (1,0) [0|65535] "ADC" AIM
+
+BO_ 1164 VCU_Brake: 8 VCU
+ SG_ Brake1_pct : 7|16@0+ (0.1,0) [0|100] "%" AIM
+ SG_ Brake2_pct : 23|16@0+ (0.1,0) [0|100] "%" AIM
+ SG_ Brake1_raw : 39|16@0+ (1,0) [0|65535] "ADC" AIM
+ SG_ Brake2_raw : 55|16@0+ (1,0) [0|65535] "ADC" AIM
+
+BO_ 1166 VCU_Signals: 8 VCU
+ SG_ VCU_Vbat : 7|16@0+ (1,0) [0|65535] "" AIM
+ SG_ VCU_SDC : 23|8@0+ (1,0) [0|1] "" AIM
+ SG_ VCU_Start : 31|8@0+ (1,0) [0|1] "" AIM
+ SG_ VCU_R2D : 39|8@0+ (1,0) [0|1] "" AIM
+ SG_ VCU_AppsSt : 47|8@0+ (1,0) [0|2] "" AIM
+ SG_ VCU_BrakeFlt : 55|8@0+ (1,0) [0|1] "" AIM
+ SG_ VCU_Bypass : 63|8@0+ (1,0) [0|1] "" AIM
+
+BO_ 769 PDM_Status: 8 PDM
+ SG_ PDM_Mode : 7|8@0+ (1,0) [0|2] "" AIM
+ SG_ PDM_PumpPct : 15|8@0+ (1,0) [0|100] "%" AIM
+ SG_ PDM_FanPct : 23|8@0+ (1,0) [0|100] "%" AIM
+ SG_ PDM_Failsafe : 24|1@0+ (1,0) [0|1] "" AIM
+ SG_ PDM_SafetyFloor : 25|1@0+ (1,0) [0|1] "" AIM
+
+CM_ BO_ 14 "Ultimo episodio (ID 0x0E, 500ms). BMS_RetryNet sustituye desde 2026-10-10 al antiguo numTriesReset duplicado: signo = causa del ultimo ciclo (+COMM/-CRC), magnitud = reintentos.";
+CM_ BO_ 15 "BMS_DEBUG (ID 0x0F, 100ms) - el frame clave para diagnosticar caidas de BMS_OK en pista. Ver docs/CAN_Solo2DL.md #9.";
+CM_ SG_ 14 BMS_RetryNet "Short AiM: RTRN. +N = N reintentos por COMM (board mudo) en el ultimo ciclo V+T. -N = N reintentos por CRC (dato corrupto). 0 = ciclo limpio. Ver docs/inmunidad_ruido.md #3.3.";
+CM_ SG_ 15 BMS_Flt_Comm "Short AiM: FCOM.";
+CM_ SG_ 15 BMS_Fault "Short AiM: BFLT. OR global de fallo confirmado (no-latching; el latch real del SDC es HW).";
+CM_ SG_ 15 FirstFault "Short AiM: FFLT. Enum: 0=none 1=V 2=T 3=NTC 4=Comm 5=Hall 6=NoInit.";
+CM_ SG_ 15 Pin_SDC_3V3 "Short AiM: PSDC.";
+
+VAL_ 15 FirstFault 0 "none" 1 "V" 2 "T" 3 "NTC" 4 "Comm" 5 "Hall" 6 "NoInit" ;
+
+CM_ BO_ 993 "Inversor DTI HV-500, packet 0x1F (CAN manual v2.5 Tabla4 S3.2). CANID=(Packet<<5)|NodeID, NodeID=1 confirmado via DTI CAN Tool.";
+CM_ BO_ 1025 "Packet 0x20. ERPM = RPM electrico (dividir por pares de polos del motor para RPM mecanico).";
+CM_ BO_ 1057 "Packet 0x21.";
+CM_ BO_ 1089 "Packet 0x22. INV_FaultCode distingue fallo del INVERSOR de un fallo del BMS (ver VAL_ de este signal).";
+CM_ BO_ 1121 "Packet 0x23. Componentes FOC Id/Iq, uso avanzado/debug de control.";
+CM_ BO_ 1153 "Packet 0x24. Throttle/Brake/IO digital/bits de limite activo/DriveEnable/version de mapa CAN.";
+CM_ BO_ 1185 "Packet 0x25. avail = limite real tras derating termico/config; cfg = limite configurado con DTI CAN tool.";
+CM_ BO_ 1217 "Packet 0x26. INV_MaxDC_avail es el dato util para cerrar el lazo de derating del BMS (cuanta corriente de descarga le queda disponible al inversor).";
+CM_ SG_ 993 INV_ControlMode "1=SPEED 2=CURRENT 3=CURRENT_BRAKE 4=POS 7=NONE (0,5,6 sin usar).";
+CM_ SG_ 993 INV_MotorStill "1=parado 0=girando.";
+CM_ SG_ 1089 INV_FaultCode "Ver VAL_. 0=OK.";
+
+VAL_ 993 INV_ControlMode 0 "unused" 1 "SPEED" 2 "CURRENT" 3 "CURRENT_BRAKE" 4 "POS" 5 "unused" 6 "unused" 7 "NONE" ;
+VAL_ 1089 INV_FaultCode 0 "OK" 1 "Overvoltage" 2 "Undervoltage" 3 "DRV" 4 "Overcurrent" 5 "CtrlOverTemp" 6 "MotorOverTemp" 7 "SensorWire" 8 "SensorGeneral" 9 "CANcmdError" 10 "AnalogInput" ;
+
+CM_ BO_ 1160 "VCU_26, src/Control.cpp publishTelemetry() (rev 2026-08-10). Bytes4-7 reservados a 0.";
+CM_ BO_ 1166 "Señales de estado de la VCU. VCU_Bypass=1 es el bypass de banco (opcion 21 del menu serie): par habilitado saltandose SDC/secuencia/freno/APPS. No deberia verse nunca en pista -> alarma en dashboard.";
+CM_ SG_ 1160 VCU_FaultCause "Causa de no-R2D, primera que aplica: 0=OK 1=esperando start+freno 2=SDC abierto 3=APPS implausible 6=freno desconectado/corto 7=BYPASS DE BANCO ACTIVO (prioridad sobre todos). 4 y 5 no existen en VCU_26.";
+CM_ SG_ 1160 VCU_ResetCause "0=desconocido 1=power/BOR 2=NRST 3=SW 4=IWDG 5=WWDG 6=lowpwr.";
+CM_ SG_ 1160 VCU_Heartbeat "Cuenta de loop; se congela si el firmware de la VCU se cuelga. Combinar con VCU_ResetCause=4(IWDG) para detectar cuelgue->reset.";
+CM_ SG_ 1166 VCU_R2D "Logica positiva (1=R2D activo) aunque el pin de salida real es activo-bajo.";
+CM_ SG_ 1166 VCU_AppsSt "0=NORMAL 1=IMPL 2=PENDING.";
+CM_ SG_ 1166 VCU_Bypass "Ver comentario del mensaje BO_ 1166.";
+
+VAL_ 1160 VCU_FaultCause 0 "OK" 1 "WaitStartBrake" 2 "SDCopen" 3 "AppsImplausible" 6 "BrakeFault" 7 "BYPASS_BANCO" ;
+VAL_ 1160 VCU_ResetCause 0 "unknown" 1 "PowerBOR" 2 "NRST" 3 "SW" 4 "IWDG" 5 "WWDG" 6 "lowpower" ;
+VAL_ 1166 VCU_AppsSt 0 "NORMAL" 1 "IMPL" 2 "PENDING" ;
+
+CM_ BO_ 769 "mart-PDM, src/main.cpp sendPdmStatus() (rev 2026-10-10). Bomba+ventiladores del inversor DTI HV-500. Bytes4-7 relleno 0xFF.";
+CM_ SG_ 769 PDM_Mode "Quien manda sobre la refrigeracion: 0=AUTO (curva termica por temps del inversor, 0x441) 1=CAN (consigna de la VCU, 0x300) 2=SERIAL (override manual de banco).";
+CM_ SG_ 769 PDM_Failsafe "1 = sin temperaturas del inversor -> demanda fija de emergencia (nunca se apaga).";
+CM_ SG_ 769 PDM_SafetyFloor "1 = cerca del limite termico, la curva ha subido la consigna de CAN/serie por encima de lo pedido.";
+
+VAL_ 769 PDM_Mode 0 "AUTO" 1 "CAN" 2 "SERIAL" ;

@@ -41,10 +41,11 @@ bool FaultLogger::begin()
     _ready   = true;
     _backend = BK_FRAM;
     {
-        char b[96];
+        char b[128];
         snprintf(b, sizeof(b),
-            "[FRAM] OK — capacidad=%u eventos, writeIdx=%u, rollovers=%u, total=%lu",
-            (unsigned)CAPACITY, _writeIdx, _rollovers, (unsigned long)_totalEv);
+            "[FRAM] OK — capacidad=%u eventos, writeIdx=%u, rollovers=%u, total=%lu%s",
+            (unsigned)CAPACITY, _writeIdx, _rollovers, (unsigned long)_totalEv,
+            _noiseArmed ? " | LOG DE RUIDO SIGUE ARMADO (retomando tras reset)" : "");
         Serial.println(b);
     }
     return true;
@@ -107,6 +108,9 @@ void FaultLogger::dumpToSerial(void (*tick)())
     Serial.println(F(""));
     Serial.println(F("  #     Time(ms)  Type   FF  B0   B1   B2   B3   Rst   MinV  MaxV  MaxT"));
     Serial.println(F("  ----  ----------  -----  --  ----  ----  ----  ----  ----  ----  ----  ----"));
+    Serial.println(F("  (fila RUIDO: FF=retriesV  B0=retriesT  B1+Rst=corriente 0.1A/bit con signo (B1=byte alto)"));
+    Serial.println(F("               B2=snapshot real V/T, CRC/COMM en bits5-7  B3=state real, sin cambios)"));
+    Serial.println(F(""));
 
     uint8_t rec[REC_SIZE];
     for (uint16_t i = 0; i < count; i++) {
@@ -189,6 +193,7 @@ bool FaultLogger::_readHeader()
     _rollovers = ((uint16_t)hdr[10] << 8) | hdr[11];
     _totalEv   = ((uint32_t)hdr[12] << 24) | ((uint32_t)hdr[13] << 16)
                | ((uint32_t)hdr[14] <<  8) |  (uint32_t)hdr[15];
+    _noiseArmed = (hdr[16] != 0);
 
     // Saneo: si writeIdx fuera de rango (corrupción), reset.
     if (_writeIdx >= CAPACITY) {
@@ -217,14 +222,24 @@ bool FaultLogger::_writeHeader()
     hdr[13] = (uint8_t)(_totalEv >> 16);
     hdr[14] = (uint8_t)(_totalEv >>  8);
     hdr[15] = (uint8_t)(_totalEv      );
+    hdr[16] = _noiseArmed ? 1 : 0;
     return _writeBytes(0, hdr, HDR_SIZE);
+}
+
+// Arma/para el log de ruido. RAM siempre; FRAM también si hay backend FRAM
+// (con backend FLASH no hay header donde persistirlo — solo vive en RAM).
+void FaultLogger::setNoiseLogArmed(bool armed)
+{
+    _noiseArmed = armed;
+    if (_backend == BK_FRAM) _writeHeader();
 }
 
 void FaultLogger::_formatLog()
 {
-    _writeIdx  = 0;
-    _rollovers = 0;
-    _totalEv   = 0;
+    _writeIdx   = 0;
+    _rollovers  = 0;
+    _totalEv    = 0;
+    _noiseArmed = false;
     _writeHeader();
 }
 
@@ -383,6 +398,7 @@ const char* FaultLogger::_eventName(uint8_t type)
         case EVT_BMS_OK_RISE:    return "RISE ";
         case EVT_REINIT_TRY:     return "REINI";
         case EVT_PRECHARGE_FAIL: return "PREFL";
+        case EVT_NOISE_SAMPLE:   return "RUIDO";
         default:                 return "?    ";
     }
 }
