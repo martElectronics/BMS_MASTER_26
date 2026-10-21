@@ -397,13 +397,14 @@ void setup()
         gCan->setPacketTimer(11, 100);             // ID 11 min/max V/T (excursión que dispara el fallo)
         gCan->setPacketTimer(16, 100);             // ID 16 contadores de fallo: 100 ms (post-mortem: 5x resolucion)
         gCan->setPacketTimer(17, 100);             // ID 17 sticky SDC/TSON: 100 ms
+        gCan->setPacketTimer(18, 100);             // ID 18 corriente + tensión del pack: 100 ms
         // 13/14/15 NO están en configurePacketTimersByPriority() (la lista salta de
         // 12 a 33); sin timer, send() los emitiría cada loop (kHz) y saturaría el bus
         // (ademas son IDs bajos = alta prioridad CAN → inanición de VCU/PDM).
         gCan->setPacketTimer(13, 500);             // ID 13 diagnóstico
         gCan->setPacketTimer(14, 500);             // ID 14 tiempos/contadores de comms
         gCan->setPacketTimer(15, 100);             // ID 15 BMS_DEBUG: 100 ms (era 500 → un episodio corto caia entre tramas)
-        Serial.println(F("[CAN] FDCAN listo (125k, IDs 11-17, 386-392)."));
+        Serial.println(F("[CAN] FDCAN listo (125k, IDs 11-18, 386-392)."));
     }
 
     // ── FRAM logger (MB85RC256V): si está, loguear evento BOOT con
@@ -456,7 +457,7 @@ void loop()
     fan.update(bms.getMaxTemp(), hall.getCurrent(), fanFS || fanForceMax);  // curva + FF; 'F' fuerza 100%
     updateBmsOk();         // BMS_OK no-latching (auto-rearma). Antes que updateTson.
     updateTson();          // máquina TSON + precarga (usa bmsFault de updateBmsOk)
-    updateCanTx();         // telemetría CAN IDs 11-17, 386-392 (throttled por timer)
+    updateCanTx();         // telemetría CAN IDs 11-18, 386-392 (throttled por timer)
     
     DashFaults df;
     df.bmsOk = !bmsFault;
@@ -1139,6 +1140,23 @@ void updateCanTx()
     d17[6] = (uint8_t)(upS16 & 0xFF);
     d17[7] = cntBusOff;                               // episodios de bus-off del FDCAN
     gCan->setPacket((uint32_t)17, d17, 8);
+
+    // ── ID 18 (0x12) — corriente y tensión del pack, medidas por el BMS ────
+    // Medida independiente del inversor (su corriente DC es estimada y muy
+    // ruidosa): permite el balance de potencia batería ↔ motor.
+    //   B0-1 corriente Hall, int16 BE, 0,1 A (+ descarga, − carga)
+    //   B2-3 suma de todas las celdas, uint16 BE, 0,1 V
+    long iDa = lroundf(hall.getCurrent() * 10.0f);
+    if (iDa >  32767) iDa =  32767;
+    if (iDa < -32768) iDa = -32768;
+    float packV = 0.0f;
+    for (int m = 0; m < NUM_MODULES; m++)
+        for (int n = 1; n <= 11; n++) packV += modCellV(m, n);
+    long vDv = lroundf(packV * 10.0f);
+    if (vDv > 65535) vDv = 65535;
+    if (vDv < 0)     vDv = 0;
+    uint16_t d18[2] = { (uint16_t)(int16_t)iDa, (uint16_t)vDv };
+    gCan->setPacket((uint32_t)18, d18, 2);
 
     // ── ID 392 (0x188) — SOC (UINT8, %) ────────────────────────────────────
     uint8_t socv = soc.soc();

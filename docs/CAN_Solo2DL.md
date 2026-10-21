@@ -102,6 +102,7 @@
 | **15** | **0x0F** | **8** | **100 ms** | **BMS_DEBUG — granularidad por bit** |
 | 16 | 0x10 | 6 | 100 ms | Contadores de fallo por causa (6×UINT8) — *forense* |
 | **17** | **0x11** | **8** | **100 ms** | **STICKY SDC/TSON (latcheado) + contador de vida y uptime** |
+| **18** | **0x12** | **4** | **100 ms** | **Corriente (Hall) y tensión del pack medidas por el BMS** |
 | 386 | 0x182 | 8 | 557 ms paginado | IDmod, V1, V2, V3 — *forense* |
 | 387 | 0x183 | 8 | 556 ms paginado | IDmod, V4, V5, V6 — *forense* |
 | 388 | 0x184 | 8 | 556 ms paginado | IDmod, V7, V8, V9 — *forense* |
@@ -408,6 +409,32 @@ del loop.
 | **1** | — | **Fue el BMS.** Mira ID 15 B4 (primer trigger) e ID 16 (qué contador subió) |
 | 0 | **1** | **El SDC lo abrió OTRO nodo** (IMD / BSPD / paro / inercia). El BMS solo reaccionó desarmando el TSON |
 | 0 | 0 | Ni BMS ni SDC → mirar reset del micro (ID 15 B7; contadores del ID 16 cayendo a 0 = hubo reset) |
+
+---
+
+## 10b. ID 18 (0x12) — Corriente y tensión del pack · 4 bytes · 100 ms
+
+La medida de batería **del propio BMS**, independiente del inversor. La
+corriente DC que manda el inversor (`INV DC Current`) es una estimación muy
+ruidosa; con esta trama se puede calcular la potencia de batería
+(`BMS_PackVoltage × BMS_PackCurrent`) y hacer balances de energía batería ↔
+motor fiables. Es también la corriente que de verdad vigila la protección del
+BMS.
+
+```
+Bytes 0-1: corriente del Hall (int16 BE, 0,1 A)  — + descarga, − carga
+Bytes 2-3: tensión del pack   (uint16 BE, 0,1 V) — suma de todas las celdas
+```
+
+| Canal | Short | Byte | Descripción |
+|---|---|---|---|
+| BMS_PackCurrent | IPCK | 0-1 | corriente del pack medida por el sensor Hall del BMS (A, **signed**: positiva descargando, negativa cargando o regenerando) |
+| BMS_PackVoltage | VPCK | 2-3 | tensión del pack (V) = suma de las tensiones de celda que leen los BQ |
+
+> `BMS_PackVoltage` es la suma de celdas, no una medida entre bornes: no
+> incluye la caída en pletinas, conectores y fusible, así que bajo carga
+> saldrá algo por encima de `INV VinDC`. Esa diferencia es justo la caída en
+> el cableado de alta tensión.
 
 ---
 
@@ -756,6 +783,9 @@ Pierburg CWA y los 2 ventiladores Delta según temperatura del inversor
     escalas/signos de los 4 nodos (BMS, inversor, VCU, PDM), validado con
     `cantools`. Este documento se reescribió para dejar de duplicar esa
     información y centrarse en explicar qué es cada canal.
+- **2026-10-15** — nuevo ID 18 (0x12): corriente del Hall y tensión del pack
+  medidas por el BMS, para tener la potencia de batería independiente del
+  inversor (§10b).
 
 Si cambia alguna trama, actualiza primero `docs/BMS_MART.dbc` (y
 valídalo con `cantools`) y luego este doc — nunca al revés.

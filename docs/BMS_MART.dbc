@@ -118,6 +118,10 @@ BO_ 17 BMS_Sticky: 8 BMS
  SG_ BMS_Uptime : 47|16@0+ (1,0) [0|65535] "s" AIM
  SG_ BMS_CntBusOff : 63|8@0+ (1,0) [0|255] "" AIM
 
+BO_ 18 BMS_PackPower: 8 BMS
+ SG_ BMS_PackCurrent : 7|16@0- (0.1,0) [-500|500] "A" AIM
+ SG_ BMS_PackVoltage : 23|16@0+ (0.1,0) [0|600] "V" AIM
+
 BO_ 386 BMS_ModV1: 8 BMS
  SG_ Mod_IDmod_386 : 7|16@0+ (1,0) [0|65535] "" AIM
  SG_ Mod_V1 : 23|16@0+ (0.001,0) [0|65.535] "V" AIM
@@ -265,6 +269,10 @@ CM_ SG_ 15 BMS_Flt_Comm "Short AiM: FCOM.";
 CM_ SG_ 15 BMS_Fault "Short AiM: BFLT. OR global de fallo confirmado (no-latching; el latch real del SDC es HW).";
 CM_ SG_ 15 FirstFault "Short AiM: FFLT. Enum: 0=none 1=V 2=T 3=NTC 4=Comm 5=Hall 6=NoInit.";
 CM_ SG_ 15 Pin_SDC_3V3 "Short AiM: PSDC.";
+
+CM_ BO_ 18 "Corriente y tension del pack medidas por el BMS (ID 0x12, 100ms). Medida independiente del inversor para el balance de potencia.";
+CM_ SG_ 18 BMS_PackCurrent "Sensor Hall (DHAB) del BMS. + descarga, - carga.";
+CM_ SG_ 18 BMS_PackVoltage "Suma de las tensiones de todas las celdas leidas por los BQ.";
 
 VAL_ 15 FirstFault 0 "none" 1 "V" 2 "T" 3 "NTC" 4 "Comm" 5 "Hall" 6 "NoInit" ;
 
