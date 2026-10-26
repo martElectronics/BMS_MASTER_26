@@ -127,7 +127,8 @@
 > ponerle su timer a mano o se va a ~800 ms sin que nadie se dé cuenta.
 
 **Paginado (386-391):** un módulo distinto por ronda (~556 ms entre módulos
-del mismo ID). Con 12 módulos, cada módulo se actualiza cada ~6.7 s.
+del mismo ID). Con los 10 módulos del coche, cada módulo se actualiza cada
+~5.6 s (con 12 serían ~6.7 s).
 El campo `IDmod` te dice de cuál es la trama.
 
 ---
@@ -203,13 +204,20 @@ Bytes 6-7: lastCommFailMs (uint16 BE, ms)   — duración del episodio de comms 
 > cuando la condición se despeja, así que incluye la ventana de debounce.
 >
 > Consecuencia útil: también se cronometran los episodios que **no llegaron a
-> confirmar**. Si `MaxFailMs` es menor que la ventana de debounce (500 ms
-> para V, 1000 para T, 2000 para comms), hubo una anomalía real que se
+> confirmar**. Si `MaxFailMs` es menor que la ventana de debounce (1000 ms
+> para V, T y NTC; 6000 para comms), hubo una anomalía real que se
 > resolvió sola **sin abrir el SDC** — justo lo que interesa para cazar ruido.
 >
 > `MaxCommFailMs`/`LastCommFailMs` son el mismo reloj pero solo para las
 > comms del BQ, para separar "cuánto duró el fallo de comunicación" de
 > "cuánto duró el episodio de fallo en general".
+>
+> **Un valor clavado en ~499 ms** (999 con el firmware anterior al
+> 2026-10-26) no es una duración real: si la cadena de BQ queda muda
+> `COMM_REINIT_MS` (500 ms), el BMS lanza el reInit (WAKE + auto-address) y,
+> si funciona, el episodio se cierra ahí. Cada uno de esos valores = un
+> auto-address con éxito (sube `NumTryReset`). Los errores de CRC no hacen
+> reInit, así que esos sí miden lo que duró el ruido.
 
 ---
 
@@ -262,7 +270,7 @@ B7: causa del último reset
 
 | Canal | Short | Byte | Descripción |
 |---|---|---|---|
-| BMS_Flt_V       | FV__ | 0 | UV/OV confirmado (≥500 ms) |
+| BMS_Flt_V       | FV__ | 0 | UV/OV confirmado (≥1000 ms) |
 | BMS_Flt_T       | FT__ | 0 | UT/OT confirmado (≥1000 ms) |
 | BMS_Flt_NTC     | FNTC | 0 | NTC abierto confirmado |
 | BMS_Flt_Comm    | FCOM | 0 | Comms BQ caídas confirmadas |
@@ -272,7 +280,7 @@ B7: causa del último reset
 | Hall_Disc       | HDIS | 1 | DHAB desconectado |
 | Hall_Stuck      | HSTK | 1 | Sensor congelado |
 | Hall_Noisy      | HNOI | 1 | EMI / ΔI extremo |
-| Hall_OverI      | HOVI | 1 | Sobre-I FS (>170 A desc / <−7 A carga) |
+| Hall_OverI      | HOVI | 1 | Sobre-I FS (>500 A desc / <−500 A carga; con estos umbrales en la práctica no salta nunca) |
 | Hall_AdcSat     | HSAT | 1 | ADC saturado |
 | V_UV_now        | NUV_ | 2 | minV < 2.80 V (snapshot, sin debounce) |
 | V_OV_now        | NOV_ | 2 | maxV > 4.20 V (snapshot, sin debounce) |
@@ -282,9 +290,9 @@ B7: causa del último reset
 | ReadV_CommErr   | RVCO | 2 | última lectura V = COMM_ERROR |
 | ReadV_CrcErr    | RVCR | 2 | última lectura V = CRC_ERROR |
 | ReadT_Err       | RTER | 2 | última lectura T ≠ OK |
-| State_AutoAddr  | SADR | 3 | `bms.isOK` |
+| State_AutoAddr  | SADR | 3 | `bms.isOK`: cadena de BQ direccionada. **Baja a 0 mientras dura un reInit** (~1.2 s) y vuelve a 1 si recupera; el BMS sigue mandando CAN durante el reInit |
 | State_BmsInit   | SINI | 3 | `bmsInitOk` |
-| State_CanOk     | SCAN | 3 | FDCAN inicializó OK |
+| State_CanOk     | SCAN | 3 | FDCAN inicializó OK **y** no está en bus-off ahora mismo |
 | SDC_TSON        | STSN | 3 | Latch TSON cerrado |
 | Precharge_Fail  | PFAI | 3 | Precarga falló (enclavado → reset alim.) |
 | IMD_OK          | IMDK | 3 | IMD OK |
@@ -524,6 +532,12 @@ Byte 1-7: T1..T7 (int8 cada uno, °C)
 > bien). El módulo solo tiene 9 NTCs reales (T1..T9, repartidos en los IDs
 > 390 y 391); no hay T10+.
 
+> ⚠ **NTCs excluidos de los fallos** (`NTC_IGNORED` en
+> `lib/BQ79606/BQ79606.h`): ahora mismo **board 8 NTC 1 = IDmod 4 (M05 por serie), T1**. Su valor se sigue
+> mandando aquí tal cual, pero no cuenta para BMS_MaxT/MinT (ID 11), los
+> fallos OT/UT/NTC abierto, los bits por módulo del ID 12 ni
+> Tmax/Tmin/stT del ID 391. Si ese T1 marca algo raro, es esperado.
+
 ---
 
 ## 16. ID 391 (0x187) — T8-T9 + Tmax/min + Status · 8 bytes · paginado 554 ms — *forense*
@@ -571,7 +585,7 @@ el DBC no los fija, tócalos en RaceStudio si colisionan con otro protocolo).
 
 ### Nombre largo (grupos por prefijo)
 
-- `BMS_*` → telemetría general (IDs 11-14, 392).
+- `BMS_*` → telemetría general (IDs 11-14, 16-18, 392).
 - `Hall_*` → sub-fallos del amperímetro (ID 15 B1).
 - `V_*` / `T_*` / `NTC_*` → snapshots (ID 15 B2).
 - `State_*` / `Pre_*` / `Pin_*` → state del sistema (ID 15 B3).
@@ -593,7 +607,8 @@ el DBC no los fija, tócalos en RaceStudio si colisionan con otro protocolo).
 | `N` | Snapshot "ahora" (sin debounce) | NUV, NOV, NUT, NOT, NNTC |
 | `R` | Reset / Read-error | RIWD, RBOR, RVCO, RVCR, RTER |
 | `S` | State / status | SADR, SINI, SCAN, SOC |
-| `P` | Precarga / Pin físico | POK, PFAI, PSDC |
+| `P` | Precarga / Pin físico | PFAI, PSDC |
+| `I` / `V` | Pack completo (ID 18) | IPCK, VPCK |
 | `M` | Módulo (paginados 386-391) | MV01..MV11, MVTT, MT01..MT09, MTMX/MTMN |
 | `IM` | IDmod (uno por ID paginado) | IM86..IM91 |
 | `FF` | First Fault (enum) | FFLT |
@@ -622,8 +637,10 @@ Tras flashear y poner el coche en marcha (sin tracción):
 ## 20. Inversor DTI HV-500 (CAN Manual v2.5)
 
 El AiM es un **logger**: del inversor lee lo que **transmite** (tabla de
-abajo). Los **comandos** los envía la VCU; loguearlos es opcional y no
-están en el DBC.
+abajo). En este coche **nadie le manda comandos por CAN**: el acelerador
+le entra por una entrada analógica y el R2D por un pin digital (ver "IO
+real usada" más abajo). Los packets de comando del manual no están en el
+DBC.
 
 > **Confirmado** (DTI CAN Tool + manual v2.5): Standard ID, Node ID = 1,
 > numeración de packets V2.5. CAN ID = `(Packet << 5) | 1`. Transmite
@@ -665,7 +682,7 @@ están en el DBC.
 3=DRV · 4=Overcurrent · 5=Ctrl OverTemp · 6=Motor OverTemp · 7=Sensor wire ·
 8=Sensor general · 9=CAN cmd error · 10=Analog input error.
 
-**Bits del 0x481** no usados en el DBC por defecto (digital IO del
+**Bits del 0x481** que están en el DBC pero **desmarcados en RaceStudio** (digital IO del
 inversor, confirmado sin cablear en el coche — ver IO digital/analógica
 real más abajo): `DigIn1-4`, `DigOut1-4` (byte 2), y los 11 bits de "límite
 activo" (`CapTempLim`...`PowerLim`, bytes 4-5) que dicen *por qué* el
@@ -674,22 +691,25 @@ primeros a recuperar.
 
 > **IO real usada:** 1 pin digital del inversor → señal de R2D (es
 > `INV_DriveEnable`, no uno de los `DigIn1-4` genéricos); 1 entrada analógica
-> → acelerador (es `INV_Throttle`). Por eso `DigIn1-4`/`DigOut1-4` están
-> fuera del DBC: no hay nada cableado a esos pines.
+> → acelerador (es `INV_Throttle`). Por eso `DigIn1-4`/`DigOut1-4` siguen
+> en el DBC pero no se marcan en RaceStudio: no hay nada cableado a esos
+> pines y así no gastan canales del límite de 120.
 >
 > **`INV_MaxDC_avail`** = corriente DC máx disponible tras las limitaciones
 > internas del inversor. Útil para cerrar el lazo del **derating** del BMS:
-> `CMD_SetMaxDCCurr`/`CMD_SetMaxDCBrake` (comandos del VCU al inversor,
-> packets 0x0A/0x0B) limitan descarga/carga; el BMS puede pedirlos según T/V
-> de celda y leer aquí lo que el inversor realmente aplica.
+> los packets 0x0A/0x0B del manual (`SetMaxDCCurr`/`SetMaxDCBrake`) limitan
+> descarga/carga. **Hoy nadie los envía**; si algún día la VCU o el BMS
+> limitan la corriente según T/V de celda, aquí se vería lo que el inversor
+> realmente aplica.
 
 ---
 
 ## 21. VCU (VCU_26) — telemetría que transmite
 
 Standard ID, Big Endian, 125 kbps. La VCU **solo transmite**, no recibe
-nada (los comandos hacia el inversor del §20 los manda ella, pero no hay
-bucle de vuelta).
+nada. Además de la telemetría de esta tabla manda la consigna de
+refrigeración a la PDM (0x300, §22), que no está en el DBC porque el AiM
+ya ve lo aplicado en el 0x301. Al inversor no le manda nada por CAN (§20).
 
 > Fuente: repo `VCU_26`, `src/Control.cpp` → `publishTelemetry()`.
 
@@ -713,6 +733,10 @@ bucle de vuelta).
 | 0x48E | VCU_AppsSt | 5 | 0=NORMAL 1=IMPL 2=PENDING |
 | 0x48E | VCU_BrakeFlt | 6 | freno desconectado/en corto → tumba el R2D |
 | 0x48E | VCU_Bypass   | 7 | ⚠ bypass de banco: R2D forzado sin enclavamientos |
+| 0x48D (1165) | VCU_WheelRpmL / R | 0-1 / 2-3 | RPM de cada rueda trasera (0,1 rpm), sensor Hall de 22 dientes |
+| 0x48D | VCU_WheelPulsesL / R | 4-5 / 6-7 | pulsos contados en la última ventana de 100 ms: un 0 con el coche rodando = sensor muerto |
+| 0x48F (1167) | VCU_SpeedL / R | 0-1 / 2-3 | velocidad de cada rueda (0,01 km/h), calculada con `WHEEL_DIAMETER_MM` |
+| 0x48F | VCU_SpeedAvg | 4-5 | media de las dos ruedas: la que va al display |
 
 **`VCU_FaultCause`** — el primero que aplica, en este orden:
 
@@ -735,8 +759,13 @@ bucle de vuelta).
 > incrementar con la VCU alimentada, el loop está colgado. Combínalo con
 > `VCU_ResetCause = 4` (IWDG) para detectar el ciclo cuelgue → reset.
 >
-> IDs VCU aún sin implementar en el firmware (no están en el DBC): 0x190,
-> 0x489/0x48A (fail codes), 0x48D (steer/ruedas), 0x48F (PWM).
+> **Velocidad de rueda (0x48D y 0x48F):** solo en el firmware de la VCU para
+> ESP32-S3 (`WHEEL_SPEED_ENABLED`); en la Nucleo sale a 0. Resolución ~2 km/h
+> por pulso con la ventana de 100 ms. Comparada con `INV ERPM` (rueda motriz
+> calculada desde el motor), sirve para ver patinamiento en aceleración.
+>
+> IDs VCU aún sin implementar en el firmware (no están en el DBC): 0x190 y
+> 0x489/0x48A (fail codes).
 
 ---
 
@@ -786,6 +815,13 @@ Pierburg CWA y los 2 ventiladores Delta según temperatura del inversor
 - **2026-10-15** — nuevo ID 18 (0x12): corriente del Hall y tensión del pack
   medidas por el BMS, para tener la potencia de batería independiente del
   inversor (§10b).
+- **2026-10-23** — velocidad de rueda de la VCU: 0x48D (RPM y pulsos por
+  rueda) y 0x48F (km/h por rueda y media), §21.
+- **2026-10-24** — repaso contra DBC y firmware: ventanas de debounce
+  (V/T 1000 ms, comms 6000 ms), umbral real del Hall_OverI (±500 A),
+  State_CanOk, refresco con 10 módulos, bits IO del 0x481 (sí están en el
+  DBC), la VCU no manda comandos al inversor, short names IPCK/VPCK.
+- **2026-10-24** — NTC 1 del board 8 (IDmod 4, T1) excluido de los fallos (§15).
 
 Si cambia alguna trama, actualiza primero `docs/BMS_MART.dbc` (y
 valídalo con `cantools`) y luego este doc — nunca al revés.

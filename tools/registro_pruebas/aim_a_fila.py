@@ -73,7 +73,8 @@ CABECERA = [
     "Enlace Telemetria",
 ]
 FIRST_FAULT = {0: "0 ninguno", 1: "1 V", 2: "2 T", 3: "3 NTC", 4: "4 Comm", 5: "5 Hall", 6: "6 NoInit"}
-BITS_IGNORADOS = ("INV DrvEnLim", "INV VinLim")   # se activan solos al habilitar / al apagar
+BITS_IGNORADOS = ("INV DrvEnLim", "INV VinLim")   # se activan solos al habilitar / al apagar:
+                                                  # solo cuentan si saltan con el coche rodando
 
 avisos = []
 
@@ -337,11 +338,17 @@ def calcular(s, plan):
     gps = s.canal("GPS Speed")
     if dist and vmax(dist) and vmax(dist) > 10:
         fila["Metros totales"] = vmax(dist) - (vmin(dist) or 0)
+    elif gps and vmax(gps) and vmax(gps) > 2:
+        fila["Metros totales"] = sum(gps[i] for i in range(N) if ok(gps[i])) / 3.6 * dt
     else:
         fila["Metros totales"] = sum(rueda[i] for i in range(N) if hv[i]) * dt
         aviso("Metros totales calculados con la velocidad de rueda (sin GPS).")
+    vcu_kmh = s.canal("VCU SpeedAvg")
     if gps and vmax(gps) and vmax(gps) > 2:
         fila["Velocidad max (km/h)"] = vmax(gps)
+    elif vcu_kmh and vmax(vcu_kmh) and vmax(vcu_kmh) > 2:
+        fila["Velocidad max (km/h)"] = vmax(vcu_kmh)
+        aviso("Velocidad máxima tomada de la velocidad de rueda de la VCU (sin GPS).")
     else:
         fila["Velocidad max (km/h)"] = max(rueda) * 3.6
         aviso("Velocidad máxima calculada con la velocidad de rueda (sin GPS).")
@@ -375,10 +382,23 @@ def calcular(s, plan):
 
     bits = []
     for n in s.nombres:
-        if n.startswith("INV ") and n.endswith("Lim") and n not in BITS_IGNORADOS:
-            v = s.canal(n)
+        if not (n.startswith("INV ") and n.endswith("Lim")):
+            continue
+        v = s.canal(n)
+        if n not in BITS_IGNORADOS:
             if any(hv[i] and ok(v[i]) and v[i] > 0.5 for i in range(N)):
                 bits.append(n[4:])
+            continue
+        # Rodando, un DrvEnLim/VinLim es un corte de par real: contar cuántas veces salta.
+        veces, antes = 0, False
+        for i in range(N):
+            ahora = moviendo[i] and ok(v[i]) and v[i] > 0.5
+            if ahora and not antes:
+                veces += 1
+            antes = ahora
+        if veces:
+            bits.append(f"{n[4:]} rodando x{veces}")
+            aviso(f"{n[4:]} saltó {veces} veces con el coche rodando: el inversor cortó par.")
     fila["Bits de límite del inversor activados"] = ", ".join(bits) if bits else "ninguno"
 
     vcu = None
@@ -443,7 +463,10 @@ def calcular(s, plan):
     res["criterios"] = [
         ("Motor < 80 °C", t_mot is not None and t_mot < CRIT_MOTOR_MAX_C, t_mot),
         ("Motor subiendo < 1 °C/min al final", pendiente is not None and pendiente < CRIT_PENDIENTE_C_MIN, pendiente),
-        ("Sin bits de límite térmico", not bits, ", ".join(bits) or "ninguno"),
+        ("Sin bits de límite térmico", not [b for b in bits if "Temp" in b],
+         ", ".join(b for b in bits if "Temp" in b) or "ninguno"),
+        ("Sin cortes de par rodando", not [b for b in bits if "rodando" in b],
+         ", ".join(b for b in bits if "rodando" in b) or "ninguno"),
         ("REC < 128", fila["REC max (errores CAN AiM)"] is not None and fila["REC max (errores CAN AiM)"] < CRIT_REC_MAX,
          fila["REC max (errores CAN AiM)"]),
         ("VCU viva", vcu == "sí", vcu),

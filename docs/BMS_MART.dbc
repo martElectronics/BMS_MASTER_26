@@ -246,6 +246,12 @@ BO_ 1164 VCU_Brake: 8 VCU
  SG_ Brake1_raw : 39|16@0+ (1,0) [0|65535] "ADC" AIM
  SG_ Brake2_raw : 55|16@0+ (1,0) [0|65535] "ADC" AIM
 
+BO_ 1165 VCU_WheelSpeed: 8 VCU
+ SG_ VCU_WheelRpmL : 7|16@0+ (0.1,0) [0|6553.5] "rpm" AIM
+ SG_ VCU_WheelRpmR : 23|16@0+ (0.1,0) [0|6553.5] "rpm" AIM
+ SG_ VCU_WheelPulsesL : 39|16@0+ (1,0) [0|65535] "" AIM
+ SG_ VCU_WheelPulsesR : 55|16@0+ (1,0) [0|65535] "" AIM
+
 BO_ 1166 VCU_Signals: 8 VCU
  SG_ VCU_Vbat : 7|16@0+ (1,0) [0|65535] "" AIM
  SG_ VCU_SDC : 23|8@0+ (1,0) [0|1] "" AIM
@@ -254,6 +260,11 @@ BO_ 1166 VCU_Signals: 8 VCU
  SG_ VCU_AppsSt : 47|8@0+ (1,0) [0|2] "" AIM
  SG_ VCU_BrakeFlt : 55|8@0+ (1,0) [0|1] "" AIM
  SG_ VCU_Bypass : 63|8@0+ (1,0) [0|1] "" AIM
+
+BO_ 1167 VCU_VehicleSpeed: 8 VCU
+ SG_ VCU_SpeedL : 7|16@0+ (0.01,0) [0|655.35] "km/h" AIM
+ SG_ VCU_SpeedR : 23|16@0+ (0.01,0) [0|655.35] "km/h" AIM
+ SG_ VCU_SpeedAvg : 39|16@0+ (0.01,0) [0|655.35] "km/h" AIM
 
 BO_ 769 PDM_Status: 8 PDM
  SG_ PDM_Mode : 7|8@0+ (1,0) [0|2] "" AIM
@@ -292,6 +303,9 @@ VAL_ 993 INV_ControlMode 0 "unused" 1 "SPEED" 2 "CURRENT" 3 "CURRENT_BRAKE" 4 "P
 VAL_ 1089 INV_FaultCode 0 "OK" 1 "Overvoltage" 2 "Undervoltage" 3 "DRV" 4 "Overcurrent" 5 "CtrlOverTemp" 6 "MotorOverTemp" 7 "SensorWire" 8 "SensorGeneral" 9 "CANcmdError" 10 "AnalogInput" ;
 
 CM_ BO_ 1160 "VCU_26, src/Control.cpp publishTelemetry() (rev 2026-08-10). Bytes4-7 reservados a 0.";
+CM_ BO_ 1165 "Velocidad de rueda (VCU_26, sensores Hall SNDH-H3L-G01, 22 dientes, ventana 100 ms). Pulsos = de la ultima ventana: sirven para ver un sensor muerto o con ruido.";
+CM_ BO_ 1167 "Velocidad del coche calculada por la VCU con WHEEL_DIAMETER_MM a partir de las RPM de rueda (ID 1165).";
+CM_ SG_ 1167 VCU_SpeedAvg "Media de rueda izquierda y derecha. Es la que vale para el display.";
 CM_ BO_ 1166 "Señales de estado de la VCU. VCU_Bypass=1 es el bypass de banco (opcion 21 del menu serie): par habilitado saltandose SDC/secuencia/freno/APPS. No deberia verse nunca en pista -> alarma en dashboard.";
 CM_ SG_ 1160 VCU_FaultCause "Causa de no-R2D, primera que aplica: 0=OK 1=esperando start+freno 2=SDC abierto 3=APPS implausible 6=freno desconectado/corto 7=BYPASS DE BANCO ACTIVO (prioridad sobre todos). 4 y 5 no existen en VCU_26.";
 CM_ SG_ 1160 VCU_ResetCause "0=desconocido 1=power/BOR 2=NRST 3=SW 4=IWDG 5=WWDG 6=lowpwr.";

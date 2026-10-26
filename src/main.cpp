@@ -128,7 +128,7 @@ static TelemetryDashboard dash(Serial, bms, hall, soc, fan, dashCfg);
 #define CELL_OT_C     60.0f     ///< Overtemperature (°C) — EV5.8.4: ≤60
 
 // Debounce por normativa FS EV5.8
-#define FAULT_V_MS     1000UL    ///< V debe persistir ≥500 ms
+#define FAULT_V_MS     1000UL    ///< V debe persistir ≥1000 ms
 #define FAULT_T_MS    1000UL    ///< T debe persistir ≥1000 ms
 #define FAULT_NTC_MS  1000UL    ///< NTC abierto (pérdida de medida, clase T)
 // COMM/INIT: ventanas "medias" (2-3 s) para tolerar glitches de ruido del BQ
