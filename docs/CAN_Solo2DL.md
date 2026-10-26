@@ -577,6 +577,54 @@ Byte 7: reservado (0)
 
 ---
 
+## 17b. IDs 393-396 — Pack entero empaquetado · paginado 100 ms — *endurance*
+
+**Para qué:** grabar en el AiM la tensión de los **110 paralelos** y la
+temperatura de los **90 NTC** con solo **10 canales** (el Solo 2 DL tiene un
+límite de 120). Cada canal lleva varios valores juntos, así que **en
+RaceStudio y en el display no tienen sentido**: hay que pasar el CSV por
+`tools/registro_pruebas/aim_a_modulos.py` (o `convertir_modulos.bat`).
+
+Un módulo por página de 100 ms → **cada paralelo y cada NTC se refresca
+cada ~1 s**. Para los picos rápidos (la celda mínima en una aceleración)
+siguen estando `BMS_MinV`/`BMS_MaxV` (ID 11), mucho más rápidos.
+
+**Códigos:**
+- Temperatura: 6 bits, 1 °C, de 0 a 62 °C (recorta por debajo de 0). **63 = NTC abierto o inválido.**
+- Tensión: 10 bits, `V = 2,500 + 0,002 × código` → de 2,500 a 4,544 V. **1023 = inválido.**
+- IDmod: 4 bits, empieza en 0 (IDmod 4 = M05 por serie). Va **repetido en cada canal** para que el script descarte una fila que mezcle páginas.
+
+Bits de cada canal, del más alto al más bajo (todos sin signo, Big Endian):
+
+| ID | Canal | Bits | Contenido |
+|---|---|---|---|
+| 393 (0x189) | BMS_PkT_A | 24 | IDmod(4) · T1(6) · T2(6) · T3(6) · 0(2) |
+| 393 | BMS_PkT_B | 24 | T4 · T5 · T6 · T7 (6 cada una) |
+| 393 | BMS_PkT_C | 16 | T8(6) · T9(6) · IDmod(4) |
+| 394 (0x18A) | BMS_PkV1_A | 24 | IDmod(4) · V1(10) · V2(10) |
+| 394 | BMS_PkV1_B | 24 | IDmod(4) · V3(10) · V4(10) |
+| 394 | BMS_PkV1_C | 16 | V5(10) · IDmod(4) · 0(2) |
+| 395 (0x18B) | BMS_PkV2_A/B/C | 24/24/16 | igual que 394 con V6..V10 |
+| 396 (0x18C) | BMS_PkV3_A | 24 | IDmod(4) · V11(10) · 0(10) |
+
+**Configuración en RaceStudio (imprescindible):**
+1. Los 10 canales con **Number of Bits** 24 o 16 según la tabla, **Unsigned**, sin escala (Gain 1).
+2. **Stepped Values marcado** en los 10. Si el AiM interpola, el valor empaquetado no vale (el script avisa de cuántas filas descarta).
+3. **Max. Frequency 20 Hz**, para no saltarse páginas.
+
+**Validar antes de usarlo (una vez, en banco):** el comando **`P`** por serie
+hace que el BMS mande un patrón conocido en vez de las medidas. Graba unos
+segundos, exporta el CSV y pásalo con `--patron`: tiene que decir que
+coinciden todos y que ve los 10 módulos. Vuelve a pulsar `P` para quitarlo
+(un reset también lo quita).
+
+> El AiM guarda los canales en coma flotante de 32 bits: los enteros son
+> exactos hasta 2^24, por eso ningún canal pasa de 24 bits. El formato está
+> duplicado en `src/main.cpp` (`codeT`/`codeV`/`patT`/`patV`) y en el
+> script: si se cambia uno, cambiar el otro.
+
+---
+
 ## 18. Convención de naming
 
 Dos sistemas en paralelo: **nombre largo** (descriptivo, el que ya trae el
@@ -822,6 +870,8 @@ Pierburg CWA y los 2 ventiladores Delta según temperatura del inversor
   State_CanOk, refresco con 10 módulos, bits IO del 0x481 (sí están en el
   DBC), la VCU no manda comandos al inversor, short names IPCK/VPCK.
 - **2026-10-24** — NTC 1 del board 8 (IDmod 4, T1) excluido de los fallos (§15).
+- **2026-10-27** — (rama `endurance-telemetria`) IDs 393-396: pack entero
+  empaquetado en 10 canales para el AiM, con su script de conversión (§17b).
 
 Si cambia alguna trama, actualiza primero `docs/BMS_MART.dbc` (y
 valídalo con `cantools`) y luego este doc — nunca al revés.

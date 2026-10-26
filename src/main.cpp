@@ -88,6 +88,7 @@ SocEstimator soc;   // SOC: coulomb counting + OCV (ver SocEstimator.h)
 
 FanController fan(PIN_PWM);   // ventiladores (ver FanController.h)
 static bool   fanForceMax = false;   ///< comando 'F': fuerza ventiladores al 100 % (test)
+static bool   packPattern = false;   ///< comando 'P': 393-396 mandan un patrón conocido (validar el AiM)
 
 // NUM_MODULES derivado del driver: 2 boards por módulo. Se auto-adapta a
 // TOTALBOARDS (20 banco / 24 pack completo).
@@ -156,6 +157,12 @@ static TelemetryDashboard dash(Serial, bms, hall, soc, fan, dashCfg);
 #define COMM_REINIT_MS 500UL    ///< Cuándo intentar reconectar el BQ (agresivo)
 #define FAULT_COMM_MS 6000UL    ///< Cuándo BMS_OK cae por comms (conservador)
 #define FAULT_INIT_MS 200UL    ///< Init BQ fallido persistente (antes: inmediato)
+
+// Telemetría EMPAQUETADA de todo el pack (IDs 393-396): un módulo por página.
+// PACK_TX_MS < PACK_PAGE_MS para que cada página salga al menos una vez (alguna
+// sale dos: inofensivo, el decodificador se queda con la última).
+#define PACK_PAGE_MS  100UL    ///< cambio de módulo → pack entero cada ~1 s
+#define PACK_TX_MS     90UL    ///< periodo de envío de 393-396
 
 // Cadencias de muestreo: 2× respecto al mínimo FS para tener ≥2 muestras
 // dentro de cada ventana de debounce → mejor filtrado de ruido transitorio.
@@ -419,6 +426,8 @@ void setup()
         gCan->setPacketTimer(13, 500);             // ID 13 diagnóstico
         gCan->setPacketTimer(14, 500);             // ID 14 tiempos/contadores de comms
         gCan->setPacketTimer(15, 100);             // ID 15 BMS_DEBUG: 100 ms (era 500 → un episodio corto caia entre tramas)
+        for (uint32_t id = 393; id <= 396; id++)   // pack empaquetado (ver PACK_PAGE_MS)
+            gCan->setPacketTimer(id, PACK_TX_MS);
         Serial.println(F("[CAN] FDCAN listo (125k, IDs 11-18, 386-392)."));
     }
 
@@ -433,7 +442,7 @@ void setup()
         if (logger.isNoiseLogArmed()) tNoiseLog = millis();
     }
 
-    Serial.println(F("Cmd: v t a s f c i r  F=fans100%  S=dormir BQ  L=armar/parar log ruido  d=dump log  D=clear log  C=clear cnt  m=ansi  j=json"));
+    Serial.println(F("Cmd: v t a s f c i r  F=fans100%  P=patron 393-396  S=dormir BQ  L=armar/parar log ruido  d=dump log  D=clear log  C=clear cnt  m=ansi  j=json"));
 
     // Arrancar el watchdog AL FINAL (tras el init/calibración acotados).
     // Una vez iniciado NO se puede parar (es independiente por HW).
@@ -880,6 +889,29 @@ static bool modNtcIgnored(int m, int k)   // k = 1..9 → ver NTC_IGNORED
 static uint16_t mv16(float v) { return (v > 0.0f) ? (uint16_t)lroundf(v * 1000.0f) : 0; }
 static uint8_t  t8(float t)   { return (uint8_t)(int8_t)lroundf(t); }
 
+// Códigos de la telemetría empaquetada (393-396). Mantener igual que
+// tools/registro_pruebas/aim_a_modulos.py.
+//   T: 6 bits, 1 °C, 0..62 °C (recorta); 63 = NTC abierto/inválido.
+//   V: 10 bits, 2 mV desde 2.500 V → 2.500..4.544 V; 1023 = inválido.
+static uint32_t codeT(float t)
+{
+    if (!(t > BQ_NTC_TMIN_C && t < BQ_NTC_TMAX_C)) return 63;
+    long c = lroundf(t);
+    return (uint32_t)(c < 0 ? 0 : (c > 62 ? 62 : c));
+}
+static uint32_t codeV(float v)
+{
+    if (!(v > 0.0f)) return 1023;
+    long c = lroundf((v - 2.5f) / 0.002f);
+    return (uint32_t)(c < 0 ? 0 : (c > 1022 ? 1022 : c));
+}
+// Patrón del comando 'P': valores deterministas por módulo/canal para
+// comprobar en banco que el AiM los graba sin perder bits (--patron del script).
+static uint32_t patT(int m, int k) { return (uint32_t)((m * 9 + k * 5) % 63); }
+static uint32_t patV(int m, int n) { return (uint32_t)((m * 97 + n * 31) % 1023); }
+static void put24(uint8_t* b, uint32_t v) { b[0] = v >> 16; b[1] = v >> 8; b[2] = v; }
+static void put16(uint8_t* b, uint32_t v) { b[0] = v >> 8;  b[1] = v; }
+
 // ============================================================================
 //  Helpers debug (compartidos por CAN ID 15 y por el FaultLogger en FRAM)
 // ============================================================================
@@ -1247,6 +1279,48 @@ void updateCanTx()
         gCan->setPacket((uint32_t)391, d391, 8);
     }
 
+    // ── IDs 393-396 — paralelos y NTC de TODO el pack, empaquetados ─────────
+    // Para que el AiM (límite de 120 canales) grabe los 110 paralelos y los 90
+    // NTC con solo 10 canales: varios valores por canal, campos de ≤24 bits
+    // (el AiM guarda en float32: entero exacto hasta 2^24). Un módulo por
+    // página. IDmod va repetido en cada canal para que el decodificador
+    // descarte una fila con canales de páginas distintas. Formato en
+    // docs/CAN_Solo2DL.md §17b; lo deshace tools/registro_pruebas/aim_a_modulos.py.
+    {
+        static uint8_t       pMod  = 0;
+        static unsigned long tpMod = 0;
+        if (millis() - tpMod >= PACK_PAGE_MS) {
+            tpMod = millis();
+            pMod  = (pMod + 1) % (uint8_t)NUM_MODULES;
+        }
+        const int      m  = pMod;
+        const uint32_t id = (uint32_t)m & 0xF;
+        uint32_t T[10], V[12];                       // índices 1..9 / 1..11
+        for (int k = 1; k <= 9;  k++) T[k] = packPattern ? patT(m, k) : codeT(modCellT(m, k));
+        for (int n = 1; n <= 11; n++) V[n] = packPattern ? patV(m, n) : codeV(modCellV(m, n));
+
+        // 393: A = IDmod·T1·T2·T3 (4+6+6+6, 2 a 0) | B = T4·T5·T6·T7 | C = T8·T9·IDmod
+        uint8_t d393[8];
+        put24(d393 + 0, id << 20 | T[1] << 14 | T[2] << 8 | T[3] << 2);
+        put24(d393 + 3, T[4] << 18 | T[5] << 12 | T[6] << 6 | T[7]);
+        put16(d393 + 6, T[8] << 10 | T[9] << 4 | id);
+        gCan->setPacket((uint32_t)393, d393, 8);
+
+        // 394/395: A = IDmod·Va·Vb | B = IDmod·Vc·Vd | C = Ve·IDmod (10+4, 2 a 0)
+        for (int f = 0; f < 2; f++) {
+            const uint32_t* v = &V[1 + 5 * f];       // V1..V5 / V6..V10
+            uint8_t d[8];
+            put24(d + 0, id << 20 | v[0] << 10 | v[1]);
+            put24(d + 3, id << 20 | v[2] << 10 | v[3]);
+            put16(d + 6, v[4] << 6 | id << 2);
+            gCan->setPacket((uint32_t)(394 + f), d, 8);
+        }
+        // 396: A = IDmod·V11 (4+10, 10 a 0)
+        uint8_t d396[3];
+        put24(d396, id << 20 | V[11] << 10);
+        gCan->setPacket((uint32_t)396, d396, 3);
+    }
+
     gCan->send();   // emite solo los vencidos según setPacketTimer
 }
 
@@ -1413,6 +1487,11 @@ void handleSerial()
         }
         break;
     }
+
+    case 'P':
+        packPattern = !packPattern;
+        Serial.printf("[PACK] patron de prueba en 393-396 = %s\n", packPattern ? "ON" : "OFF");
+        break;
 
     case 'F':
         fanForceMax = !fanForceMax;

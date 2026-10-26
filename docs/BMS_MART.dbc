@@ -168,6 +168,24 @@ BO_ 391 BMS_ModT2: 8 BMS
 BO_ 392 BMS_SOC: 8 BMS
  SG_ BMS_SOC : 7|8@0+ (1,0) [0|100] "%" AIM
 
+BO_ 393 BMS_PackT: 8 BMS
+ SG_ BMS_PkT_A : 7|24@0+ (1,0) [0|16777215] "" AIM
+ SG_ BMS_PkT_B : 31|24@0+ (1,0) [0|16777215] "" AIM
+ SG_ BMS_PkT_C : 55|16@0+ (1,0) [0|65535] "" AIM
+
+BO_ 394 BMS_PackV1: 8 BMS
+ SG_ BMS_PkV1_A : 7|24@0+ (1,0) [0|16777215] "" AIM
+ SG_ BMS_PkV1_B : 31|24@0+ (1,0) [0|16777215] "" AIM
+ SG_ BMS_PkV1_C : 55|16@0+ (1,0) [0|65535] "" AIM
+
+BO_ 395 BMS_PackV2: 8 BMS
+ SG_ BMS_PkV2_A : 7|24@0+ (1,0) [0|16777215] "" AIM
+ SG_ BMS_PkV2_B : 31|24@0+ (1,0) [0|16777215] "" AIM
+ SG_ BMS_PkV2_C : 55|16@0+ (1,0) [0|65535] "" AIM
+
+BO_ 396 BMS_PackV3: 8 BMS
+ SG_ BMS_PkV3_A : 7|24@0+ (1,0) [0|16777215] "" AIM
+
 BO_ 993 INV_CtrlData: 8 INV
  SG_ INV_ControlMode : 7|8@0+ (1,0) [0|7] "" AIM
  SG_ INV_TargetIq : 15|16@0- (0.1,0) [-850|850] "A" AIM
@@ -273,6 +291,10 @@ BO_ 769 PDM_Status: 8 PDM
  SG_ PDM_Failsafe : 24|1@0+ (1,0) [0|1] "" AIM
  SG_ PDM_SafetyFloor : 25|1@0+ (1,0) [0|1] "" AIM
 
+CM_ BO_ 393 "Temperaturas de los 9 NTC de un modulo, EMPAQUETADAS (rama endurance-telemetria). Un modulo por pagina de 100 ms. NO tiene sentido en directo: decodificar el CSV con tools/registro_pruebas/aim_a_modulos.py. En RaceStudio: Stepped Values y 20 Hz. Formato en CAN_Solo2DL.md seccion 17b.";
+CM_ BO_ 394 "Tensiones V1..V5 de un modulo, EMPAQUETADAS. Ver BO_ 393.";
+CM_ BO_ 395 "Tensiones V6..V10 de un modulo, EMPAQUETADAS. Ver BO_ 393.";
+CM_ BO_ 396 "Tension V11 de un modulo, EMPAQUETADA. Ver BO_ 393.";
 CM_ BO_ 14 "Ultimo episodio (ID 0x0E, 500ms). BMS_RetryNet sustituye desde 2026-10-10 al antiguo numTriesReset duplicado: signo = causa del ultimo ciclo (+COMM/-CRC), magnitud = reintentos.";
 CM_ BO_ 15 "BMS_DEBUG (ID 0x0F, 100ms) - el frame clave para diagnosticar caidas de BMS_OK en pista. Ver docs/CAN_Solo2DL.md #8.";
 CM_ SG_ 14 BMS_RetryNet "Short AiM: RTRN. +N = N reintentos por COMM (board mudo) en el ultimo ciclo V+T. -N = N reintentos por CRC (dato corrupto). 0 = ciclo limpio. Ver docs/inmunidad_ruido.md #3.3.";
