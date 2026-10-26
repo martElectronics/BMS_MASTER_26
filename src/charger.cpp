@@ -925,6 +925,7 @@ void printTFaultDetail()
 {
     for (uint8_t b = 0; b < TOTALBOARDS; b++)
         for (uint8_t c = 0; c < NTCS_PER_BOARD[b % 2]; c++) {
+            if (bqNtcIgnored(b, c)) continue;          // excluido de fallos
             float t = bms.getTemperature(b, c);
             if (t <= BQ_NTC_OPEN_C) continue;          // abierto -> lo cubre fNtc
             bool ot = (t >= CELL_TMAX_CHG_C);
@@ -941,7 +942,7 @@ void printNtcFaultDetail()
 {
     for (uint8_t b = 0; b < TOTALBOARDS; b++)
         for (uint8_t c = 0; c < NTCS_PER_BOARD[b % 2]; c++)
-            if (bms.getTemperature(b, c) <= BQ_NTC_OPEN_C)
+            if (!bqNtcIgnored(b, c) && bms.getTemperature(b, c) <= BQ_NTC_OPEN_C)
                 Serial.printf("   Modulo M%02u NTC %u: abierto/invalido\n",
                               b / 2 + 1, (b % 2 == 0) ? c + 1 : c + 7);
 }

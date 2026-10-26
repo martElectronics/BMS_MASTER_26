@@ -753,6 +753,7 @@ void BQ79606::_updateTempStats()
     _ntcOpenCell  = -1;
     for (uint8_t b = 0; b < TOTALBOARDS; b++) {
         for (uint8_t c = 0; c < NTCS_PER_BOARD[b % 2]; c++) {
+            if (bqNtcIgnored(b, c)) continue;   // excluido de fallos (NTC_IGNORED)
             float t = _temps[b][c];
             // NTC configurado pero abierto/inválido: NO entra en min/max
             // (evitaría un falso UT/OT con un número basura) y se contabiliza
@@ -1052,6 +1053,8 @@ void BQ79606::_initDevices()
     for (uint8_t b = 0; b < TOTALBOARDS; b++) {
         uint8_t ntcs    = NTCS_PER_BOARD[b % 2];        // GPIOs con NTC: 0..ntcs-1
         uint8_t otutMsk = (1u << ntcs) - 1u;        // máscara de bits 0..(ntcs-1)
+        for (uint8_t g = 0; g < ntcs; g++)          // NTC_IGNORED fuera del comparador HW
+            if (bqNtcIgnored(b, g)) otutMsk &= (uint8_t)~(1u << g);
         for (uint8_t g = 0; g < 6; g++) {
             uint8_t cfg = (g < ntcs) ? 0x20 : 0x00; // 0x20=analógico, 0x00=digital
             writeReg(b, GPIO1_CONF + g, cfg, 1, FRMWRT_SGL_NR);

@@ -841,6 +841,10 @@ static float modCellT(int m, int k)   // k = 1..9
     int ev = 2 * m, od = 2 * m + 1;
     return (k <= 6) ? bms.getTemperature(ev, k - 1) : bms.getTemperature(od, k - 7);
 }
+static bool modNtcIgnored(int m, int k)   // k = 1..9 → ver NTC_IGNORED
+{
+    return (k <= 6) ? bqNtcIgnored(2 * m, k - 1) : bqNtcIgnored(2 * m + 1, k - 7);
+}
 static uint16_t mv16(float v) { return (v > 0.0f) ? (uint16_t)lroundf(v * 1000.0f) : 0; }
 static uint8_t  t8(float t)   { return (uint8_t)(int8_t)lroundf(t); }
 
@@ -1012,6 +1016,7 @@ void updateCanTx()
         }
         bool tFail = false;
         for (int k = 1; k <= 9; k++) {
+            if (modNtcIgnored(m, k)) continue;
             float t = modCellT(m, k);
             if (t > CELL_OT_C || t < CELL_UT_C) { tFail = true; break; }
         }
@@ -1187,6 +1192,7 @@ void updateCanTx()
 
         float tmx = -300.0f, tmn = 300.0f;
         for (int k = 1; k <= 9; k++) {
+            if (modNtcIgnored(m, k)) continue;
             float t = modCellT(m, k);
             if (t > tmx) tmx = t;
             if (t < tmn) tmn = t;

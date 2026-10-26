@@ -85,6 +85,26 @@
  */
 static constexpr uint8_t NTCS_PER_BOARD[2] = { 6, 3 };  ///< Indexar con [b % 2]
 
+/**
+ * NTCs excluidos de los fallos. Se siguen leyendo y mandando por CAN
+ * (Mod_T*), pero NO entran en _tMin/_tMax ni en el conteo de abiertos →
+ * no disparan OT/UT/NTC ni los flags de fallo por módulo. Tampoco entran
+ * en el comparador OT/UT hardware del BQ (OTUT_CTRL). Mantener igual que en
+ * BMS_BALANCER_26.
+ * {board, canal 0-based}: board par = 2·IDmod (T1..T6 → canal 0..5),
+ * board impar = 2·IDmod+1 (T7..T9 → canal 0..2). IDmod empieza en 0.
+ */
+struct BQNtcRef { uint8_t board; uint8_t ntc; };
+static constexpr BQNtcRef NTC_IGNORED[] = {
+    { 8, 0 },    ///< board 8 NTC 1 = IDmod 4 (M05 por serie), T1 — excluido 2026-10-24
+};
+inline bool bqNtcIgnored(uint8_t board, uint8_t ntc)
+{
+    for (const BQNtcRef& r : NTC_IGNORED)
+        if (r.board == board && r.ntc == ntc) return true;
+    return false;
+}
+
 // Centinelas y rango físico plausible de un NTC del pack. Una lectura fuera
 // de [BQ_NTC_TMIN_C, BQ_NTC_TMAX_C], NaN/inf, o raw==0x8000 (diagnóstico ADC)
 // se marca como NTC abierto/inválido y NO entra en _tMin/_tMax.
