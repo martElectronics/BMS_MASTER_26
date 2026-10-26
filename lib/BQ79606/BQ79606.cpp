@@ -113,18 +113,18 @@ bool BQ79606::begin(bool keepBmsOk)
 
     // Abrir UART
     _uart.begin(_cfg.baudrate);
-    delay(20);
+    _wait(20);
 
     bool ok = false;
     for (uint8_t attempt = 0; attempt < _maxAttempts && !ok; attempt++) {
         { char _b[128]; snprintf(_b, sizeof(_b), "  AutoAddress intento %d/%d\n", attempt + 1, _maxAttempts); Serial.print(_b); }
 
         _wakeUp();
-        delay(200);
+        _wait(200);
         _commReset(_cfg.baudrate);
-        delay(200);
+        _wait(200);
         ok = _autoAddress();
-        delay(200);
+        _wait(200);
     }
 
     if (!ok) {
@@ -141,7 +141,7 @@ bool BQ79606::begin(bool keepBmsOk)
     // ADC/OVUV activos: cualquier fault real se vuelve a latchear en el
     // siguiente ciclo de ADC y queda visible via getFaultStatus().
     // No se enmascara seguridad: solo se elimina el ruido de arranque.
-    delay(5);
+    _wait(5);
     clearAllFaults();
 
     _initialized = true;
@@ -158,7 +158,7 @@ bool BQ79606::reInit(bool keepBmsOk)
     _initialized  = false;
     _balHwRunning = false;  // el HW se va a resetear — flag siempre a false
     _uart.end();
-    delay(10);
+    _wait(10);
     return begin(keepBmsOk);
 }
 
@@ -880,7 +880,23 @@ void BQ79606::_wakeUp()
     digitalWrite(BQ_DPIN(_cfg.pinWake), LOW);
     delayMicroseconds(300);
     digitalWrite(BQ_DPIN(_cfg.pinWake), HIGH);
-    delay(12 * TOTALBOARDS);
+    _wait(12 * TOTALBOARDS);
+}
+
+// Espera de AL MENOS ms llamando a _waitHook cada ~5 ms. Solo para las esperas
+// del arranque que son "como mínimo X ms" (propagación del WAKE, asentamiento
+// tras comm-reset/autoaddress): el hook las alarga unos cientos de µs, nunca
+// las acorta. Las esperas cortas entre bytes (delayMicroseconds) no pasan por
+// aquí: esas sí tienen tiempos estrictos.
+void BQ79606::_wait(uint32_t ms)
+{
+    if (!_waitHook) { delay(ms); return; }
+    const uint32_t t0 = millis();
+    while (millis() - t0 < ms) {
+        _waitHook();
+        const uint32_t el = millis() - t0;
+        if (el < ms) delay((ms - el) < 5 ? (ms - el) : 5);
+    }
 }
 
 void BQ79606::_commClear()
@@ -916,7 +932,7 @@ void BQ79606::_commReset(int baud)
     digitalWrite(BQ_DPIN(_cfg.pinTx), HIGH);
 
     _uart.begin(250000);
-    delay(10);
+    _wait(10);
 
     const int delayUs = 10000;
     uint16_t commCtrlVal = 0x3C3C; // default 1M
@@ -946,9 +962,9 @@ bool BQ79606::_autoAddress()
     byte resp[(MAXBYTES + 6) * TOTALBOARDS];
     memset(resp, 0, sizeof(resp));
 
-    writeReg(0, ECC_TEST, 0x00, 1, FRMWRT_ALL_NR); delay(5);
-    writeReg(0, CONFIG,   0x00, 1, FRMWRT_ALL_NR); delay(5);
-    writeReg(0, CONTROL1, 0x01, 1, FRMWRT_ALL_NR); delay(5);
+    writeReg(0, ECC_TEST, 0x00, 1, FRMWRT_ALL_NR); _wait(5);
+    writeReg(0, CONFIG,   0x00, 1, FRMWRT_ALL_NR); _wait(5);
+    writeReg(0, CONTROL1, 0x01, 1, FRMWRT_ALL_NR); _wait(5);
 
     for (_nCurrentBoard = 0; _nCurrentBoard < TOTALBOARDS; _nCurrentBoard++) {
         writeReg(_nCurrentBoard, DEVADD_USR, _nCurrentBoard, 1, FRMWRT_ALL_NR);
@@ -972,7 +988,7 @@ bool BQ79606::_autoAddress()
             Serial.print(F("  Board ")); Serial.print(_nCurrentBoard);
             Serial.println(F(" -> ERROR comm"));
             ok = false;
-            delay(10);
+            _wait(10);
             continue;
         }
 
@@ -980,7 +996,7 @@ bool BQ79606::_autoAddress()
             Serial.print(F("  Board ")); Serial.print(_nCurrentBoard);
             Serial.println(F(" -> ERROR CRC"));
             ok = false;
-            delay(10);
+            _wait(10);
             continue;
         }
 
@@ -989,7 +1005,7 @@ bool BQ79606::_autoAddress()
         Serial.print(F(" -> esperado ")); Serial.print(_nCurrentBoard);
         Serial.print(F(", recibido ")); Serial.println(received);
         if (received != _nCurrentBoard) ok = false;
-        delay(10);
+        _wait(10);
     }
     Serial.println(F("--------------------------------"));
     return ok;

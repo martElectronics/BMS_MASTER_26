@@ -1019,6 +1019,17 @@ public:
      */
     void setMaxAttempts(uint8_t n) { _maxAttempts = n; }
 
+    /**
+     * @brief Función que se llama durante las esperas largas de begin()/reInit()
+     *        (WAKE, comm-reset, autoaddress), cada ~5 ms. Sirve para que la
+     *        aplicación siga mandando CAN y alimentando el watchdog mientras el
+     *        reInit bloquea.
+     * ⚠ NO puede tocar el UART de los BQ (readVoltages, getFaultStatus...): se
+     *   ejecuta a mitad de la secuencia de autoaddress. Solo getters y CAN.
+     * @param hook  nullptr para desactivarla (las esperas vuelven a ser delay()).
+     */
+    void setWaitHook(void (*hook)()) { _waitHook = hook; }
+
 
 private:
 
@@ -1045,6 +1056,7 @@ private:
     bool    _initialized  = false; ///< true tras un begin() o reInit() exitoso
     bool    _balHwRunning = false; ///< true mientras BAL_GO esté activo (CONTROL2 bit5)
     uint8_t _maxAttempts  = 5;     ///< Máximo intentos de autoadressing antes de declarar fallo
+    void  (*_waitHook)()  = nullptr; ///< Ver setWaitHook()
 
     // ─── Vigilancia de seguridad ──────────────────────────────────────────────
     BQSafetyLimits _safetyLim = { 4.15f, 3.65f, 60.0f, 10.0f, 500, 1000 };
@@ -1092,6 +1104,7 @@ private:
 
     void     _updateVoltageStats(); ///< Recalcula _vMin y _vMax tras readVoltages()
     void     _updateTempStats();    ///< Recalcula _tMin y _tMax tras readTemperatures()
+    void     _wait(uint32_t ms);    ///< delay() que llama a _waitHook (ver setWaitHook)
 };
 
 #endif // BQ79606_H

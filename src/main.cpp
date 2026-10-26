@@ -144,11 +144,16 @@ static TelemetryDashboard dash(Serial, bms, hall, soc, fan, dashCfg);
 //     se recupera.
 //   Usar el mismo valor para ambos obliga a elegir entre "reconecta tarde" o
 //   "el SDC se abre pronto". Separados no hay que ceder en ninguno:
-//     t=1s  → reInit (WAKE + auto-address); BMS_OK sigue HIGH
-//     t=1-6s→ se sigue leyendo; si recupera, aquí acaba todo
+//     t=0.5s→ reInit (WAKE + auto-address); BMS_OK sigue HIGH
+//     t=0.5-6s→ se sigue leyendo; si recupera, aquí acaba todo
 //     t=6s  → solo si SIGUE caída, BMS_OK LOW
-//   Con el rate-limit de 2 s del reInit, en esos 6 s caben 3 intentos.
-#define COMM_REINIT_MS 1000UL   ///< Cuándo intentar reconectar el BQ (agresivo)
+//   Con el rate-limit de 2 s y 1 intento por reInit (~1.2 s), en esos 6 s
+//   caben 3 intentos (~0.5 / 2.5 / 4.5 s).
+// 500 ms = 2-3 lecturas V seguidas sin respuesta (SAMPLE_V_MS 250). Logs del
+// 2026-10-25: tras el cierre/apertura de los AIR la cadena queda MUDA y no
+// vuelve sola (siempre hacía falta el reInit), así que esperar 1 s solo
+// alargaba el tiempo a ciegas.
+#define COMM_REINIT_MS 500UL    ///< Cuándo intentar reconectar el BQ (agresivo)
 #define FAULT_COMM_MS 6000UL    ///< Cuándo BMS_OK cae por comms (conservador)
 #define FAULT_INIT_MS 200UL    ///< Init BQ fallido persistente (antes: inmediato)
 
@@ -301,6 +306,16 @@ static void buildDebugFlags(uint8_t out[4]);
 static FaultRecord buildFaultRecord(uint8_t eventType, uint8_t firstFlt);
 static FaultRecord buildNoiseSampleRecord();
 
+// Se ejecuta durante las esperas de bms.reInit() (~1.2 s por intento, ver
+// BQ79606::setWaitHook): sin esto el BMS desaparecía del CAN mientras
+// re-direccionaba la cadena. Solo watchdog y CAN — updateCanTx() solo usa
+// getters del BQ, nunca su UART, que está a mitad del autoaddress.
+static void bqWaitHook()
+{
+    IWatchdog.reload();
+    updateCanTx();
+}
+
 // ============================================================================
 //  SETUP
 // ============================================================================
@@ -424,6 +439,10 @@ void setup()
     // Una vez iniciado NO se puede parar (es independiente por HW).
     IWatchdog.begin(WDG_TIMEOUT_US);
     Serial.printf("[WDG] IWDG armado (%lu ms)\n", WDG_TIMEOUT_US / 1000);
+
+    // A partir de aquí los reInit() siguen mandando CAN mientras bloquean.
+    // No antes: el begin() en frío de arriba corre sin CAN ni watchdog.
+    bms.setWaitHook(bqWaitHook);
 }
 
 // ============================================================================
@@ -600,18 +619,28 @@ void sampleAndEvaluate()
     if (reinitNow && (now - tLastReinit) >= BMS_REINIT_RETRY_MS) {
             tLastReinit = now;
             canNumTriesReset++;
-        // En precarga: UN solo intento de auto-address. Un reInit que falla con
-        // 5 intentos bloquea ~5 s y rompería el timing de precarga + el watchdog.
-        // Si no recupera, fComm sigue contando y acaba tumbando BMS_OK igual.
-        bms.setMaxAttempts(prechargeRunning ? 1 : 5);
+        // UN solo intento de auto-address por reInit, también fuera de precarga.
+        // Cada intento bloquea ~1.2 s (WAKE de 20 boards + 600 ms de esperas +
+        // direccionamiento): con 5 intentos un reInit fallido bloqueaba ~6 s
+        // seguidos y, como updateBmsOk() no corre mientras tanto, BMS_OK caía a
+        // los ~7 s en vez de a FAULT_COMM_MS. Con 1 intento y el rate-limit de
+        // BMS_REINIT_RETRY_MS quedan reintentos a ~0.5 / 2.5 / 4.5 s, leyendo y
+        // mandando CAN entre medias, y BMS_OK cae a su hora si no recupera.
+        unsigned long tFallo = now - fComm.tStart;
+        Serial.printf("[BQ] reInit #%u a +%lu ms del 1er fallo de comms\n",
+                      canNumTriesReset, tFallo);
+        bms.setMaxAttempts(1);
         IWatchdog.reload();               // reInit bloquea; no dejar caer el WDG
+        unsigned long tR0 = millis();
         bool okReinit = bms.reInit();
         IWatchdog.reload();
-        bms.setMaxAttempts(5);            // restaurar default
+        bms.setMaxAttempts(5);            // restaurar default (begin() en frío)
+        Serial.printf("[BQ] reInit #%u %s, bloqueó %lu ms\n", canNumTriesReset,
+                      okReinit ? "OK" : "FALLO", millis() - tR0);
         if (okReinit) {
                 bmsInitOk = true;
-                fInit.sample(false, now);
-            fComm.sample(false, now);     // recuperado: rompe la racha (evita confirm -> BMS_OK LOW)
+                fInit.sample(false, millis());
+            fComm.sample(false, millis()); // recuperado: rompe la racha (evita confirm -> BMS_OK LOW)
             Serial.println(F("[OK] BQ recuperado."));
             }
         }
@@ -702,9 +731,12 @@ void updateBmsOk()
     // detectó la condición.
     static bool bmsFaultPrev = false;
     if (bmsFault && !bmsFaultPrev) {
+        Serial.printf("[BMS_OK] LOW: FirstFault=%u, episodio %lu ms\n",
+                      firstFaultTrigger, faultEpisodeStart ? now - faultEpisodeStart : 0UL);
         stkBmsFault = true;                  // sticky post-mortem (ID 17)
         logger.log(buildFaultRecord(FaultLogger::EVT_BMS_OK_FALL, firstFaultTrigger));
     } else if (!bmsFault && bmsFaultPrev) {
+        Serial.println(F("[BMS_OK] HIGH: fallo despejado."));
         logger.log(buildFaultRecord(FaultLogger::EVT_BMS_OK_RISE, firstFaultTrigger));
     }
     bmsFaultPrev = bmsFault;
