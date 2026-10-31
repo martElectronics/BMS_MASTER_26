@@ -55,6 +55,19 @@
 /** Número total de ICs BQ79606 en la cadena daisy-chain. Ajustar según diseño. */
 #define TOTALBOARDS   20  ///< Nº de ICs BQ79606 en la cadena (= chips, NO módulos). Debe coincidir EXACTO con el HW conectado. Recompilar+reflashear al cambiar.
 
+// Esperas del arranque de la cadena (begin()/reInit()), de la hoja de datos
+// SLUSDQ4 y la guía de software SLVA970E (docs/*.txt):
+//   · tSU(WAKE) = 7 ms MÁX por dispositivo de SHUTDOWN a ACTIVE (TI midió
+//     4.4 ms), + ~0.44 ms por salto del tono de WAKE (40 pulsos × 11 µs).
+//   · COMM_RESET = pulso de 500 µs en RX; ni la guía ni la hoja de datos piden
+//     espera después, ni tras el auto-address, ni entre lecturas de verificación.
+// Antes: 12 ms/placa tras el WAKE + 3 esperas fijas de 200 ms + 10 ms por placa
+// al verificar (~0.8 s de espera sin respaldo en la hoja de datos por intento).
+// Si el auto-address empieza a fallar en banco, subir primero BQ_WAKE_MS_PER_BOARD.
+#define BQ_WAKE_MS_PER_BOARD  8   ///< espera tras el WAKE, por placa (≥ tSU(WAKE) 7 ms + tono)
+#define BQ_SETTLE_MS         10   ///< margen tras comm-reset y tras el auto-address
+#define BQ_VERIFY_GAP_MS      1   ///< pausa entre lecturas de verificación del auto-address
+
 /**
  * Bytes de datos por lectura de voltaje.
  * 6 celdas × 2 bytes (byte alto + byte bajo) = 12 bytes.
