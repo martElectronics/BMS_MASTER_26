@@ -356,15 +356,16 @@ def calcular(s, plan):
     pcur = s.canal("BMS PackCurrent")
     fila["DC max (A)"] = vmax(idc)
     fila["AC max (Apk)"] = vmax(iac)
-    # El DTI a veces manda la corriente NEGATIVA a acelerador a fondo (sesión
-    # 1081: -261 A con el Hall del BMS viendo +55 A de descarga). Solo cuenta
-    # como regeneración si el Hall no está viendo descarga en ese instante.
+    # Con el limitador de corriente DC del DTI actuando, el lazo oscila y la
+    # corriente cambia de signo varias veces por segundo (sesión 1081: -261 A
+    # con el Hall del BMS, más lento, viendo +55 A de media). Eso no es
+    # regeneración: solo cuenta si el Hall no está viendo descarga.
     if pcur and any(ok(x) and x != 0 for x in pcur):
         reg = [i for i in range(N) if ok(pcur[i]) and pcur[i] <= 5.0]
         falsas = sum(1 for i in range(N) if ok(idc[i]) and idc[i] < -20 and ok(pcur[i]) and pcur[i] > 5.0)
         if falsas:
             aviso(f"{falsas} muestras con corriente del inversor negativa mientras el BMS ve descarga:"
-                  " no son regeneración (se ignoran en 'reg max').")
+                  " oscilación del limitador DC del DTI, no regeneración (se ignoran en 'reg max').")
         idc_reg, iac_reg = [idc[i] for i in reg], [iac[i] for i in reg]
     else:
         idc_reg, iac_reg = idc, iac
