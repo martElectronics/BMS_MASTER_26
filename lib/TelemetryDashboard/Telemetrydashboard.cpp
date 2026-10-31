@@ -125,7 +125,7 @@ void TelemetryDashboard::render_(const DashFaults& f) {
     snprintf(l, sizeof l,
              "  Vmin %6.3f   Vmax %6.3f   d %5.1f mV      I %+7.2f A (%s)",
              bms_.getMinVoltage(), bms_.getMaxVoltage(), bms_.getVoltageDelta(),
-             hall_.getCurrent(), hall_.isLowRange() ? "30A " : "350A");
+             hall_.getCurrent() * cfg_.currentSign, hall_.isLowRange() ? "30A " : "350A");
     io_.print(l); io_.print(A_EOL "\r\n");
 
     snprintf(l, sizeof l,
@@ -195,7 +195,7 @@ void TelemetryDashboard::renderJson_(const DashFaults& f) {
     io_.print(",\"vMin\":"); io_.print(bms_.getMinVoltage(), 3);
     io_.print(",\"vMax\":"); io_.print(bms_.getMaxVoltage(), 3);
     io_.print(",\"vDelta\":"); io_.print(bms_.getVoltageDelta(), 1);
-    io_.print(",\"i\":"); io_.print(hall_.getCurrent(), 2);
+    io_.print(",\"i\":"); io_.print(hall_.getCurrent() * cfg_.currentSign, 2);
     io_.print(",\"tMin\":"); io_.print(bms_.getMinTemp(), 1);
     io_.print(",\"tMax\":"); io_.print(bms_.getMaxTemp(), 1);
     io_.print(",\"ntcOpen\":"); io_.print(bms_.getOpenNtcCount());

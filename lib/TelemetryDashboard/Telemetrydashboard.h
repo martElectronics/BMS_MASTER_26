@@ -55,6 +55,9 @@ struct DashConfig {
     float      utC = -20.0f;          ///< umbral UT para colorear
     float      otC = 60.0f;           ///< umbral OT para colorear
     uint32_t   refreshMs   = 500;     ///< periodo de refresco del panel
+    float      currentSign = 1.0f;    ///< signo de la corriente MOSTRADA: +1 = descarga
+                                      ///< positiva (coche); -1 = carga positiva (cargador).
+                                      ///< Solo visualización: el Hall no se toca.
 };
 
 /// Estado de fallos del frame (ya confirmados/debounced en el main).
