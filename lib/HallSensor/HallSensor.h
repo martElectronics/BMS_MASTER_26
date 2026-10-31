@@ -208,6 +208,8 @@ private:
     // ─── Datos de corriente ───────────────────────────────────────────────────
     float _currentFiltered = 0.0f;  ///< Salida pública filtrada (EMA)
     float _currentRaw      = 0.0f;  ///< Corriente del canal activo sin filtrar
+    float _i30Filt         = 0.0f;  ///< Canal 30A filtrado (diagnóstico de ganancia, printStatus)
+    float _i350Filt        = 0.0f;  ///< Canal 350A filtrado (diagnóstico de ganancia, printStatus)
     bool  _usingLowRange   = true;  ///< true = rango 30A activo
     bool  _rangeJustChanged = false;///< true el ciclo en que cambia el rango
     unsigned long _lastUpdateUs = 0;///< micros() de la última update() (normalización dt de los EMA)

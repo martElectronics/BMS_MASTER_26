@@ -959,6 +959,7 @@ void printNtcFaultDetail()
 //    v       → tabla de voltajes por celda
 //    t       → tabla de temperaturas por NTC
 //    d       → volcar estado
+//    a       → estado del Hall (incluye la lectura de cada canal por separado)
 //    r       → reiniciar MCU
 // ============================================================================
 void handleSerial()
@@ -1018,6 +1019,9 @@ void handleSerial()
         break;
     case 'd':
         printChgStatus();
+        break;
+    case 'a':
+        hall.printStatus();
         break;
     // Dashboard en vivo: 'm' panel ANSI, 'j' salida JSON (tools/TelemetryWeb).
     // Mismas teclas que el firmware de carrera.

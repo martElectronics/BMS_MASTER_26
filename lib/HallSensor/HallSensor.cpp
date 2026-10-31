@@ -152,6 +152,8 @@ void HallSensor::update()
         float aFilt = dt_s / HALL_FILTER_TAU_S;
         if (aFilt > 1.0f) aFilt = 1.0f;
         _currentFiltered += aFilt * (_currentRaw - _currentFiltered);
+        _i30Filt  += aFilt * (i30  - _i30Filt);
+        _i350Filt += aFilt * (i350 - _i350Filt);
     }
 
     // ── 10. Evaluar timers de fallo ───────────────────────────────────────────
@@ -285,6 +287,11 @@ void HallSensor::printStatus() const
     Serial.printf("Corriente:    %.2f A (filt) | %.2f A (raw)  (%s)\n",
                   _currentFiltered, _currentRaw,
                   _usingLowRange ? "rango 30A" : "rango 350A");
+    // Entre ~5 y 25 A los dos canales miden: deben coincidir. Si el de 350A da
+    // ~1,43x el de 30A, su sensibilidad real es 5,7 mV/A y no HALL_SENS_350A.
+    Serial.printf("Por canal:    30A=%.2f A | 350A=%.2f A  (350A/30A = %.2f)\n",
+                  _i30Filt, _i350Filt,
+                  fabsf(_i30Filt) > 3.0f ? _i350Filt / _i30Filt : 0.0f);
     Serial.printf("isOK():       %s\n",  isOK()              ? "SI" : "NO (FALLO)");
     Serial.printf("Desconexion:  %s\n",  _sensorDisconnected ? "SI" : "no");
     Serial.printf("Congelado:    %s\n",  _sensorStuck        ? "SI" : "no");
