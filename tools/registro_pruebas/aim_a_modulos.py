@@ -11,7 +11,9 @@ Uso:
 
 Hace tres cosas:
   1. Imprime un resumen: módulo/NTC más caliente, diferencia de temperatura
-     entre módulos, paralelos más bajos y paralelos que más caen bajo carga.
+     entre módulos, paralelos más bajos, paralelos que más caen bajo carga y
+     capacidad relativa de cada paralelo (necesita reposo GRABADO antes de
+     rodar y ≥1 min después: compara el SOC de reposo inicial y final).
   2. Guarda modulos/<sesion>_pack.csv: una fila por segundo con M01_V1..M10_V11
      (V) y M01_T1..M10_T9 (°C), más corriente del pack y velocidad. Cada valor
      es la última lectura recibida de ese paralelo/NTC (se refrescan cada ~1 s).
@@ -38,6 +40,14 @@ N_T, N_V = 9, 11
 T_INVALIDO, V_INVALIDO = 63, 1023
 DT_SALIDA = 1.0                 # s entre filas del CSV de salida
 I_REPOSO_A = 1.0                # |I| por debajo de esto = reposo
+I_CARGA_A = 5.0                 # |I| por encima de esto = rodando
+RELAJ_S = 60.0                  # s tras la última carga antes de fiarse de la OCV final
+VENTANA_R_S = 20.0              # s: ventana de la regresión V-I (la OCV casi no cambia dentro)
+CELDAS_PARALELO = 11            # 11P
+# Curva OCV-SOC típica de la Samsung 40T (la del balanceador desde el 10 %;
+# 0-5 % aproximado, para que un paralelo muy bajo no se quede en el 10 %).
+OCV_V = [3.00, 3.25, 3.40, 3.55, 3.62, 3.68, 3.76, 3.85, 3.94, 4.02, 4.10, 4.19]
+OCV_SOC = [0, 5, 10, 20, 30, 40, 50, 60, 70, 80, 90, 100]
 # NTCs excluidos de los fallos en el firmware (NTC_IGNORED en BQ79606.h):
 # se decodifican igual, pero no entran en los rankings. (IDmod, T)
 NTC_IGNORADOS = {(4, 1)}        # board 8 canal 0 = IDmod 4 (M05), T1
@@ -166,22 +176,99 @@ def comprobar_patron(lecturas):
         print("  NO: revisar Stepped Values, nº de bits (24/16) y start bit en RaceStudio.")
 
 
-def regresion(xs, ys):
-    """Pendiente de y frente a x por mínimos cuadrados (None si no hay variación)."""
-    n = len(xs)
-    if n < 10:
+def regresion_ventanas(ts, xs, ys, ventana_s):
+    """Pendiente de y frente a x restando la media de cada ventana de tiempo.
+    Con x = corriente separa la caída I·R de lo que baja la OCV durante la
+    sesión (en 20 s la OCV casi no se mueve); con una regresión global un
+    paralelo con menos capacidad parecía tener más o menos resistencia de la
+    real según lo bajo que acabara."""
+    grupos = {}
+    for t_, x, y in zip(ts, xs, ys):
+        # Dos rejillas desfasadas media ventana: un cambio de corriente que cae
+        # justo en el borde de una ventana queda dentro de la otra.
+        grupos.setdefault((0, int(t_ // ventana_s)), []).append((x, y))
+        grupos.setdefault((1, int((t_ + ventana_s / 2) // ventana_s)), []).append((x, y))
+    sxx = sxy = 0.0
+    n = 0
+    for g in grupos.values():
+        if len(g) < 3:
+            continue
+        mx = sum(x for x, _ in g) / len(g)
+        my = sum(y for _, y in g) / len(g)
+        sxx += sum((x - mx) ** 2 for x, _ in g)
+        sxy += sum((x - mx) * (y - my) for x, y in g)
+        n += len(g)
+    if n < 10 or sxx < 1e-6:
         return None
-    mx, my = sum(xs) / n, sum(ys) / n
-    sxx = sum((x - mx) ** 2 for x in xs)
-    if sxx < 1e-6:
-        return None
-    return sum((x - mx) * (y - my) for x, y in zip(xs, ys)) / sxx
+    return sxy / sxx
+
+
+def soc_ocv(v):
+    """SOC (%) a partir de la tensión en reposo, interpolando OCV_V/OCV_SOC."""
+    if v <= OCV_V[0]:
+        return OCV_SOC[0]
+    for k in range(1, len(OCV_V)):
+        if v <= OCV_V[k]:
+            return OCV_SOC[k - 1] + (v - OCV_V[k - 1]) * (OCV_SOC[k] - OCV_SOC[k - 1]) / (OCV_V[k] - OCV_V[k - 1])
+    return OCV_SOC[-1]
+
+
+def mediana(x):
+    x = sorted(x)
+    n = len(x)
+    return None if n == 0 else (x[n // 2] if n % 2 else 0.5 * (x[n // 2 - 1] + x[n // 2]))
+
+
+def capacidad_relativa(s, filas, corriente, i_carga0, i_carga1):
+    """Todos los paralelos están en serie: pasan los mismos Ah. El que pierde
+    más SOC entre el reposo inicial y el final tiene menos capacidad.
+    Pasar por la curva OCV (y no comparar mV a pelo) evita que un paralelo
+    que simplemente está más bajo parezca peor por estar en la zona empinada."""
+    print("\n--- Capacidad relativa (reposo antes de rodar → reposo final) ---")
+    if i_carga0 is None:
+        print("  Sin tramo con corriente: no se puede calcular.")
+        return
+    con = [f for f in filas if f["ocv_ini"] is not None and f["ocv_fin"] is not None]
+    if not con:
+        falta = []
+        if not any(f["ocv_ini"] is not None for f in filas):
+            falta.append("reposo grabado ANTES de rodar")
+        if not any(f["ocv_fin"] is not None for f in filas):
+            falta.append(f"reposo grabado ≥{RELAJ_S:.0f} s DESPUÉS de la última carga")
+        print("  No se puede calcular: falta " + " y ".join(falta) + ".")
+        return
+    for f in con:
+        f["dsoc"] = soc_ocv(f["ocv_ini"]) - soc_ocv(f["ocv_fin"])
+    ref = mediana([f["dsoc"] for f in con])
+    ah = sum(corriente[i] for i in range(i_carga0, i_carga1 + 1) if ok(corriente[i])) * s.dt / 3600.0
+    reposo_fin = s.t[-1] - s.t[i_carga1]
+    print(f"  Descargado: {ah:.2f} Ah según el Hall (por encima de 30 A puede leer alto: ver HallSensor.h)."
+          f"  SOC perdido, mediana: {ref:.1f} %.  Reposo final: {reposo_fin:.0f} s")
+    if ref < 2.0:
+        print("  Muy poca descarga (<2 % de SOC): el resultado es poco fiable; hace falta rodar más.")
+        return
+    for f in con:
+        f["rel"] = ref / f["dsoc"] if f["dsoc"] > 0.1 else None
+    validos_rel = [f for f in con if f["rel"] is not None]
+    print("  Los 5 paralelos con menos capacidad (1,00 = como la mediana del pack):")
+    for f in sorted(validos_rel, key=lambda f: f["rel"])[:5]:
+        print(f"    {mod(f['m'])} V{f['n']}: {f['rel']:.2f}  (≈ {f['rel'] * CELDAS_PARALELO:.0f} de"
+              f" {CELDAS_PARALELO} celdas; {f['ocv_ini']:.3f} → {f['ocv_fin']:.3f} V,"
+              f" {f['dsoc']:.1f} % de SOC)")
+    print("  Por debajo de ~0,85 apunta a celdas desconectadas (fusibles de celda): medir ese paralelo.")
 
 
 def analizar(s, lecturas, salida):
     t = s.t
     corriente = s.canal("BMS PackCurrent")
     velocidad = s.canal("GPS Speed")
+
+    # Tramo con carga: de la primera a la última muestra con |I| > I_CARGA_A.
+    # El reposo de ANTES y el de DESPUÉS (pasado RELAJ_S) dan la OCV de cada
+    # paralelo para la capacidad relativa.
+    carga = [i for i in range(len(t)) if corriente and ok(corriente[i]) and abs(corriente[i]) > I_CARGA_A]
+    i_carga0 = carga[0] if carga else None
+    i_carga1 = carga[-1] if carga else None
 
     # Valor físico de cada lectura
     series = {}          # (m, tipo, k) -> [(i_fila, valor)]
@@ -238,13 +325,20 @@ def analizar(s, lecturas, salida):
             reposo = [v for i, v in pts if corriente and ok(corriente[i]) and abs(corriente[i]) < I_REPOSO_A]
             r = None
             if corriente:
-                xy = [(corriente[i], v) for i, v in pts if ok(corriente[i])]
-                pend = regresion([x for x, _ in xy], [y for _, y in xy])
+                xy = [(t[i], corriente[i], v) for i, v in pts if ok(corriente[i])]
+                pend = regresion_ventanas([a for a, _, _ in xy], [x for _, x, _ in xy],
+                                          [y for _, _, y in xy], VENTANA_R_S)
                 r = -pend * 1000 if pend is not None else None   # mΩ "vistos" desde la corriente del pack
+            ocv_ini = ocv_fin = None
+            if i_carga0 is not None:
+                quieto = [(i, v) for i, v in pts if ok(corriente[i]) and abs(corriente[i]) < I_REPOSO_A]
+                ocv_ini = mediana([v for i, v in quieto if i < i_carga0])
+                ocv_fin = mediana([v for i, v in quieto if t[i] > t[i_carga1] + RELAJ_S])
             filas.append({"m": m, "n": n, "vmin": vmin_v, "t_vmin": t[vmin_i],
                           "i_vmin": corriente[vmin_i] if corriente and ok(corriente[vmin_i]) else None,
                           "v_ini": reposo[0] if reposo else None,
-                          "v_fin": reposo[-1] if reposo else None, "r": r})
+                          "v_fin": reposo[-1] if reposo else None, "r": r,
+                          "ocv_ini": ocv_ini, "ocv_fin": ocv_fin})
     if filas:
         print("  Los 5 paralelos con la tensión más baja:")
         for f in sorted(filas, key=lambda f: f["vmin"])[:5]:
@@ -263,6 +357,7 @@ def analizar(s, lecturas, salida):
                 print(f"    {mod(f['m'])} V{f['n']}: {f['v_fin']:.3f} V")
             vf = [f["v_fin"] for f in con_fin]
             print(f"  Desequilibrio en reposo al final: {(max(vf) - min(vf)) * 1000:.0f} mV")
+        capacidad_relativa(s, filas, corriente, i_carga0, i_carga1)
     else:
         print("  Sin tensiones decodificadas.")
 
