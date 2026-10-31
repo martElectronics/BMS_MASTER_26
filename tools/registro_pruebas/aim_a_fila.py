@@ -353,13 +353,25 @@ def calcular(s, plan):
         fila["Velocidad max (km/h)"] = max(rueda) * 3.6
         aviso("Velocidad máxima calculada con la velocidad de rueda (sin GPS).")
 
+    pcur = s.canal("BMS PackCurrent")
     fila["DC max (A)"] = vmax(idc)
-    fila["DC reg max (A)"] = vmin(idc)
     fila["AC max (Apk)"] = vmax(iac)
-    fila["AC reg max (Apk)"] = vmin(iac)
+    # El DTI a veces manda la corriente NEGATIVA a acelerador a fondo (sesión
+    # 1081: -261 A con el Hall del BMS viendo +55 A de descarga). Solo cuenta
+    # como regeneración si el Hall no está viendo descarga en ese instante.
+    if pcur and any(ok(x) and x != 0 for x in pcur):
+        reg = [i for i in range(N) if ok(pcur[i]) and pcur[i] <= 5.0]
+        falsas = sum(1 for i in range(N) if ok(idc[i]) and idc[i] < -20 and ok(pcur[i]) and pcur[i] > 5.0)
+        if falsas:
+            aviso(f"{falsas} muestras con corriente del inversor negativa mientras el BMS ve descarga:"
+                  " no son regeneración (se ignoran en 'reg max').")
+        idc_reg, iac_reg = [idc[i] for i in reg], [iac[i] for i in reg]
+    else:
+        idc_reg, iac_reg = idc, iac
+    fila["DC reg max (A)"] = vmin(idc_reg)
+    fila["AC reg max (Apk)"] = vmin(iac_reg)
     fila["RPM motor max"] = (vmax(erpm) or 0) / PARES_POLOS if erpm else None
 
-    pcur = s.canal("BMS PackCurrent")
     kw = None
     if pack and pcur:
         sin_corriente = (vmax([abs(x) for x in validos(pcur)]) or 0) < 0.05
