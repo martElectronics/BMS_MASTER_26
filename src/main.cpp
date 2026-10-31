@@ -148,7 +148,7 @@ static TelemetryDashboard dash(Serial, bms, hall, soc, fan, dashCfg);
 //     t=0.5s→ reInit (WAKE + auto-address); BMS_OK sigue HIGH
 //     t=0.5-6s→ se sigue leyendo; si recupera, aquí acaba todo
 //     t=6s  → solo si SIGUE caída, BMS_OK LOW
-//   Con el rate-limit de 2 s y 1 intento por reInit (~1.2 s), en esos 6 s
+//   Con el rate-limit de 2 s y 1 intento por reInit (~0.3-0.4 s), en esos 6 s
 //   caben 3 intentos (~0.5 / 2.5 / 4.5 s).
 // 500 ms = 2-3 lecturas V seguidas sin respuesta (SAMPLE_V_MS 250). Logs del
 // 2026-10-25: tras el cierre/apertura de los AIR la cadena queda MUDA y no
@@ -313,7 +313,7 @@ static void buildDebugFlags(uint8_t out[4]);
 static FaultRecord buildFaultRecord(uint8_t eventType, uint8_t firstFlt);
 static FaultRecord buildNoiseSampleRecord();
 
-// Se ejecuta durante las esperas de bms.reInit() (~1.2 s por intento, ver
+// Se ejecuta durante las esperas de bms.reInit() (~0.3-0.4 s por intento, ver
 // BQ79606::setWaitHook): sin esto el BMS desaparecía del CAN mientras
 // re-direccionaba la cadena. Solo watchdog y CAN — updateCanTx() solo usa
 // getters del BQ, nunca su UART, que está a mitad del autoaddress.
@@ -629,7 +629,7 @@ void sampleAndEvaluate()
             tLastReinit = now;
             canNumTriesReset++;
         // UN solo intento de auto-address por reInit, también fuera de precarga.
-        // Cada intento bloquea ~1.2 s (WAKE de 20 boards + 600 ms de esperas +
+        // Cada intento bloqueaba ~1.2 s (WAKE de 20 boards + 600 ms de esperas +
         // direccionamiento): con 5 intentos un reInit fallido bloqueaba ~6 s
         // seguidos y, como updateBmsOk() no corre mientras tanto, BMS_OK caía a
         // los ~7 s en vez de a FAULT_COMM_MS. Con 1 intento y el rate-limit de

@@ -119,12 +119,11 @@ bool BQ79606::begin(bool keepBmsOk)
     for (uint8_t attempt = 0; attempt < _maxAttempts && !ok; attempt++) {
         { char _b[128]; snprintf(_b, sizeof(_b), "  AutoAddress intento %d/%d\n", attempt + 1, _maxAttempts); Serial.print(_b); }
 
-        _wakeUp();
-        _wait(200);
+        _wakeUp();                       // ya espera tSU(WAKE) por placa
         _commReset(_cfg.baudrate);
-        _wait(200);
+        _wait(BQ_SETTLE_MS);
         ok = _autoAddress();
-        _wait(200);
+        _wait(BQ_SETTLE_MS);
     }
 
     if (!ok) {
@@ -880,7 +879,7 @@ void BQ79606::_wakeUp()
     digitalWrite(BQ_DPIN(_cfg.pinWake), LOW);
     delayMicroseconds(300);
     digitalWrite(BQ_DPIN(_cfg.pinWake), HIGH);
-    _wait(12 * TOTALBOARDS);
+    _wait(BQ_WAKE_MS_PER_BOARD * TOTALBOARDS);
 }
 
 // Espera de AL MENOS ms llamando a _waitHook cada ~5 ms. Solo para las esperas
@@ -988,7 +987,7 @@ bool BQ79606::_autoAddress()
             Serial.print(F("  Board ")); Serial.print(_nCurrentBoard);
             Serial.println(F(" -> ERROR comm"));
             ok = false;
-            _wait(10);
+            _wait(BQ_VERIFY_GAP_MS);
             continue;
         }
 
@@ -996,7 +995,7 @@ bool BQ79606::_autoAddress()
             Serial.print(F("  Board ")); Serial.print(_nCurrentBoard);
             Serial.println(F(" -> ERROR CRC"));
             ok = false;
-            _wait(10);
+            _wait(BQ_VERIFY_GAP_MS);
             continue;
         }
 
@@ -1005,7 +1004,7 @@ bool BQ79606::_autoAddress()
         Serial.print(F(" -> esperado ")); Serial.print(_nCurrentBoard);
         Serial.print(F(", recibido ")); Serial.println(received);
         if (received != _nCurrentBoard) ok = false;
-        _wait(10);
+        _wait(BQ_VERIFY_GAP_MS);
     }
     Serial.println(F("--------------------------------"));
     return ok;

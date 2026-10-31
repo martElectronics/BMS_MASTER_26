@@ -68,7 +68,7 @@
 #define CHG_START_CURRENT_A  7.0f       ///< corriente DC al arrancar (la que ya sabes que funciona)
 #define CHG_MAX_CURRENT_A    14.0f       ///< ⚠ TOPE duro: el serial no puede pedir más (atado al límite AC/plomos)
 
-#define CELL_VMAX_HARD_V     4.19f     ///< corte DURO por celda (seguridad independiente de Vmax). <4,20 V: margen bajo el máximo de la 40T y el OV del BMS
+#define CELL_VMAX_HARD_V     4.195f    ///< corte DURO por celda (seguridad independiente de Vmax). 5 mV bajo el OV del BMS/balanceador (4,20 V): corta la carga antes de enclavar el OV
 // Corte DURO por celda BAJA. Mismo umbral que main.cpp (CELL_UV_V) y que el
 // registro UV_THRESH del BQ (0x53 = 2.8 V). Cubre dos escenarios:
 //   · celda realmente descargada → no se carga a 3 A un pack por debajo de UV;
@@ -178,7 +178,8 @@ static const DashConfig dashCfg = {
     modCellV, modCellT,
     CELL_VMIN_HARD_V, CELL_VMAX_HARD_V,    // umbrales de CARGA (no los de carrera)
     CELL_TMIN_CHG_C,  CELL_TMAX_CHG_C,
-    500
+    500,
+    -1.0f                                  // corriente de CARGA positiva en panel/JSON
 };
 static TelemetryDashboard dash(Serial, bms, hall, dashSoc, dashFan, dashCfg);
 
@@ -850,8 +851,10 @@ void printChgStatus()
                   sdcTson, prechargeFail,
                   digitalRead(PIN_SDC_3V3), digitalRead(PIN_TSON_FAIL),
                   digitalRead(PIN_HV_ACCU_VIL), digitalRead(PIN_IMD_OK));
-    Serial.printf("Hall: %.2f A (%s)  %s\n",
-                  hall.getCurrent(), hall.isLowRange() ? "30A" : "350A",
+    // Signo invertido SOLO al mostrar: en el cargador interesa ver la carga en
+    // positivo. El Hall sigue con su criterio (+ descarga), igual que el coche.
+    Serial.printf("Hall: %+.2f A carga (%s)  %s\n",
+                  -hall.getCurrent(), hall.isLowRange() ? "30A" : "350A",
                   hall.isOK() ? "OK" : "FALLO");
     if (rxAlive) {
         Serial.printf("OBC: Vout=%.1f V  Iout=%.1f A  st=0x%02X%s%s%s%s%s\n",
@@ -956,6 +959,7 @@ void printNtcFaultDetail()
 //    v       → tabla de voltajes por celda
 //    t       → tabla de temperaturas por NTC
 //    d       → volcar estado
+//    a       → estado del Hall (incluye la lectura de cada canal por separado)
 //    r       → reiniciar MCU
 // ============================================================================
 void handleSerial()
@@ -1015,6 +1019,9 @@ void handleSerial()
         break;
     case 'd':
         printChgStatus();
+        break;
+    case 'a':
+        hall.printStatus();
         break;
     // Dashboard en vivo: 'm' panel ANSI, 'j' salida JSON (tools/TelemetryWeb).
     // Mismas teclas que el firmware de carrera.

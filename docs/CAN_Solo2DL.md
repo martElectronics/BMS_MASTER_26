@@ -290,7 +290,7 @@ B7: causa del último reset
 | ReadV_CommErr   | RVCO | 2 | última lectura V = COMM_ERROR |
 | ReadV_CrcErr    | RVCR | 2 | última lectura V = CRC_ERROR |
 | ReadT_Err       | RTER | 2 | última lectura T ≠ OK |
-| State_AutoAddr  | SADR | 3 | `bms.isOK`: cadena de BQ direccionada. **Baja a 0 mientras dura un reInit** (~1.2 s) y vuelve a 1 si recupera; el BMS sigue mandando CAN durante el reInit |
+| State_AutoAddr  | SADR | 3 | `bms.isOK`: cadena de BQ direccionada. **Baja a 0 mientras dura un reInit** (~0.3-0.4 s) y vuelve a 1 si recupera; el BMS sigue mandando CAN durante el reInit |
 | State_BmsInit   | SINI | 3 | `bmsInitOk` |
 | State_CanOk     | SCAN | 3 | FDCAN inicializó OK **y** no está en bus-off ahora mismo |
 | SDC_TSON        | STSN | 3 | Latch TSON cerrado |
