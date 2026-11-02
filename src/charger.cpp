@@ -264,6 +264,8 @@ void   printTemps();
 void   printVFaultDetail();
 void   printTFaultDetail();
 void   printNtcFaultDetail();
+void   updateResistance(bool readOk, unsigned long now);
+void   printResistance();
 void   handleSerial();
 
 // ============================================================================
@@ -312,7 +314,7 @@ void setup()
                   CELL_VMIN_HARD_V, CELL_VMAX_HARD_V,
                   CELL_TMIN_CHG_C, CELL_TMAX_CHG_C);
     Serial.println(F("ARRANCA SIN CARGAR. Comandos:"));
-    Serial.println(F("  g=start x=stop c,<I>=corriente  v=voltajes t=temps  m=panel j=panel(JSON)  q=diag  f,<ms>=ventana  S=dormir BQ i=re-init  d=datos r=restart"));
+    Serial.println(F("  g=start x=stop c,<I>=corriente  v=voltajes t=temps  m=panel j=panel(JSON)  q=diag  f,<ms>=ventana  S=dormir BQ i=re-init  d=datos a=hall R=resistencias r=restart"));
 
     dash.setJsonExtra(dashChargerJson);   // el panel web necesita el estado de carga
 
@@ -359,6 +361,7 @@ void loop()
 
         bool readOk = readPack();
         bmsSafe = chargeAllowed(readOk);   // lo consume updateTson() y el MSG1
+        updateResistance(readOk, tSample); // R de cada paralelo al arrancar la carga
 
         // Un fallo CANCELA la orden de carga: hay que re-armar con 'g'.
         if (!bmsSafe) chargeRequested = false;
@@ -951,6 +954,212 @@ void printNtcFaultDetail()
 }
 
 // ============================================================================
+//  RESISTENCIA DE CADA PARALELO — automática en cada arranque de carga
+//  Mientras no pasa corriente se guarda la tensión de reposo de cada celda.
+//  Cuando la carga lleva RES_SETTLE_MS con la corriente estable se compara:
+//  R = ΔV / ΔI. A los 10 s ya hay algo de polarización además de la parte
+//  óhmica, pero es igual para todos los paralelos: sirve para compararlos.
+//  Cada paralelo se compara con la mediana de su misma posición (V1..V11) en
+//  los 10 módulos: según dónde se toma la tensión sobre el busbar, las
+//  posiciones pares salen ~10 % más bajas que las impares en todo el pack.
+//  Una celda desconectada de 11 sube la R un ~10 %; la dispersión normal es ±3-5 %.
+//  También imprime la tensión de reposo justo antes de la carga.
+//  Para repetirla: 'x', esperar 1-2 min sin corriente y 'g'. 'R' la reimprime.
+// ============================================================================
+#define RES_REST_A        0.5f     ///< |I| por debajo = reposo
+#define RES_MIN_REST_MS   30000UL  ///< reposo mínimo antes del escalón (tras parar, la tensión sigue relajándose)
+#define RES_STEP_A        3.0f     ///< |I| mínima para medir
+#define RES_SETTLE_MS     10000UL  ///< espera desde que empieza a pasar corriente
+#define RES_AVG_SAMPLES   8        ///< muestras promediadas con corriente (8 x SAMPLE_MS = 2 s)
+#define RES_I_STABLE_A    0.5f     ///< variación máx. de I entre muestras promediadas
+#define RES_FLAG_RATIO    1.15f    ///< por encima de esto x la mediana de su posición se marca para revisar
+
+enum class ResState : uint8_t { REST, STEP, DONE };
+static ResState      resState     = ResState::REST;
+static unsigned long resRestSince = 0;      ///< 0 = no hay reposo en curso
+static unsigned long resStepAt    = 0;
+static float         resV0[TOTALBOARDS][6];  ///< tensión de reposo (media móvil)
+static float         resI0        = 0.0f;
+static float         resVSum[TOTALBOARDS][6];
+static float         resISum      = 0.0f;
+static float         resIPrev     = 0.0f;
+static uint8_t       resN         = 0;
+static float         resR[TOTALBOARDS][6];   ///< mΩ de la última medida
+static float         resVRest[TOTALBOARDS][6];  ///< tensión de reposo de la última medida
+static float         resIStep     = 0.0f;    ///< ΔI de la última medida (A)
+static bool          resValid     = false;
+
+static void resStartRest(unsigned long now, float i)
+{
+    resRestSince = now;
+    resI0 = i;
+    for (uint8_t b = 0; b < TOTALBOARDS; b++)
+        for (uint8_t c = 0; c < CELLS_FOR_BOARD(b); c++)
+            resV0[b][c] = bms.getVoltage(b, c);
+}
+
+// Paralelo n (1..11) del módulo m (0..) → placa y celda del BQ
+static inline int resBoard(int m, int n) { return (n <= 6) ? 2 * m : 2 * m + 1; }
+static inline int resCell(int n)         { return (n <= 6) ? n - 1 : n - 7; }
+
+// Mediana de v[0..n-1]; reordena v.
+static float resMedian(float *v, int n)
+{
+    for (int i = 1; i < n; i++)
+        for (int j = i; j > 0 && v[j - 1] > v[j]; j--) {
+            float t = v[j]; v[j] = v[j - 1]; v[j - 1] = t;
+        }
+    return (n % 2) ? v[n / 2] : 0.5f * (v[n / 2 - 1] + v[n / 2]);
+}
+
+void printResistance()
+{
+    if (!resValid) {
+        Serial.println(F("[R] Sin medida: arranca la carga ('g') tras >30 s sin corriente."));
+        return;
+    }
+    struct Par { float r, x, v; uint8_t m, n; };
+    static Par lista[NUM_MODULES * 11];
+    int nPar = 0;
+
+    // Mediana de cada posición V1..V11 en todos los módulos
+    float medPos[12];
+    for (int n = 1; n <= 11; n++) {
+        float col[NUM_MODULES];
+        for (int m = 0; m < NUM_MODULES; m++) col[m] = resR[resBoard(m, n)][resCell(n)];
+        medPos[n] = resMedian(col, NUM_MODULES);
+    }
+
+    Serial.printf("\n--- RESISTENCIA por paralelo (mOhm; escalon de %.1f A, %lu s) ---\n",
+                  resIStep, RES_SETTLE_MS / 1000);
+    Serial.print(F("      "));
+    for (int n = 1; n <= 11; n++) Serial.printf("  V%-4d", n);
+    Serial.println();
+    for (int m = 0; m < NUM_MODULES; m++) {
+        Serial.printf("M%02d: ", m + 1);
+        for (int n = 1; n <= 11; n++) {
+            const int b = resBoard(m, n), c = resCell(n);
+            const float r = resR[b][c];
+            const float x = (medPos[n] > 0.0f) ? r / medPos[n] : 0.0f;
+            Serial.printf(" %5.2f%c", r, x > RES_FLAG_RATIO ? '*' : ' ');
+            lista[nPar++] = { r, x, resVRest[b][c], (uint8_t)(m + 1), (uint8_t)n };
+        }
+        Serial.println();
+    }
+    Serial.print(F("Med: "));
+    for (int n = 1; n <= 11; n++) Serial.printf(" %5.2f ", medPos[n]);
+    Serial.println();
+
+    Serial.println(F("\n--- TENSION DE REPOSO antes de la carga (V) ---"));
+    Serial.print(F("      "));
+    for (int n = 1; n <= 11; n++) Serial.printf("  V%-4d", n);
+    Serial.println();
+    for (int m = 0; m < NUM_MODULES; m++) {
+        Serial.printf("M%02d: ", m + 1);
+        for (int n = 1; n <= 11; n++)
+            Serial.printf(" %6.3f", resVRest[resBoard(m, n)][resCell(n)]);
+        Serial.println();
+    }
+
+    // Más alta frente a su posición (inserción: 110 elementos, una vez por carga)
+    for (int i = 1; i < nPar; i++)
+        for (int j = i; j > 0 && lista[j - 1].x < lista[j].x; j--) {
+            Par t = lista[j]; lista[j] = lista[j - 1]; lista[j - 1] = t;
+        }
+    Serial.printf("\nResistencia: los 5 mas altos frente a su posicion (* = mas de %.2fx):\n",
+                  RES_FLAG_RATIO);
+    for (int i = 0; i < 5 && i < nPar; i++)
+        Serial.printf("  M%02u V%-2u: %.2f mOhm (%.2fx)  reposo %.3f V%s\n",
+                      lista[i].m, lista[i].n, lista[i].r, lista[i].x, lista[i].v,
+                      lista[i].x > RES_FLAG_RATIO ? "  <-- revisar union/fusibles" : "");
+
+    // Más descargados
+    for (int i = 1; i < nPar; i++)
+        for (int j = i; j > 0 && lista[j - 1].v > lista[j].v; j--) {
+            Par t = lista[j]; lista[j] = lista[j - 1]; lista[j - 1] = t;
+        }
+    const float vMax = lista[nPar - 1].v;
+    Serial.printf("Reposo: max %.3f V (M%02u V%u), desbalanceo %.0f mV. Los 5 mas bajos:\n",
+                  vMax, lista[nPar - 1].m, lista[nPar - 1].n, (vMax - lista[0].v) * 1000.0f);
+    for (int i = 0; i < 5 && i < nPar; i++)
+        Serial.printf("  M%02u V%-2u: %.3f V (-%.0f mV)  R %.2f mOhm (%.2fx)\n",
+                      lista[i].m, lista[i].n, lista[i].v, (vMax - lista[i].v) * 1000.0f,
+                      lista[i].r, lista[i].x);
+}
+
+// Se llama tras cada readPack() (cada SAMPLE_MS).
+void updateResistance(bool readOk, unsigned long now)
+{
+    if (!readOk) return;
+    const float i  = hall.getCurrent();
+    const float ai = fabsf(i);
+
+    switch (resState) {
+    case ResState::REST:
+        if (ai < RES_REST_A) {
+            if (resRestSince == 0) {
+                resStartRest(now, i);
+            } else {                       // media móvil: quita el ruido del ADC
+                resI0 += 0.25f * (i - resI0);
+                for (uint8_t b = 0; b < TOTALBOARDS; b++)
+                    for (uint8_t c = 0; c < CELLS_FOR_BOARD(b); c++)
+                        resV0[b][c] += 0.25f * (bms.getVoltage(b, c) - resV0[b][c]);
+            }
+        } else if (resRestSince != 0 && now - resRestSince >= RES_MIN_REST_MS) {
+            resState  = ResState::STEP;    // empieza a pasar corriente tras un reposo
+            resStepAt = now;
+            resN      = 0;
+            memcpy(resVRest, resV0, sizeof(resVRest));
+        } else {
+            resRestSince = 0;              // reposo demasiado corto: no hay referencia
+        }
+        break;
+
+    case ResState::STEP:
+        if (ai < RES_REST_A) {             // se paró antes de medir
+            Serial.println(F("[R] La corriente se corto antes de medir la resistencia."));
+            resState = ResState::REST;
+            resStartRest(now, i);
+            break;
+        }
+        if (now - resStepAt < RES_SETTLE_MS || ai < RES_STEP_A) break;
+        if (resN > 0 && fabsf(i - resIPrev) > RES_I_STABLE_A) resN = 0;   // aún en rampa
+        if (resN == 0) {
+            resISum = 0.0f;
+            for (uint8_t b = 0; b < TOTALBOARDS; b++)
+                for (uint8_t c = 0; c < 6; c++) resVSum[b][c] = 0.0f;
+        }
+        resISum += i;
+        for (uint8_t b = 0; b < TOTALBOARDS; b++)
+            for (uint8_t c = 0; c < CELLS_FOR_BOARD(b); c++)
+                resVSum[b][c] += bms.getVoltage(b, c);
+        resIPrev = i;
+        if (++resN < RES_AVG_SAMPLES) break;
+
+        {
+            // Convenio del Hall: + = descarga. Con carga ΔI < 0 y ΔV > 0 → R > 0.
+            const float dI = resISum / resN - resI0;
+            for (uint8_t b = 0; b < TOTALBOARDS; b++)
+                for (uint8_t c = 0; c < 6; c++)
+                    resR[b][c] = (c < CELLS_FOR_BOARD(b))
+                        ? -(resVSum[b][c] / resN - resV0[b][c]) / dI * 1000.0f : 0.0f;
+            resIStep = fabsf(dI);
+            resValid = true;
+        }
+        resState = ResState::DONE;
+        printResistance();
+        break;
+
+    case ResState::DONE:
+        if (ai < RES_REST_A) {             // carga parada: la siguiente vuelve a medir
+            resState = ResState::REST;
+            resStartRest(now, i);
+        }
+        break;
+    }
+}
+
+// ============================================================================
 //  COMANDOS SERIE
 //    g       → solicitar START de carga
 //    x       → STOP
@@ -960,6 +1169,7 @@ void printNtcFaultDetail()
 //    t       → tabla de temperaturas por NTC
 //    d       → volcar estado
 //    a       → estado del Hall (incluye la lectura de cada canal por separado)
+//    R       → resistencia de cada paralelo (se mide sola al arrancar la carga)
 //    r       → reiniciar MCU
 // ============================================================================
 void handleSerial()
@@ -1022,6 +1232,9 @@ void handleSerial()
         break;
     case 'a':
         hall.printStatus();
+        break;
+    case 'R':
+        printResistance();
         break;
     // Dashboard en vivo: 'm' panel ANSI, 'j' salida JSON (tools/TelemetryWeb).
     // Mismas teclas que el firmware de carrera.
