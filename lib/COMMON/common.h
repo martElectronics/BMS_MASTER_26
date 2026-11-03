@@ -17,10 +17,6 @@ struct CanPacketRawData {
     unsigned long nextSendTime = 0;
 };
 
-#define STATUS_START_MASTER_ID 2030
-#define STATUS_NUM_PAQUETS 3
-#define STATUS_NUM_IDS 15
-#define STATUS_DATA_TIME_CALC 3000
 
 
 #endif // COMMON_H

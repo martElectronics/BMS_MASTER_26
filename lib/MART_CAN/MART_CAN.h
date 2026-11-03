@@ -50,7 +50,6 @@ public:
     {
         bool simulating;              // Set to true for testing when no MCP2515 are connected to the microcontroller
         bool autoRemoveStoredFilters; // Removes the stored masks and filters when applied to the MCP2515 registers to save memory
-        bool sendStatusData;          // Send status data such as runtime time, number of sent, received and collided paquets.
     } config;
 
 #if defined(STM32G4xx)
@@ -110,7 +109,6 @@ public:
         // Default configuration
         config.simulating = false;
         config.autoRemoveStoredFilters = true;
-        config.sendStatusData = false;
     }
     // Sends all stored data packets in DataOUT
     bool send();
@@ -304,13 +302,10 @@ public:
 
     void setPacketTimer(unsigned long packetID, unsigned long time);
 
-    //** CAN STATUS DATA**//
-    void setCANStatusData();
-
     //** CAN BUS STATUS DATA **//
-    unsigned nodeID, statusPacketOffset;                                                             // IDs
-    unsigned runtimeTime, numRXPaqOK, numTXPaqOK, numTxPaqError;                                     // Actual data
-    unsigned previousStatusIntervalTime, previousStatusRuntimeTime, intervalTime, numCurrentSamples; // Aux data
+    unsigned nodeID;
+    unsigned runtimeTime, numRXPaqOK, numTXPaqOK, numTxPaqError;
+    unsigned previousStatusRuntimeTime;
 
     //** BUS_OFF REBOOT **//
     bool rebootBusFromError();

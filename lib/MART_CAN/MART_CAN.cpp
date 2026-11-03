@@ -70,22 +70,6 @@ bool CAN_BUS::send()
 
     unsigned long currentTime = millis();
 
-    // Send status data if the timer reaches PT and the ESP is configured accordingly
-    if (((millis() - previousStatusIntervalTime) >= (intervalTime / 3)) && (config.sendStatusData))
-    {
-        numCurrentSamples++;
-        setCANStatusData();
-        previousStatusIntervalTime = millis();
-
-        if (numCurrentSamples > 3)
-        {
-            // numRXPaqOK = 0;
-            // numTXPaqOK = 0;
-            // numTxPaqError = 0;
-            // numCurrentSamples = 1;
-        }
-    }
-
     DataOUT.forEachPacket([this, &success, currentTime](CanPacketRawData &packet)
                           {
         // Intervalo efectivo de este paquete: el del timer si está en la lista;
@@ -294,23 +278,6 @@ void CAN_BUS::setPacketTimer(unsigned long packetID, unsigned long time)
 
     // If not found, add a new timer
     packetTimers.push_back({packetID, time});
-}
-
-//** CAN STATUS **//
-void CAN_BUS::setCANStatusData()
-{
-    int d0[2]; // runtimeTime,numTxPaqError
-    int d1[2]; // numRXPaqOK,numTXPaqOK
-    int d2[2] = {0, 0};
-    d0[0] = runtimeTime;
-    d0[1] = numTxPaqError / numCurrentSamples;
-    d1[0] = numRXPaqOK / numCurrentSamples;
-    d1[1] = numTXPaqOK / numCurrentSamples;
-
-
-    // this->setPacket(statusPacketOffset, d0);
-    // this->setPacket(statusPacketOffset + 1, d1);
-    // this->setPacket(statusPacketOffset + 2, d2);
 }
 
 // Solo CONSULTA el estado bus-off (no intenta recuperar). Ver la nota del .h:

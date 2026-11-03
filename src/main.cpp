@@ -2,7 +2,7 @@
  * @file    main.cpp
  * @brief   BMS Master — Firmware de producción STM32G474RE (NUCLEO-G474RE)
  *
- * Reúne los componentes VALIDADOS EN HW (banco 20 ICs, 2026-05-19):
+ * Componentes:
  *   · Driver BQ79606 (cadena daisy-chain UART)
  *   · HallSensor (amperímetro DHAB S/118, doble rango)
  *
@@ -25,18 +25,14 @@
  *   · Pérdida de medida (NTC abierto, comms BQ caídas) → fallo (EV5.8.13).
  *   · Sobre-I la gestiona HallSensor (debounce 500 ms propio).
  *
- * ⚠ TOTALBOARDS (en BQ79606.h) debe ser EXACTAMENTE el nº de ICs del HW.
- *   Validado en banco con 20. El pack completo son 24 (12 módulos × 2).
- *   Antes de desplegar en el pack real: TOTALBOARDS=24 y RE-VALIDAR.
- *   Este main deriva NUM_MODULES de TOTALBOARDS → se auto-adapta.
+ * ⚠ TOTALBOARDS (en BQ79606.h) debe ser EXACTAMENTE el nº de ICs del HW
+ *   (2 por módulo). NUM_MODULES se deriva de TOTALBOARDS.
  *
  * ── COMANDOS SERIE ──────────────────────────────────────────────────────────
  *   'h' (o '?') imprime la lista completa (printHelp).
  *
  * ── PENDIENTE ───────────────────────────────────────────────────────────────
- *   · Umbrales de celda (UV/OV/UT/OT) y [TUNE] del HallSensor: confirmar
- *     contra datasheet de la celda / ruido real del HW (gap-analysis P1).
- *   · TOTALBOARDS (BQ79606.h): poner el nº real de ICs de la PCB y RE-VALIDAR.
+ *   · [TUNE] del HallSensor: ajustar con el ruido real del HW.
  */
 
 #include <Arduino.h>
@@ -45,9 +41,8 @@
 #include "MART_CAN.h"           // CAN (FDCAN1 PA11/PA12, 125 kbps, mapa en docs/)
 
 // Capacidad del PACK (Ah) = 4.0 (celda 40T) × Np (celdas en paralelo).
-// ✓ Topología confirmada: 12 módulos × (6+5)s × 11p → Ns=132, Np=11, 44 Ah pack
-// (banco hoy: 10 mods → Ns=110, misma Np y misma capacidad). La capacidad
-// del pack solo depende de Np, no del nº de módulos en serie.
+// Módulos de (6+5)s × 11p → Np=11, 44 Ah. La capacidad del pack solo depende
+// de Np, no del nº de módulos en serie.
 // Debe ir ANTES del include de SocEstimator.h.
 #define SOC_PACK_CAPACITY_AH   (4.0f * 11)
 #include "SocEstimator.h"
@@ -131,7 +126,7 @@ static TelemetryDashboard dash(Serial, bms, hall, soc, fan, dashCfg);
 // celda FS (esos son V/T/NTC arriba, sin tocar). El reInit ahora se dispara
 // SOLO cuando fComm lleva confirmado FAULT_COMM_MS (ver sampleAndEvaluate) →
 // ante ruido se vuelve a pedir datos, no se re-inicializa la cadena.
-// ⚠ DOS TIEMPOS DISTINTOS, NO MEZCLAR (antes eran el mismo parámetro):
+// ⚠ DOS TIEMPOS DISTINTOS, NO MEZCLAR:
 //   · COMM_REINIT_MS = cuándo INTENTAR RECONECTAR. Sin coste si falla (se
 //     reintenta), así que conviene ser AGRESIVO: cuanto antes, mejor.
 //   · FAULT_COMM_MS  = cuándo DECLARAR FALLO y bajar BMS_OK (abre el SDC y
@@ -150,7 +145,7 @@ static TelemetryDashboard dash(Serial, bms, hall, soc, fan, dashCfg);
 // alargaba el tiempo a ciegas.
 #define COMM_REINIT_MS 500UL    ///< Cuándo intentar reconectar el BQ (agresivo)
 #define FAULT_COMM_MS 6000UL    ///< Cuándo BMS_OK cae por comms (conservador)
-#define FAULT_INIT_MS 200UL    ///< Init BQ fallido persistente (antes: inmediato)
+#define FAULT_INIT_MS 200UL    ///< Init BQ fallido persistente
 
 // Cadencias de muestreo: 2× respecto al mínimo FS para tener ≥2 muestras
 // dentro de cada ventana de debounce → mejor filtrado de ruido transitorio.
@@ -391,7 +386,7 @@ void setup()
         // (ademas son IDs bajos = alta prioridad CAN → inanición de VCU/PDM).
         gCan->setPacketTimer(13, 500);             // ID 13 diagnóstico
         gCan->setPacketTimer(14, 500);             // ID 14 tiempos/contadores de comms
-        gCan->setPacketTimer(15, 100);             // ID 15 BMS_DEBUG: 100 ms (era 500 → un episodio corto caia entre tramas)
+        gCan->setPacketTimer(15, 100);             // ID 15 BMS_DEBUG: 100 ms (a 500 un episodio corto cae entre tramas)
         Serial.println(F("[CAN] FDCAN listo (125k, IDs 11-18, 386-392)."));
     }
 
@@ -538,9 +533,8 @@ void sampleAndEvaluate()
     fComm.sample(readErr, now);
 
     // Auto-address (reInit) SOLO si el fallo de comms está CONFIRMADO por el
-    // debounce (persistente FAULT_COMM_MS), no ante un error de lectura suelto.
-    // Antes bastaba un readErr aislado (ruido) para relanzar el auto-address;
-    // ahora ante ruido las lecturas periódicas siguen pidiendo datos y solo se
+    // debounce (persistente FAULT_COMM_MS), no ante un error de lectura suelto:
+    // ante ruido las lecturas periódicas siguen pidiendo datos y solo se
     // re-inicializa la cadena si las comms siguen caídas toda la ventana.
     // reInit: FUERA de precarga, solo si el fallo de comms lleva confirmado
     // FAULT_COMM_MS (no re-inicializar ante ruido suelto). DURANTE la precarga
@@ -635,9 +629,8 @@ void updateBmsOk()
     // El reloj arranca cuando APARECE la condición (primera muestra mala), NO
     // cuando el debounce la confirma: así el tiempo reportado incluye la ventana
     // de debounce y mide lo que de verdad duró la anomalía, de su detección a su
-    // resolución. Antes empezaba en la confirmación (con el pin ya caído), así
-    // que se perdían los primeros 500-2000 ms de cada episodio.
-    // ⚠ Efecto secundario buscado: ahora también se cronometran los episodios
+    // resolución.
+    // ⚠ Efecto secundario buscado: también se cronometran los episodios
     //   que NO llegan a confirmar (se despejaron dentro del debounce). Ver un
     //   maxFailMs < ventana de debounce significa justo eso: hubo anomalía pero
     //   NO llegó a abrir el SDC.
@@ -733,9 +726,7 @@ void updateTson()
     // sentidos. Debounce de NIVEL: el estado filtrado solo cambia si el nivel
     // nuevo se mantiene estable SDC_FILTER_MS; cualquier rebote reinicia la
     // cuenta. Como el loop corre a kHz, en esa ventana se muestrea miles de
-    // veces -> un tren de ruido NO consigue mover el estado.
-    // Frente al FaultTimer que habia antes: aquel solo filtraba la BAJADA (y
-    // con k=2 lecturas), asi que una subida espuria pasaba directa.
+    // veces -> un tren de ruido NO consigue mover el estado, ni al bajar ni al subir.
     // ⚠ NO compromete la seguridad: el SDC es HARDWARE y los AIRs abren solos.
     //   Esto solo filtra la reaccion LOGICA del latch SDC_TSON, que ante una
     //   apertura REAL llegara SDC_FILTER_MS mas tarde.
@@ -865,9 +856,8 @@ static void buildDebugFlags(uint8_t out[4])
     // B3 — state (PCB nueva: SDC/TSON/precarga/IMD)
     if (bms.isOK())                        out[3] |= (1 << 0); // AutoAddress OK
     if (bmsInitOk)                         out[3] |= (1 << 1); // init BQ OK
-    // FDCAN OK = init correcto Y el bus NO está en bus-off AHORA. Antes solo
-    // miraba gCanOk (el init del arranque), así que este bit decía "OK" aunque
-    // el bus llevara minutos caído — engañoso justo en el post-mortem.
+    // FDCAN OK = init correcto Y el bus NO está en bus-off AHORA (con solo el
+    // init del arranque diría "OK" aunque el bus llevara minutos caído).
     if (gCanOk && !canBusOffNow)           out[3] |= (1 << 2); // FDCAN OK (estado real)
     if (sdcTson)                           out[3] |= (1 << 3); // latch TSON cerrado
     if (prechargeFail)                     out[3] |= (1 << 4); // precarga FALLÓ (enclavado)
@@ -927,7 +917,7 @@ void updateCanTx()
     //   TEMP bit i = 1 si algún NTC del módulo i fuera de [UT,OT].
     // Los NUM_MODULES bits menos significativos son válidos (resto = 0).
     // Slot 3 (V_DELTA): delta de tensión de celda (máx−mín) en mV → indicador de
-    // desbalanceo del pack. ⚠ DLC ahora 6 B (antes 4): ACTUALIZAR el Excel/receptor.
+    // desbalanceo del pack. DLC 6 B.
     uint16_t gsV = 0, gsT = 0;
     for (int m = 0; m < NUM_MODULES; m++) {
         bool vFail = false;
@@ -954,15 +944,14 @@ void updateCanTx()
     gCan->setPacket((uint32_t)12, d12, 3);
 
     // ── ID 13 (0xD) — maxTotalFailTime(ms), numTriesResetComm UINT16×2 ─────
-    // B4-5 maxCommFailMs · B6-7 lastCommFailMs (antes relleno 0xFF).
+    // B4-5 maxCommFailMs · B6-7 lastCommFailMs.
     uint16_t d13[4] = { canMaxFailMs, canNumTriesReset,
                         canMaxCommFailMs, canLastCommFailMs };
     gCan->setPacket((uint32_t)13, d13, 4);
 
     // ── ID 14 (0xE) — lastFailTime(ms), numCommFails, numCrcFails,
     //                  retryNet (int8, §3.1/§3.3 doc ruido)  ───────────────
-    // B6 (antes numTriesReset, duplicado byte a byte del ID 13 — ver
-    // docs/CAN_Solo2DL.md §8): reintentos del ÚLTIMO ciclo V+T, con signo
+    // B6 (ver docs/CAN_Solo2DL.md §8): reintentos del ÚLTIMO ciclo V+T, con signo
     // en vez de 2 campos separados para no gastar un canal nuevo de
     // RaceStudio (límite de canales, no de bytes). +N = N reintentos por
     // COMM, -N = N reintentos por CRC. En todas las pruebas de banco COMM
