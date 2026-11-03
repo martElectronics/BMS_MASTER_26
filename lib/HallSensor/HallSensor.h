@@ -3,8 +3,9 @@
  * @brief   Driver para sensor de corriente Hall DHAB S/118 con doble rango.
  *
  * El DHAB S/118 tiene dos salidas analógicas:
- *   · Canal 30A:  alta resolución, rango ±30A,  sensibilidad 66mV/A
- *   · Canal 350A: baja resolución, rango ±350A, sensibilidad 4mV/A
+ *   · Canal 30A:  alta resolución, rango ±30A,  sensibilidad 66,7mV/A
+ *   · Canal 350A: baja resolución, rango ±350A, sensibilidad 5,7mV/A
+ *   (hoja de datos LEM DHAB S/118, v5 de 15-03-2023)
  *
  * La biblioteca selecciona automáticamente el rango óptimo con histéresis
  * para evitar oscilaciones en el cambio. Incluye:
@@ -61,7 +62,9 @@
 //   y leía ~10 % alto). Comprobar que en reposo el offset ≈ 1.62 V.
 #define HALL_DIVIDER     0.652f   ///< 18k/33k validado en banco (teórico 0.647)
 #define HALL_SENS_30A    (0.066f * HALL_DIVIDER)  ///< ≈ 0.0430 V/A en el pin (±30A)
-#define HALL_SENS_350A   (0.004f * HALL_DIVIDER)  ///< ≈ 0.00261 V/A en el pin (±350A)
+// Canal 350A: 5,7 mV/A según la hoja de datos. Hasta 2026-11 estaba a 4 mV/A y
+// por encima de 30 A leía 1,43x de más (en el coche, ~1,34x lo que da el DTI).
+#define HALL_SENS_350A   (0.0057f * HALL_DIVIDER)  ///< ≈ 0.00372 V/A en el pin (±350A)
 
 // Tensión de referencia y resolución del ADC
 #define HALL_VREF        3.3f     ///< Tensión de referencia del ADC (V)
@@ -120,8 +123,11 @@
 #define HALL_OFFSET_MAX_V       1.85f  ///< V en el ADC (máximo plausible a 0 A)
 
 // Límites de corriente (Formula Student)
-#define HALL_I_MAX_DISCHARGE  500.0f  ///< Corriente máxima de descarga (A)
-#define HALL_I_MAX_CHARGE      -500.0f  ///< Corriente máxima de carga (A, negativa = carga)
+// La salida del DHAB se recorta a 0,25/4,75 V → con 5,7 mV/A el canal 350A no
+// pasa de ~±395 A, así que 500 A no saltaría nunca. 350 A es el fondo de escala
+// del sensor y la misma corriente real a la que saltaba con la ganancia antigua.
+#define HALL_I_MAX_DISCHARGE  350.0f  ///< Corriente máxima de descarga (A)
+#define HALL_I_MAX_CHARGE      -350.0f  ///< Corriente máxima de carga (A, negativa = carga)
 
 // Tiempo de fallo según norma FS EV 5.8
 #define HALL_FAULT_MS        250UL    ///< Fallo confirmado si persiste >500ms
