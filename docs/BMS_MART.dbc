@@ -234,6 +234,10 @@ BO_ 1160 VCU_Diag: 8 VCU
  SG_ VCU_ResetCause : 15|8@0+ (1,0) [0|6] "" AIM
  SG_ VCU_Heartbeat : 23|16@0+ (1,0) [0|65535] "" AIM
 
+BO_ 1161 VCU_Steering: 8 VCU
+ SG_ VCU_SteerAngle : 7|16@0- (0.1,0) [-90|90] "deg" AIM
+ SG_ VCU_SteerRaw : 23|16@0+ (1,0) [0|4095] "ADC" AIM
+
 BO_ 1163 VCU_Apps: 8 VCU
  SG_ APPS1_pct : 7|16@0+ (0.1,0) [0|100] "%" AIM
  SG_ APPS2_pct : 23|16@0+ (0.1,0) [0|100] "%" AIM
@@ -303,6 +307,11 @@ VAL_ 993 INV_ControlMode 0 "unused" 1 "SPEED" 2 "CURRENT" 3 "CURRENT_BRAKE" 4 "P
 VAL_ 1089 INV_FaultCode 0 "OK" 1 "Overvoltage" 2 "Undervoltage" 3 "DRV" 4 "Overcurrent" 5 "CtrlOverTemp" 6 "MotorOverTemp" 7 "SensorWire" 8 "SensorGeneral" 9 "CANcmdError" 10 "AnalogInput" ;
 
 CM_ BO_ 1160 "VCU_26, src/Control.cpp publishTelemetry() (rev 2026-08-10). Bytes4-7 reservados a 0.";
+CM_ BO_ 1161 "Direccion (VCU_26, sensor analogico en CH4 del MCP3208, antes brake1). Solo telemetria, 100 ms. Bytes4-7 sin usar (0xFF).";
+CM_ SG_ 1161 VCU_SteerAngle "Angulo del VOLANTE en grados, + = izquierda (ISO 8855). Satura en +-STEER_LOCK_DEG (Config.h, 90 provisional). Depende de la calibracion de 3 puntos (opcion 24 del menu de la VCU).";
+CM_ SG_ 1161 VCU_SteerRaw "Cuentas ADC crudas (sobremuestreo x4). Sirven para calibrar y para ver un sensor suelto sin depender de la calibracion.";
+CM_ SG_ 1164 Brake1_pct "Desde 2026-11-02 brake1 no se lee (su entrada CH4 es ahora la direccion, BO_ 1161): sale a 0.";
+CM_ SG_ 1164 Brake1_raw "Sale a 0 desde 2026-11-02, ver Brake1_pct.";
 CM_ BO_ 1165 "Velocidad de rueda (VCU_26, sensores Hall SNDH-H3L-G01, 22 dientes, ventana 100 ms). Pulsos = de la ultima ventana: sirven para ver un sensor muerto o con ruido.";
 CM_ BO_ 1167 "Velocidad del coche calculada por la VCU con WHEEL_DIAMETER_MM a partir de las RPM de rueda (ID 1165).";
 CM_ SG_ 1167 VCU_SpeedAvg "Media de rueda izquierda y derecha. Es la que vale para el display.";
