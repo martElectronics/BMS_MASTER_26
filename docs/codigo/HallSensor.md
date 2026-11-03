@@ -8,8 +8,9 @@ analógicas (rangos distintos). La clase elige el rango óptimo, filtra, y vigil
 sensor (watchdog) para gobernar `BMS_OK` por sobre-corriente o por fallo del propio sensor.
 
 ## Doble rango (con histéresis)
-- **Canal 30 A:** alta resolución (66 mV/A nativo). Activo por defecto.
-- **Canal 350 A:** baja resolución (4 mV/A). Se usa con |I| grande.
+- **Canal 30 A:** alta resolución (66,7 mV/A nativo). Activo por defecto.
+- **Canal 350 A:** baja resolución (5,7 mV/A nativo, hoja de datos del S/118). Se usa con |I| grande.
+  Hasta 2026-11 el firmware usaba 4 mV/A y por encima de 30 A leía 1,43 veces de más.
 - Cambia 30→350 A a `HALL_THRESH_UP` (30 A) y vuelve a `HALL_THRESH_DOWN` (25 A).
 
 ## Cómo se usa (`main.cpp`)
@@ -28,7 +29,7 @@ bool  ok = hall.isOK();        // false si fallo confirmado >500 ms o offset de 
 | `isDisconnected()` | un canal en el raíl sin que el otro corrobore corriente real |
 | `isStuck()` | el canal activo no varía ni el dither del ADC en 500 ms (congelado) |
 | `isNoisy()` | salto de corriente entre lecturas > umbral (EMI) |
-| `isOverCurrent()` | fuera de límites FS >500 ms (descarga 170 A / carga −7 A) |
+| `isOverCurrent()` | fuera de ±`HALL_I_MAX_*` (350 A, fondo de escala del sensor) >`HALL_FAULT_MS` |
 | `isOffsetValid()` | el offset calibrado en `begin()` cayó en rango plausible (~1.62 V) |
 
 Todos los fallos se confirman con timer de **500 ms** (FS EV5.8).

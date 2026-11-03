@@ -287,8 +287,9 @@ void HallSensor::printStatus() const
     Serial.printf("Corriente:    %.2f A (filt) | %.2f A (raw)  (%s)\n",
                   _currentFiltered, _currentRaw,
                   _usingLowRange ? "rango 30A" : "rango 350A");
-    // Entre ~5 y 25 A los dos canales miden: deben coincidir. Si el de 350A da
-    // ~1,43x el de 30A, su sensibilidad real es 5,7 mV/A y no HALL_SENS_350A.
+    // Entre ~5 y 25 A los dos canales miden: deben coincidir (cociente ~1,0).
+    // A pocos amperios el offset del canal 350A (~0,3 A por cuenta de ADC) pesa
+    // mucho: comparar la diferencia entre dos corrientes, no una sola lectura.
     Serial.printf("Por canal:    30A=%.2f A | 350A=%.2f A  (350A/30A = %.2f)\n",
                   _i30Filt, _i350Filt,
                   fabsf(_i30Filt) > 3.0f ? _i350Filt / _i30Filt : 0.0f);
