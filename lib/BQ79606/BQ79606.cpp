@@ -830,47 +830,6 @@ bool BQ79606::checkCRC(uint8_t* data, uint16_t len)
 }
 
 // ============================================================
-//  DEBUG
-// ============================================================
-
-void BQ79606::printRegisters(uint8_t deviceID)
-{
-    const uint16_t START = 0x0200;
-    const uint8_t  LEN   = 81;
-    uint8_t buf[LEN + 6] = {0};
-
-    int n = readReg(deviceID, START, buf, LEN, 0, FRMWRT_SGL_R);
-    if (n <= 0) {
-        { char _b[128]; snprintf(_b, sizeof(_b), "[BQ] printRegisters: error %d\n", n); Serial.print(_b); }
-        return;
-    }
-    if (!checkCRC(buf, n)) {
-        Serial.println(F("[BQ] printRegisters: CRC incorrecto."));
-        return;
-    }
-    Serial.println(F("Addr   | Hex"));
-    Serial.println(F("-------+-----"));
-    for (int i = 0; i < LEN; i++) {
-        { char _b[128]; snprintf(_b, sizeof(_b), "0x%04X | 0x%02X\n", START + i, buf[4 + i]); Serial.print(_b); }
-    }
-}
-
-void BQ79606::printRegister(uint8_t deviceID, uint16_t addr)
-{
-    uint8_t buf[7] = {0};
-    int n = readReg(deviceID, addr, buf, 1, 0, FRMWRT_SGL_R);
-    if (n < 7) {
-        { char _b[128]; snprintf(_b, sizeof(_b), "[BQ] printRegister 0x%04X: error %d\n", addr, n); Serial.print(_b); }
-        return;
-    }
-    if (!checkCRC(buf, n)) {
-        Serial.println(F("[BQ] printRegister: CRC incorrecto."));
-        return;
-    }
-    { char _b[128]; snprintf(_b, sizeof(_b), "0x%04X = 0x%02X\n", addr, buf[4]); Serial.print(_b); }
-}
-
-// ============================================================
 //  PROTOCOLO PRIVADO
 // ============================================================
 
@@ -978,7 +937,6 @@ bool BQ79606::_autoAddress()
 
     // Verificar que cada board responde con su dirección
     bool ok = true;
-    Serial.println(F("\n--- Verificacion AutoAddress ---"));
     for (_nCurrentBoard = 0; _nCurrentBoard < TOTALBOARDS; _nCurrentBoard++) {
         memset(resp, 0, sizeof(resp));
         int res = readReg(_nCurrentBoard, DEVADD_USR, resp, 1, 0, FRMWRT_SGL_R);
@@ -1000,13 +958,14 @@ bool BQ79606::_autoAddress()
         }
 
         uint8_t received = resp[4];
-        Serial.print(F("  Board ")); Serial.print(_nCurrentBoard);
-        Serial.print(F(" -> esperado ")); Serial.print(_nCurrentBoard);
-        Serial.print(F(", recibido ")); Serial.println(received);
-        if (received != _nCurrentBoard) ok = false;
+        if (received != _nCurrentBoard) {   // solo se avisa de lo que falla
+            Serial.print(F("  Board ")); Serial.print(_nCurrentBoard);
+            Serial.print(F(" -> esperado ")); Serial.print(_nCurrentBoard);
+            Serial.print(F(", recibido ")); Serial.println(received);
+            ok = false;
+        }
         _wait(BQ_VERIFY_GAP_MS);
     }
-    Serial.println(F("--------------------------------"));
     return ok;
 }
 

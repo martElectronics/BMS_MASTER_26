@@ -59,7 +59,6 @@ public:
                                                  return a.id < b.id;
                                              });
             auto insertedIt = packets.insert(insertIt, packet); // Insert and get iterator to the new element
-            DEBUG_PRINTLN("Paquete anadido");
         }
     }
 
@@ -108,26 +107,6 @@ public:
         }
     }
 
-    void printAllPacketsIDs() const
-    {
-        unsigned cont = 1;
-        if (packets.empty())
-        {
-            Serial.println("No packets stored.");
-            return;
-        }
-        else
-        {
-            for (const auto &packet : packets)
-            {
-                Serial.println((String) "Packet " + cont);
-                Serial.print("ID = ");
-                Serial.println(packet.id); // Assuming ID is hexadecimal
-                Serial.println(); // New line after printing each packet
-                cont++;
-            }
-        }
-    }
 };
 
 #endif

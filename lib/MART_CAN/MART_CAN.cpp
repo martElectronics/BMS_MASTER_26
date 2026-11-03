@@ -122,13 +122,11 @@ bool CAN_BUS::send()
                 }
                 if (!ESP32Can.writeFrame(frame,0))
                 {
-                    ERROR_PRINTLN("Error sending message");
                     success = false; // Mark failure but continue sending the rest
                     numTxPaqError++;
                 }
                 else
                 {
-                    DEBUG_PRINTLN((String)"Packet sent ID = " + packet.id);
                     packet.id=idAux;
                     // Programar el próximo envío: timer o default (ver arriba).
                     packet.nextSendTime = currentTime + interval;
@@ -159,13 +157,11 @@ bool CAN_BUS::send()
 
                 if (HAL_FDCAN_AddMessageToTxFifoQ(&hfdcan, &TxHeader, packet.bytes) != HAL_OK)
                 {
-                    ERROR_PRINTLN("Error sending message");
                     success = false;
                     numTxPaqError++;
                 }
                 else
                 {
-                    DEBUG_PRINTLN((String)"Packet sent ID = " + packet.id);
                     packet.id=idAux;
                     // Programar el próximo envío: timer o default (ver arriba).
                     packet.nextSendTime = currentTime + interval;
@@ -192,7 +188,6 @@ bool CAN_BUS::send(unsigned long id)
     bool success = true;
 
     CanPacketRawData packet;
-    DEBUG_PRINT((String) "Sending packet with id " + id);
     if (DataOUT.getPacketById(id, packet))
     {
         byte len = packet.size;
@@ -214,7 +209,6 @@ bool CAN_BUS::send(unsigned long id)
             }
             if (!ESP32Can.writeFrame(frame))
             {
-                ERROR_PRINTLN("Error sending message");
                 success = false; // Mark failure but continue sending the rest
             }
 #elif defined(STM32G4xx)
@@ -242,7 +236,6 @@ bool CAN_BUS::send(unsigned long id)
 
             if (HAL_FDCAN_AddMessageToTxFifoQ(&hfdcan, &TxHeader, buf) != HAL_OK)
             {
-                ERROR_PRINTLN("Error sending message");
                 success = false;
             }
 #endif
@@ -250,7 +243,6 @@ bool CAN_BUS::send(unsigned long id)
     }
     else
     {
-        DEBUG_PRINTLN("NULLPTR");
         success = false;
     }
 
@@ -265,21 +257,13 @@ bool CAN_BUS::send(unsigned long id)
 void CAN_BUS::receive()
 {
     previousStatusRuntimeTime = millis();
-    int after;
     if (readBytes() || config.simulating)
     {
-        int mills = millis();
-        DEBUG_PRINTLN((String) "Time to read packet: " + (mills - previousStatusRuntimeTime));
         // Store packet in memory if is not in the IDs set by the filter or if are no ids stored
         if ((filterIDs.empty()) || (std::binary_search(filterIDs.begin(), filterIDs.end(), DataIN.dataRaw.id)))
         {
-            // Serial.println("ADDED");
             DataIN.addPacket(DataIN.dataRaw);
         }
-        after = millis();
-        DEBUG_PRINTLN((String) "Time to add packet: " + (after - mills));
-        mills = after;
-        DEBUG_PRINTLN((String) "Rx ID: " + DataIN.dataRaw.id);
         
         numRXPaqOK++;
     }
@@ -294,16 +278,6 @@ bool CAN_BUS::setFilters(const unsigned long ids[], unsigned size)
     }
     std::sort(filterIDs.begin(), filterIDs.end());
     return true;
-}
-
-void CAN_BUS::printFilters()
-{
-    // configurator.printCalculatedValues();
-}
-
-void CAN_BUS::testFilters(const std::vector<uint16_t> &testIds)
-{
-    // configurator.testFilters(testIds);
 }
 
 void CAN_BUS::setPacketTimer(unsigned long packetID, unsigned long time)
@@ -333,17 +307,10 @@ void CAN_BUS::setCANStatusData()
     d1[0] = numRXPaqOK / numCurrentSamples;
     d1[1] = numTXPaqOK / numCurrentSamples;
 
-    DEBUG_PRINTLN("Offset: ");
-    DEBUG_PRINTLN(statusPacketOffset);
 
     // this->setPacket(statusPacketOffset, d0);
     // this->setPacket(statusPacketOffset + 1, d1);
     // this->setPacket(statusPacketOffset + 2, d2);
-}
-
-void CAN_BUS::printReceivedIds()
-{
-    DataIN.printAllPacketsIDs();
 }
 
 // Solo CONSULTA el estado bus-off (no intenta recuperar). Ver la nota del .h:
@@ -444,7 +411,6 @@ void CAN_BUS::configurePacketTimersByPriority()
 
         setPacketTimer(ids[i], interval);
 
-        DEBUG_PRINTLN((String)"[TIMER] ID " + ids[i] + " -> " + interval + " ms");
     }
 }
 

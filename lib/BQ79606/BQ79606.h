@@ -1014,15 +1014,6 @@ public:
     bool checkCRC(uint8_t* data, uint16_t len);
 
 
-    // ─── Debug ────────────────────────────────────────────────────────────────
-
-    /** Imprime por Serial los registros 0x0200–0x0250 de un IC (con nombre de registro). */
-    void printRegisters(uint8_t deviceID);
-
-    /** Imprime por Serial el valor hexadecimal de un único registro de un IC. */
-    void printRegister(uint8_t deviceID, uint16_t addr);
-
-
     // ─── Configuración ────────────────────────────────────────────────────────
 
     /**

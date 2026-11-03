@@ -254,13 +254,11 @@ public:
                 }
                 else
                 {
-                    ERROR_PRINTLN("Error: getPacket Empty array");
                     ok = false;
                 }
             }
             else
             {
-                ERROR_PRINTLN("Error: getPacket No matching packet found.");
                 ok = false;
             }
         }
@@ -301,48 +299,10 @@ public:
         return N; // 1 bit for each bool
     }
 
-    // Helper function to pack a single array
-
-    void printByteArray(const uint8_t *array, size_t size)
-    {
-        for (size_t i = 0; i < size; ++i)
-        {
-            if (array[i] < 0x10)
-                Serial.print("0");
-            Serial.print(array[i], HEX);
-            Serial.print(" ");
-        }
-        Serial.println();
-    }
-
-    // Template function to print an array of any type and size
-    template <typename T, size_t N>
-    void printArray(const T (&array)[N])
-    {
-        Serial.print("[");
-        for (size_t i = 0; i < N; ++i)
-        {
-            if (i > 0)
-            {
-                Serial.print(", ");
-            }
-            Serial.print(array[i]);
-        }
-        Serial.println("]");
-    }
-
     // Calculates and writes the masks and filters to the MCP2515 registers given a set of IDs
     bool setFilters(const unsigned long ids[], unsigned size);
 
-    // Prints the calculated masks and filters
-    void printFilters();
-
-    // Test by software if the given IDs are accepted by the created filters or not
-    void testFilters(const std::vector<uint16_t> &testIds);
-
     void setPacketTimer(unsigned long packetID, unsigned long time);
-    void printStatusData(unsigned _nodeID);
-    void printReceivedIds();
 
     //** CAN STATUS DATA**//
     void setCANStatusData();
