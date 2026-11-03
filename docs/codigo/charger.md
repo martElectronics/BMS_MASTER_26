@@ -33,8 +33,10 @@ no pasarse del límite AC ni con el pack lleno. **Arranca SIN cargar** (`g` para
 - `BMS_OK` refleja la **seguridad** del pack (OK=HIGH), no si se está cargando.
 
 ## Comandos serie
-`g` start · `x` stop · `c,<I>` fijar corriente (capada a `CHG_MAX_CURRENT_A`) · `d` datos
-· `r` reset.
+`h` (o `?`) imprime la lista completa. `g` start · `x` stop · `c,<I>` fijar corriente
+(capada a `CHG_MAX_CURRENT_A`) · `d` datos · `v` voltajes · `t` temps · `a` Hall
+· `R` resistencia por paralelo · `j` dashboard JSON · `f,<ms>` ventana de comms
+· `i` re-init BQ · `S` dormir BQ · `r` reset.
 
 ## ⚠ Config PROVISIONAL — confirmar antes de cargar un pack real
 | `#define` | Valor | Nota |

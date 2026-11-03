@@ -3,7 +3,7 @@
 ## Propósito
 Orquesta todo el BMS: lee el pack (tensiones, temperaturas, corriente), decide si
 es seguro (`BMS_OK`), gestiona el arranque del Tractive System (**TSON** + precarga),
-publica telemetría por CAN y deja rastro en FRAM para diagnóstico. Es firmware de
+publica telemetría por CAN. Es firmware de
 **producción** (PCB nueva) en la rama `main`.
 
 ## Arquitectura de seguridad (leer primero)
@@ -20,7 +20,7 @@ publica telemetría por CAN y deja rastro en FRAM para diagnóstico. Es firmware
    `reInit()` rate-limited si las comms caen.
 2. **`updateBmsOk()`** — confirma fallos con **debounce K-de-N + ventana** (V≥500 ms,
    T≥1000 ms, comms≥500 ms); calcula `bmsFault`; escribe `BMS_OK`; incrementa los
-   **contadores por causa** (flanco) y loguea transiciones en FRAM.
+   **contadores por causa** (flanco) y avisa por serie de cada transición.
 3. **`updateTson()`** — máquina de estados del TSON + temporizador de precarga.
 4. `hall.update()` · `soc.update()` · `fan.update()` — corriente, SOC, ventiladores.
 5. **CAN** (IDs 10-16) — telemetría a 125 kbps.
@@ -45,9 +45,12 @@ Estado general (0x0A), GEN_STATUS bitmap por módulo (0x0C), señales de SDC/TSO
 contador de fallos por causa (ID16), V/T, SOC. Ver [docs/CAN_Solo2DL.md](../CAN_Solo2DL.md).
 
 ## Comandos serie (115200)
-`v` voltajes · `t` temps · `a` amperímetro · `s` status · `f` fallos · `c` limpiar
-fallos BQ · `i` re-init BQ · `r` restart · `d` volcar log FRAM · `D` reset índice log
-· `C` reset contadores.
+`h` (o `?`) imprime la lista. Cada 2 s sale un resumen de 3 líneas; `s` da el estado completo.
+
+`v` voltajes · `t` temps · `g` CSV por módulo (registro de módulos) · `a` amperímetro
+· `f` fallos BQ · `c` limpiar fallos BQ · `i` re-init BQ · `C` reset contadores
+· `j` dashboard JSON (TelemetryWeb) · `F` ventiladores al 100 % · `S` dormir BQ
+· `r` restart.
 
 ## Configuración que tocarás
 | Qué | Dónde | Nota |

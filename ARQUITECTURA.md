@@ -43,7 +43,6 @@ Celda: **Samsung INR21700-40T**, 4.0 Ah NCA, carga 4.2 V, corte 2.5 V.
 | Amperímetro DHAB 30A / 350A | PA1 / PA0 | in | HallSensor |
 | CAN (FDCAN1) RX / TX | PA11 / PA12 | — | fijo en la lib (125 kbps) |
 | PWM ventiladores | PB10 | out | 2/3 hilos, baja frecuencia |
-| FRAM I²C3 SCL / SDA | PC8 / PC9 | — | MB85RC256V @ 0x50 (FaultLogger) |
 
 > ⚠ Los pines no-BQ se usan con la API Arduino; **verificar el mapeo
 > físico en HW** (que compile no garantiza el pin correcto, ni que **PB10**
@@ -124,7 +123,6 @@ lib/BQ79606/            Driver de la cadena BQ (VALIDADO HW, banco 20 ICs)
 lib/HallSensor/          Amperímetro DHAB S/118 (portado + corregido)
 lib/SocEstimator/        SOC: coulomb counting + OCV (header-only)
 lib/FanController/       Ventiladores: curva Tmax + feed-forward (header-only)
-lib/FaultLogger/         Log persistente en FRAM MB85RC256V (I²C3 PC8/PC9)
 ```
 
 Cada lib encapsula una responsabilidad; `main.cpp` solo orquesta y
@@ -141,11 +139,11 @@ sampleAndEvaluate()   V@250ms + T@500ms + NTC + comms → fija las
 soc.update()          coulomb counting + re-snap OCV en reposo
 fan.update()          curva sobre Tmax + feed-forward; fail-safe 100 % si T no fiable
 updateBmsOk()         confirma fallos (debounce) → bms.setBmsOk(!fault);
-                      contadores por causa + log FRAM   (ANTES que updateTson)
+                      contadores por causa              (ANTES que updateTson)
 updateTson()          máquina TSON (botón/SDC) + precarga (timer 5 s → PRECHARGE_FAIL)
 updateCanTx()         arma IDs 10-16 + 386-392; send() (throttle por timer)
 handleSerial()        comandos de diagnóstico
-printStatus() @2s     volcado por serie
+printStatusShort() @2s  resumen por serie (3 líneas; 's' = estado completo)
 IWatchdog.reload()    AL FINAL: si el loop se cuelga → reset → BMS_OK LOW (fail-safe)
 ```
 
@@ -176,15 +174,7 @@ reposo (|I| bajo y estable). Tabla OCV→SOC **NCA genérica** (el
 datasheet no trae curva OCV) → SOC **orientativo** hasta caracterizar.
 `SOC_PACK_CAPACITY_AH = 4.0 × Np` (ajustar Np).
 
-### 6.5 FaultLogger (FRAM MB85RC256V via I²C)
-Log persistente de eventos en FRAM externa (32 KB, I²C3 PC8/PC9, addr 0x50).
-Resuelve "BMS_OK se cayó en pista y el CAN tampoco funcionaba" — los
-eventos quedan grabados aunque no haya telemetría. Ring buffer de 2047
-records de 16 bytes (BOOT, BMS_OK fall/rise, reInit, precharge fail).
-Lectura por comando serie `d` (dump) / `D` (clear). Endurance FRAM
-10¹² ciclos → seguro toda la vida del coche.
-
-### 6.6 FanController (header-only)
+### 6.5 FanController (header-only)
 Curva sobre **Tmax** del pack: OFF<32 °C / ON≥35 °C (histéresis) /
 rampa 30→100 % entre 35–50 °C / 100 % ≥50 °C. **Feed-forward**: |I|
 alta fuerza piso de duty (anticipa inercia térmica). 100 % a 50 °C deja
@@ -300,6 +290,7 @@ Ocupación actual: RAM ~4 % / Flash ~14 % de un STM32G474RE.
 
 ## 11. Comandos serie (diagnóstico)
 
-`v` voltajes · `t` temps · `a` amperímetro · `s` status · `f` fallos
-BQ · `c` limpiar fallos BQ · `i` re-init BQ · `r` reset MCU ·
-`d` dump del log FRAM · `D` clear del log FRAM.
+`h` (o `?`) imprime la lista completa. `v` voltajes · `t` temps · `g` CSV
+por módulo · `a` amperímetro · `s` estado completo · `f` fallos BQ · `c`
+limpiar fallos BQ · `i` re-init BQ · `C` reset contadores · `j` dashboard
+JSON · `F` ventiladores 100 % · `S` dormir BQ · `r` reset MCU.

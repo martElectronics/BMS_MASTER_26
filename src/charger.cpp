@@ -176,8 +176,6 @@ static FanController dashFan(PIN_PWM);     ///< NO usado: sin begin() no toca el
 static const DashConfig dashCfg = {
     NUM_MODULES, 11, 9,
     modCellV, modCellT,
-    CELL_VMIN_HARD_V, CELL_VMAX_HARD_V,    // umbrales de CARGA (no los de carrera)
-    CELL_TMIN_CHG_C,  CELL_TMAX_CHG_C,
     500,
     -1.0f                                  // corriente de CARGA positiva en panel/JSON
 };
@@ -240,14 +238,6 @@ static uint8_t       chgStatus       = 0;       ///< último byte STATUS del car
 static float         chgOutV         = 0.0f;    ///< V de salida reportada
 static float         chgOutI         = 0.0f;    ///< I de salida reportada
 
-// ── Modos de visualizacion por serie (NO afectan a la SEGURIDAD) ────────────
-//  scrutiMode (ON por defecto, tecla 'q' lo apaga): calla SOLO el diagnostico
-//    de comms (ventana de gracia, reInit, CRC por board). Los fallos de
-//    V/T/NTC/Hall y las transiciones de BMS_OK SIEMPRE se ven (con detalle).
-//  El monitor V/T en vivo lo sirve ahora TelemetryDashboard (teclas 'm'/'j');
-//  el liveMonitor propio que habia aqui se retiro por redundante.
-static bool          scrutiMode      = true;   ///< arranque en modo scruti (diag comms en silencio)
-
 // ============================================================================
 //  PROTOTIPOS
 // ============================================================================
@@ -266,6 +256,7 @@ void   printTFaultDetail();
 void   printNtcFaultDetail();
 void   updateResistance(bool readOk, unsigned long now);
 void   printResistance();
+void   printHelp();
 void   handleSerial();
 
 // ============================================================================
@@ -313,8 +304,8 @@ void setup()
     Serial.printf("Corte por celda: UV=%.2f V  OV=%.2f V | T carga: %.0f..%.0f C\n",
                   CELL_VMIN_HARD_V, CELL_VMAX_HARD_V,
                   CELL_TMIN_CHG_C, CELL_TMAX_CHG_C);
-    Serial.println(F("ARRANCA SIN CARGAR. Comandos:"));
-    Serial.println(F("  g=start x=stop c,<I>=corriente  v=voltajes t=temps  m=panel j=panel(JSON)  q=diag  f,<ms>=ventana  S=dormir BQ i=re-init  d=datos a=hall R=resistencias r=restart"));
+    Serial.println(F("ARRANCA SIN CARGAR."));
+    printHelp();
 
     dash.setJsonExtra(dashChargerJson);   // el panel web necesita el estado de carga
 
@@ -422,7 +413,7 @@ bool tryReinit(unsigned long now)
     tLastReinit = now;
 
     // Dedup: el fallo de auto-address se avisa SOLO la primera vez de cada racha
-    // (no spamear cada reintento); se rearma al reconectar. En scruti, silencio.
+    // (no spamear cada reintento); se rearma al reconectar.
     static bool failNotified = false;
 
     // En PRECARGA: UN solo intento de auto-address. Un reInit que falla con los
@@ -435,9 +426,9 @@ bool tryReinit(unsigned long now)
     bms.setMaxAttempts(5);                  // restaurar default
 
     if (bmsInitOk) {
-        if (failNotified && !scrutiMode) Serial.println(F("[BQ] reconectado."));
+        if (failNotified) Serial.println(F("[BQ] reconectado."));
     } else {
-        if (!failNotified && !scrutiMode)
+        if (!failNotified)
             Serial.println(F("[BQ] sin comunicacion con la cadena (reintentando)..."));
     }
     failNotified = !bmsInitOk;
@@ -462,10 +453,10 @@ bool readVT()
     // esta vivo y direccionado, asi que re-direccionar no arregla nada.
     chainMute = (rV == BQResult::COMM_ERROR) || (rT == BQResult::COMM_ERROR);
 
-    if (!scrutiMode && !okV) Serial.printf("[BQ] V FALLO %s en board %d\n",
+    if (!okV) Serial.printf("[BQ] V FALLO %s en board %d\n",
                             rV == BQResult::CRC_ERROR ? "CRC" : "COMM",
                             bms.getLastReadFailBoard());
-    if (!scrutiMode && !okT) Serial.printf("[BQ] T FALLO %s en board %d\n",
+    if (!okT) Serial.printf("[BQ] T FALLO %s en board %d\n",
                             rT == BQResult::CRC_ERROR ? "CRC" : "COMM",
                             bms.getLastReadFailBoard());
     return okV && okT;
@@ -531,7 +522,7 @@ bool readPack()
         if (readVT()) {
             everRead = true;
             fComm.sample(false, now);     // un OK rompe la serie
-            if (!scrutiMode) Serial.println(F("[BQ] recuperado en precarga."));
+            Serial.println(F("[BQ] recuperado en precarga."));
             return true;
         }
         fComm.sample(true, now);
@@ -564,7 +555,7 @@ bool readPack()
 
     everRead = true;
     fComm.sample(false, now);             // un OK rompe la serie: fallo resuelto
-    if (!scrutiMode) Serial.println(F("[BQ] comms restablecidas tras reInit."));
+    Serial.println(F("[BQ] comms restablecidas tras reInit."));
     return true;
 }
 
@@ -582,14 +573,14 @@ bool chargeAllowed(bool readOk)
     // serial justo cuando se está diagnosticando la caída).
     static bool commFailPrev = false;
     if (!readOk) {
-        if (!commFailPrev && !scrutiMode)
+        if (!commFailPrev)
             Serial.printf("[SAFE] comms BQ caídas > %lu ms y sin recuperar → BMS_OK LOW, parar carga.\n",
                           commWindowMs);
         commFailPrev = true;
         return false;
     }
     if (commFailPrev) {
-        if (!scrutiMode) Serial.println(F("[SAFE] comms BQ recuperadas → BMS_OK HIGH."));
+        Serial.println(F("[SAFE] comms BQ recuperadas → BMS_OK HIGH."));
         commFailPrev = false;
     }
 
@@ -683,8 +674,7 @@ bool chargeAllowed(bool readOk)
 
 // ============================================================================
 //  TSON — máquina del Tractive System ON + precarga (copia de main.cpp).
-//  Único cambio: usa bmsSafe (seguridad del pack) donde main usa !bmsFault, y
-//  no persiste en FRAM (el charger no lleva FaultLogger).
+//  Único cambio: usa bmsSafe (seguridad del pack) donde main usa !bmsFault.
 //    SDC_TSON (out, latch): ARMA con el flanco del botón solo si bmsSafe Y
 //      HV_ACCU=LOW Y SDC_3V3=HIGH Y TSON_FAIL=LOW; se mantiene mientras
 //      SDC_3V3 y !TSON_FAIL. PRECHARGE_FAIL (latch duro): si PRECHARGE_DONE no
@@ -836,9 +826,7 @@ void printChgStatus()
                   bmsSafe ? "HIGH (OK)" : "LOW (FALLO)");
     // Estado del debounce de comms: si hay un fallo en curso, cuánto lleva y
     // cuánto le queda para tumbar BMS_OK.
-    if (scrutiMode) {
-        Serial.printf("COMM: %s\n", (fComm.cond || fComm.badRun) ? "FALLO" : "OK");
-    } else if (fComm.cond || fComm.badRun) {
+    if (fComm.cond || fComm.badRun) {
         unsigned long held = millis() - fComm.tStart;
         Serial.printf("COMM: FALLO en curso %lu/%lu ms (n=%u) %s\n",
                       held, commWindowMs, fComm.badRun,
@@ -1159,6 +1147,25 @@ void updateResistance(bool readOk, unsigned long now)
     }
 }
 
+void printHelp()
+{
+    Serial.println(F("\n--- COMANDOS ---"));
+    Serial.println(F("  h / ?     esta lista"));
+    Serial.println(F("  g         empezar a cargar (si la seguridad da OK y el TSON esta armado)"));
+    Serial.println(F("  x         parar la carga"));
+    Serial.println(F("  c,<A>     corriente de carga en A (p.ej. c,7)"));
+    Serial.println(F("  d         estado del cargador, del pack y del OBC"));
+    Serial.println(F("  v         tensiones de todas las celdas por placa"));
+    Serial.println(F("  t         temperaturas de todos los NTC por placa"));
+    Serial.println(F("  a         estado del Hall (corriente por canal, offsets)"));
+    Serial.println(F("  R         ultima medida de resistencia por paralelo"));
+    Serial.println(F("  j         dashboard JSON para TelemetryWeb (on/off)"));
+    Serial.println(F("  f,<ms>    ventana de gracia ante fallo de comms de los BQ"));
+    Serial.println(F("  i         re-inicializar la cadena de BQ"));
+    Serial.println(F("  S         dormir la cadena de BQ (volver con 'i')"));
+    Serial.println(F("  r         reiniciar el micro"));
+}
+
 // ============================================================================
 //  COMANDOS SERIE
 //    g       → solicitar START de carga
@@ -1236,23 +1243,13 @@ void handleSerial()
     case 'R':
         printResistance();
         break;
-    // Dashboard en vivo: 'm' panel ANSI, 'j' salida JSON (tools/TelemetryWeb).
-    // Mismas teclas que el firmware de carrera.
-    case 'm':
-        if (!dash.active())            { dash.setJsonMode(false); dash.toggle(); }
-        else if (dash.isJsonMode())    { dash.toggle(); dash.setJsonMode(false); dash.toggle(); }
-        else                           { dash.toggle(); }
-        break;
-
+    // Telemetría en vivo en JSON (tools/TelemetryWeb). Misma tecla que el BMS.
     case 'j':
-        if (!dash.active())            { dash.setJsonMode(true); dash.toggle(); }
-        else if (!dash.isJsonMode())   { dash.toggle(); dash.setJsonMode(true); dash.toggle(); }
-        else                           { dash.toggle(); }
+        dash.toggle();
         break;
-    case 'q':
-        scrutiMode = !scrutiMode;
-        Serial.printf("[UI] modo %s\n", scrutiMode ? "SCRUTI (diag comms en silencio)"
-                                                   : "DEV (todo visible)");
+    case 'h':
+    case '?':
+        printHelp();
         break;
     case 'S': {
         // Manda TODA la cadena a SHUTDOWN (CONTROL1[GOTO_SHUTDOWN]). Los BQ
