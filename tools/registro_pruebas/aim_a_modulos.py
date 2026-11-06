@@ -140,6 +140,10 @@ def decodificar(s):
                 if all(ok(c[i]) for c in cols):
                     stats[nombre]["interpolada"] += 1
                 continue
+            # Todo a 0: aún no ha llegado ninguna trama. No es una lectura de M01:
+            # sus tensiones saldrían a 2,500 V y el patrón daría un falso "NO".
+            if not any(vals):
+                continue
             try:
                 m, d = fn(*vals)
             except ValueError:
@@ -414,8 +418,11 @@ def main():
         else:
             print(f"  {nombre}: {st['ok']} filas buenas, {st['interpolada']} interpoladas, "
                   f"{st['incoherente']} con IDmod distinto entre canales")
-            if st["interpolada"] > st["ok"]:
-                print("    ! Casi todo interpolado: marca 'Stepped Values' en estos canales en RaceStudio.")
+            # Con Stepped Values no sale ni una: una sola ya indica que está sin marcar,
+            # y una fila interpolada puede pasar por buena y dar un valor falso.
+            if st["interpolada"]:
+                print("    ! Hay filas interpoladas: marca 'Stepped Values' en estos canales en "
+                      "RaceStudio. Los valores de este log pueden ser falsos.")
     if not lecturas:
         sys.exit("\nNo hay nada que decodificar: ¿están los canales BMS Pk* en el log?")
 
