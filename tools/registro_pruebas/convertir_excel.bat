@@ -1,10 +1,11 @@
 @echo off
 REM ============================================================================
 REM  Bateria de una sesion del AiM -> Excel visual (modulos y paralelos).
-REM  Doble clic -> eliges el CSV exportado de RaceStudio -> modulos\<sesion>_baterias.xlsx
+REM  Doble clic -> eliges el CSV exportado de RaceStudio (o el .xrk) -> modulos\<sesion>_baterias.xlsx
 REM  con graficas, mapas de color y tiras en el tiempo. Necesita los canales BMS Pk*
-REM  (IDs 393-396). Funciona aunque falte "Stepped Values" (rescata lo que vale).
-REM  No necesita instalar nada.
+REM  (IDs 393-396). Mejor el .xrk (C:\AIM_SPORT\RaceStudio3\user\data): trae todas
+REM  las tramas sin interpolar; para leerlo: py -m pip install libxrk.
+REM  Con el CSV exportado tambien funciona (rescata lo que vale).
 REM ============================================================================
 cd /d "%~dp0"
 chcp 65001 >nul

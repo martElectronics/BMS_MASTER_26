@@ -4,7 +4,8 @@ aim_a_excel.py — Batería de una sesión del AiM en un Excel visual (módulos 
 
 Uso:
     python aim_a_excel.py                 # abre un selector de archivo
-    python aim_a_excel.py sesion.csv      # directo
+    python aim_a_excel.py sesion.csv      # directo (CSV exportado)
+    python aim_a_excel.py sesion.xrk      # mejor: el .xrk de RaceStudio (py -m pip install libxrk)
 o doble clic en convertir_excel.bat.
 
 Hace dos pasos:
@@ -20,8 +21,9 @@ Hace dos pasos:
        Tira ...   cada 10 s, diferencia de cada paralelo con la mediana (franjas rojas
                   = se queda atrás) y temperatura de cada NTC
        Datos / Tiempo  las series y la tabla completa
-Con Stepped Values bien puesto el rescate no tira nada y cada paralelo se ve cada ~1 s;
-sin él, cada ~5-8 s. Los picos rápidos están siempre en la celda mín del BMS.
+Con el .xrk (C:\\AIM_SPORT\\RaceStudio3\\user\\data\\<fecha>\\) llegan todas las tramas sin
+interpolar y cada paralelo se ve cada ~1 s. El CSV exportado viene interpolado a 20 Hz
+(Stepped Values no le afecta): el rescate se queda con lo válido, cada ~5-8 s. Los picos rápidos están siempre en la celda mín del BMS.
 Solo librería estándar (el .xlsx se escribe a mano): no hay que instalar nada.
 """
 import csv
@@ -177,6 +179,7 @@ def rescatar(path, salida):
                     cel.append(fmt(ult[q], 3 if q[1] == 'V' else 0) if ok_ else '')
                 w.writerow([fmt(t[i], 2), fmt(I[i], 1), fmt(gps[i], 1) if gps else '', fmt(minv[i], 3), fmt(maxv[i], 3), fmt(maxt[i], 0)] + cel)
     print(f'tabla: {llenas/total*100:.0f} % de celdas con dato de menos de 15 s -> {salida}')
+    return s
 
 
 def excel(src, titulo, dst):
@@ -371,7 +374,7 @@ def excel(src, titulo, dst):
     panel += [[], ['Cómo leerlo'],
               ['· Gráfica de tensión: si un paralelo de color cae por debajo de la línea negra (mín del BMS) es el que manda. 2,80 V = fallo del BMS.'],
               ['· Hoja Mapa: colores por módulo y paralelo. Hoja Tira: franjas rojas = paralelo que se queda por debajo del resto en el tiempo.'],
-              ['· Datos rescatados de canales Pk sin Stepped Values: cada paralelo se refresca cada ~5-8 s; los picos rápidos están en Celda mín BMS.']]
+              ['· Canales Pk: con el .xrk cada paralelo se refresca cada ~1 s; con el CSV exportado (interpolado), cada ~5-8 s. Los picos rápidos están en Celda mín BMS.']]
     est_panel = {0: {'*': 3}, 7: {'*': 1}}
     for r in range(8, 8 + nd):
         est_panel[r] = {1: 2, 2: 2, 3: 2, 4: 4}
@@ -499,9 +502,7 @@ def main():
     carpeta = os.path.join(os.path.dirname(os.path.abspath(__file__)), "modulos")
     print(f"\nLeyendo {os.path.basename(path)} ...")
     rescatado = os.path.join(carpeta, base + "_pack_rescatado.csv")
-    rescatar(path, rescatado)
-    with open(path, newline="", encoding="utf-8", errors="replace") as f:
-        cab = {r[0]: r[1] for r, _ in zip(csv.reader(f), range(14)) if len(r) >= 2}
+    cab = rescatar(path, rescatado).meta
     titulo = " · ".join(x for x in (cab.get("Racer", base), cab.get("Comment", ""),
                                      f'{cab.get("Date", "")} {cab.get("Time", "")}'.strip()) if x)
     dst = excel(rescatado, titulo, os.path.join(carpeta, base + "_baterias.xlsx"))
