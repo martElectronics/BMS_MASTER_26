@@ -50,3 +50,22 @@ no pasarse del límite AC ni con el pack lleno. **Arranca SIN cargar** (`g` para
 
 > Todos los `#define` marcados **CONFIRMAR** son provisionales — no flashear a un pack
 > real sin validarlos en banco (ver [PRUEBAS_ELECTRONICA.md](../PRUEBAS_ELECTRONICA.md) pasos 1-4).
+
+## Medir la capacidad de cada paralelo durante una carga
+
+Herramientas en [tools/registro_carga/](../../tools/registro_carga/) (no tocan el firmware: usan el
+JSON del dashboard, tecla `j`, que ya saca los 110 paralelos, los 90 NTC, el Hall y la
+corriente del cargador cada 0,5 s).
+
+1. Pack bajo (después de una tanda) y 15-20 min de reposo.
+2. `registrar_carga.bat` con el PC conectado al STM **antes** de dar corriente.
+3. Cargar a corriente fija (7 A en el taller) hasta ~4,05 V, sin llegar a la fase de tensión constante.
+4. Parar la carga y dejar el registro 30 min más (reposo final). Ctrl+C.
+5. `analizar_carga.bat` con el CSV de `registros/` → `resultados/<carga>.xlsx`.
+
+Qué sale:
+- **Capacidad relativa** de cada paralelo: Ah que necesita para subir cada tramo de 0,1 V frente a la
+  mediana. 0,73 ≈ 8 de 11 celdas. No necesita reposo ni curva de la celda.
+- **Capacidad absoluta** (pack y paralelo): tensión de reposo antes/después con la curva típica de la
+  40T. Necesita los dos reposos (≥ 10 min el final).
+- **Resistencia** de cada paralelo con el escalón de corriente al arrancar.
