@@ -16,7 +16,7 @@ Hace tres cosas:
      rodar y ≥1 min después: compara el SOC de reposo inicial y final).
   2. Guarda modulos/<sesion>_pack.csv: una fila por segundo con M01_V1..M10_V11
      (V) y M01_T1..M10_T9 (°C), más corriente del pack y velocidad. Cada valor
-     es la última lectura recibida de ese paralelo/NTC (se refrescan cada ~1 s).
+     es la última lectura recibida de ese paralelo/NTC (se refrescan cada ~2,5 s; antes de nov-2026, cada ~1 s).
      Separador ';' y coma decimal, para abrirlo directamente en Excel.
   3. Con --patron, comprueba que lo que grabó el AiM coincide bit a bit con el
      patrón que manda el BMS con el comando 'P' por serie. Hacerlo una vez en
@@ -129,7 +129,7 @@ def decodificar(s):
             continue
         columnas.append((nombre, cols, fn))
         stats[nombre] = {"ok": 0, "interpolada": 0, "incoherente": 0}
-    # El AiM muestrea más rápido que las páginas (20 Hz frente a 100 ms): la
+    # El AiM muestrea más rápido que las páginas (20 Hz frente a 250 ms): la
     # misma página sale en varias filas seguidas. Solo cuenta como lectura
     # nueva cuando cambia el módulo.
     previo = {}

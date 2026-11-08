@@ -296,7 +296,7 @@ BO_ 769 PDM_Status: 8 PDM
  SG_ PDM_Failsafe : 24|1@0+ (1,0) [0|1] "" AIM
  SG_ PDM_SafetyFloor : 25|1@0+ (1,0) [0|1] "" AIM
 
-CM_ BO_ 393 "Temperaturas de los 9 NTC de un modulo, EMPAQUETADAS (rama endurance-telemetria). Un modulo por pagina de 100 ms. NO tiene sentido en directo: decodificar el CSV con tools/registro_pruebas/aim_a_modulos.py. En RaceStudio: Stepped Values y 20 Hz. Formato en CAN_Solo2DL.md seccion 17b.";
+CM_ BO_ 393 "Temperaturas de los 9 NTC de un modulo, EMPAQUETADAS (rama endurance-telemetria). Un modulo por pagina de 250 ms (pack entero cada 2,5 s). NO tiene sentido en directo: decodificar el .xrk (o el CSV) con tools/registro_pruebas/aim_a_modulos.py o aim_a_excel.py. En RaceStudio: 20 Hz. Formato en CAN_Solo2DL.md seccion 17b.";
 CM_ BO_ 394 "Tensiones V1..V5 de un modulo, EMPAQUETADAS. Ver BO_ 393.";
 CM_ BO_ 395 "Tensiones V6..V10 de un modulo, EMPAQUETADAS. Ver BO_ 393.";
 CM_ BO_ 396 "Tension V11 de un modulo, EMPAQUETADA. Ver BO_ 393.";

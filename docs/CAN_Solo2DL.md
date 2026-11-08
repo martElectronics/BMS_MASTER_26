@@ -584,7 +584,7 @@ Byte 7: reservado (0)
 
 ---
 
-## 17b. IDs 393-396 — Pack entero empaquetado · paginado 100 ms — *endurance*
+## 17b. IDs 393-396 — Pack entero empaquetado · paginado 250 ms — *endurance*
 
 **Para qué:** grabar en el AiM la tensión de los **110 paralelos** y la
 temperatura de los **90 NTC** con solo **10 canales** (el Solo 2 DL tiene un
@@ -592,8 +592,8 @@ límite de 120). Cada canal lleva varios valores juntos, así que **en
 RaceStudio y en el display no tienen sentido**: hay que pasar el CSV por
 `tools/registro_pruebas/aim_a_modulos.py` (o `convertir_modulos.bat`).
 
-Un módulo por página de 100 ms → **cada paralelo y cada NTC se refresca
-cada ~1 s**. Para los picos rápidos (la celda mínima en una aceleración)
+Un módulo por página de 250 ms (`PACK_PAGE_MS`; antes 100 ms) → **cada
+paralelo y cada NTC se refresca cada ~2,5 s**, ~17 tramas/s en el bus. Para los picos rápidos (la celda mínima en una aceleración)
 siguen estando `BMS_MinV`/`BMS_MaxV` (ID 11), mucho más rápidos.
 
 **Códigos:**

@@ -22,7 +22,7 @@ Hace dos pasos:
                   = se queda atrás) y temperatura de cada NTC
        Datos / Tiempo  las series y la tabla completa
 Con el .xrk (C:\\AIM_SPORT\\RaceStudio3\\user\\data\\<fecha>\\) llegan todas las tramas sin
-interpolar y cada paralelo se ve cada ~1 s. El CSV exportado viene interpolado a 20 Hz
+interpolar y cada paralelo se ve cada ~2,5 s (PACK_PAGE_MS). El CSV exportado viene interpolado a 20 Hz
 (Stepped Values no le afecta): el rescate se queda con lo válido, cada ~5-8 s. Los picos rápidos están siempre en la celda mín del BMS.
 Solo librería estándar (el .xlsx se escribe a mano): no hay que instalar nada.
 """
@@ -374,7 +374,7 @@ def excel(src, titulo, dst):
     panel += [[], ['Cómo leerlo'],
               ['· Gráfica de tensión: si un paralelo de color cae por debajo de la línea negra (mín del BMS) es el que manda. 2,80 V = fallo del BMS.'],
               ['· Hoja Mapa: colores por módulo y paralelo. Hoja Tira: franjas rojas = paralelo que se queda por debajo del resto en el tiempo.'],
-              ['· Canales Pk: con el .xrk cada paralelo se refresca cada ~1 s; con el CSV exportado (interpolado), cada ~5-8 s. Los picos rápidos están en Celda mín BMS.']]
+              ['· Canales Pk: con el .xrk cada paralelo se refresca cada ~2,5 s; con el CSV exportado (interpolado), cada ~5-8 s. Los picos rápidos están en Celda mín BMS.']]
     est_panel = {0: {'*': 3}, 7: {'*': 1}}
     for r in range(8, 8 + nd):
         est_panel[r] = {1: 2, 2: 2, 3: 2, 4: 4}

@@ -161,8 +161,12 @@ static TelemetryDashboard dash(Serial, bms, hall, soc, fan, dashCfg);
 // Telemetría EMPAQUETADA de todo el pack (IDs 393-396): un módulo por página.
 // PACK_TX_MS < PACK_PAGE_MS para que cada página salga al menos una vez (alguna
 // sale dos: inofensivo, el decodificador se queda con la última).
-#define PACK_PAGE_MS  100UL    ///< cambio de módulo → pack entero cada ~1 s
-#define PACK_TX_MS     90UL    ///< periodo de envío de 393-396
+// 250 ms (antes 100): cada paralelo/NTC cada 2,5 s, que sobra para temperaturas,
+// capacidad y saber qué paralelo cae; los picos rápidos van en el ID 11 (100 ms).
+// Así 393-396 pasan de ~44 a ~17 tramas/s en un bus de 125 kbps al ~46 % y con
+// bus-off del BMS en pista (por si el tráfico tiene algo que ver).
+#define PACK_PAGE_MS  250UL    ///< cambio de módulo → pack entero cada ~2,5 s
+#define PACK_TX_MS    240UL    ///< periodo de envío de 393-396
 
 // Cadencias de muestreo: 2× respecto al mínimo FS para tener ≥2 muestras
 // dentro de cada ventana de debounce → mejor filtrado de ruido transitorio.
