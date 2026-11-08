@@ -56,6 +56,7 @@ BO_ 14 BMS_LastEpisode: 8 BMS
  SG_ BMS_NumCommFail : 23|16@0+ (1,0) [0|65535] "" AIM
  SG_ BMS_NumCrcFail : 39|16@0+ (1,0) [0|65535] "" AIM
  SG_ BMS_RetryNet : 55|8@0- (1,0) [-128|127] "" AIM
+ SG_ BMS_ReinitMs : 63|8@0+ (10,0) [0|2550] "ms" AIM
 
 BO_ 15 BMS_Debug: 8 BMS
  SG_ BMS_Flt_V : 0|1@0+ (1,0) [0|1] "" AIM
@@ -279,6 +280,7 @@ BO_ 769 PDM_Status: 8 PDM
 
 CM_ BO_ 14 "Ultimo episodio (ID 0x0E, 500ms). BMS_RetryNet sustituye desde 2026-10-10 al antiguo numTriesReset duplicado: signo = causa del ultimo ciclo (+COMM/-CRC), magnitud = reintentos.";
 CM_ BO_ 15 "BMS_DEBUG (ID 0x0F, 100ms) - el frame clave para diagnosticar caidas de BMS_OK en pista. Ver docs/CAN_Solo2DL.md #8.";
+CM_ SG_ 14 BMS_ReinitMs "Lo que bloqueo el ultimo reInit (auto-address de la cadena BQ), resolucion 10 ms, satura en 2550. Mientras dura no se lee V ni T: el BMS esta ciego ~500 ms (COMM_REINIT_MS) + esto. 0 = sin reInit desde el arranque.";
 CM_ SG_ 14 BMS_RetryNet "Short AiM: RTRN. +N = N reintentos por COMM (board mudo) en el ultimo ciclo V+T. -N = N reintentos por CRC (dato corrupto). 0 = ciclo limpio. Ver docs/inmunidad_ruido.md #3.3.";
 CM_ SG_ 15 BMS_Flt_Comm "Short AiM: FCOM.";
 CM_ SG_ 15 BMS_Fault "Short AiM: BFLT. OR global de fallo confirmado (no-latching; el latch real del SDC es HW).";

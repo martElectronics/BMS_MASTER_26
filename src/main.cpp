@@ -218,6 +218,12 @@ static bool          gCanOk           = false; ///< FDCAN inicializó OK (gate T
 static uint16_t      canNumCommFails  = 0;   ///< nº lecturas BQ con COMM_ERROR
 static uint16_t      canNumCrcFails   = 0;   ///< nº lecturas BQ con CRC_ERROR
 static uint16_t      canNumTriesReset = 0;   ///< nº reInit() por comms
+static uint8_t       canLastReinitX10 = 0;   ///< lo que bloqueó el último reInit (×10 ms, satura en 255 = 2,55 s)
+static void noteReinitTime(unsigned long ms)  ///< guarda la duración de un reInit para el CAN (ID 14 B7)
+{
+    const unsigned long x10 = (ms + 5) / 10;
+    canLastReinitX10 = (uint8_t)(x10 > 255 ? 255 : (x10 == 0 ? 1 : x10));  // 0 queda para "sin reInit"
+}
 static unsigned long faultEpisodeStart= 0;   ///< ms inicio episodio fallo (0=sin)
 static uint16_t      canLastFailMs    = 0;   ///< duración (ms) episodio actual/último
 static uint16_t      canMaxFailMs     = 0;   ///< máx duración de episodio vista
@@ -475,7 +481,10 @@ void sampleAndEvaluate()
         if ((now - tLastReinit) >= BMS_REINIT_RETRY_MS) {
             tLastReinit = now;
             canNumTriesReset++;
-            if (bms.reInit()) {
+            const unsigned long tR0 = millis();
+            const bool okReinit = bms.reInit();
+            noteReinitTime(millis() - tR0);
+            if (okReinit) {
                 bmsInitOk = true;
                 fInit.sample(false, now);   // recuperado: limpia el debounce de init
                 Serial.println(F("[OK] BQ recuperado."));
@@ -576,6 +585,7 @@ void sampleAndEvaluate()
         IWatchdog.reload();               // reInit bloquea; no dejar caer el WDG
         unsigned long tR0 = millis();
         bool okReinit = bms.reInit();
+        noteReinitTime(millis() - tR0);
         IWatchdog.reload();
         bms.setMaxAttempts(5);            // restaurar default (begin() en frío)
         Serial.printf("[BQ] reInit #%u %s, bloqueó %lu ms\n", canNumTriesReset,
@@ -958,7 +968,10 @@ void updateCanTx()
     // y CRC no han aparecido a la vez en el mismo ciclo, así que la resta
     // no cancela en la práctica — si algún día sí lo hacen, se ve el que
     // domina con la magnitud reducida por la diferencia.
-    // B7 queda a 0xFF (relleno, igual que el resto de bytes no usados).
+    // B7: lo que BLOQUEÓ el último reInit (auto-address), ×10 ms. Mientras
+    // dura no se lee V ni T: el BMS está ciego COMM_REINIT_MS + esto. Los
+    // episodios de comms se quedan en ~499 ms porque el reInit los cierra;
+    // este byte dice cuánto costó cerrarlos. 0 = aún no ha habido reInit.
     int32_t retryNet = (int32_t)(bms.getLastVCommRetries() + bms.getLastTCommRetries())
                       - (int32_t)(bms.getLastVCrcRetries()  + bms.getLastTCrcRetries());
     if (retryNet >  127) retryNet =  127;
@@ -972,7 +985,7 @@ void updateCanTx()
     d14[4] = (uint8_t)(canNumCrcFails >> 8);
     d14[5] = (uint8_t)(canNumCrcFails & 0xFF);
     d14[6] = (uint8_t)(int8_t)retryNet;
-    d14[7] = 0xFF;
+    d14[7] = canLastReinitX10;
     gCan->setPacket((uint32_t)14, d14, 8, false);
 
     // ── ID 15 (0xF) — BMS_DEBUG: TODOS los fallos por bits (8 bytes) ───────
