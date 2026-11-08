@@ -228,7 +228,7 @@ Bytes 0-1: lastFailMs (uint16 BE)           — duración del episodio actual/ú
 Bytes 2-3: numCommFails (uint16 BE)
 Bytes 4-5: numCrcFails (uint16 BE)
 Byte  6  : retryNet (int8)                  — §3.1/§3.3 doc ruido, ver nota abajo
-Byte  7  : relleno (0xFF)
+Byte  7  : reinitMs (uint8, ×10 ms)         — lo que bloqueó el último reInit
 ```
 
 | Canal | Short | Byte | Descripción |
@@ -237,6 +237,13 @@ Byte  7  : relleno (0xFF)
 | BMS_NumCommFail | NCFA | 2-3 | nº de fallos de comunicación del episodio |
 | BMS_NumCrcFail  | NCRC | 4-5 | nº de fallos de CRC del episodio |
 | BMS_RetryNet    | RTRN | 6   | ver nota — **signed** |
+| BMS_ReinitMs    | RINT | 7   | lo que bloqueó el último reInit (auto-address), ms (resolución 10 ms, máx 2550). 0 = ninguno |
+
+> **Por qué `BMS_MaxCommFailMs` se queda en ~499 ms:** a los 500 ms sin respuesta
+> (`COMM_REINIT_MS`) el BMS relanza el auto-address; si la cadena vuelve, el
+> episodio se cierra ahí. 499 ms = "se perdió la comunicación y el reInit la
+> recuperó", muy lejos de los 6 s que abren el SDC. Lo que el BMS estuvo de verdad
+> sin leer V ni T es ~500 ms + `BMS_ReinitMs`.
 
 > `BMS_RetryNet` = reintentos de `_readBoardRetry` del **último ciclo** V+T
 > (ver `docs/inmunidad_ruido.md` §3.1), con **signo** en vez de dos canales
