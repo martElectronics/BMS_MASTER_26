@@ -7,6 +7,11 @@ Uso:
     python aim_a_fila.py                  # abre un selector de archivo
     python aim_a_fila.py sesion.csv       # directo
     python aim_a_fila.py sesion.csv 7     # 7 = código de la prueba en la Hoja 2
+    python aim_a_fila.py sesion.xrk       # también el .xrk de RaceStudio (necesita libxrk)
+
+El .xrk (C:\\AIM_SPORT\\RaceStudio3\\user\\data\\<fecha>\\) trae cada trama tal como llegó y
+más canales que el CSV; el CSV exportado viene interpolado a 20 Hz. Para leerlo:
+py -m pip install libxrk (el resto de la herramienta no necesita instalar nada).
 
 Hace tres cosas:
   1. Imprime un resumen legible y el veredicto de los criterios de paso.
@@ -97,8 +102,14 @@ def ok(x):
     return x is not None and not (isinstance(x, float) and math.isnan(x))
 
 
+FS_XRK = 20.0   # Hz de la rejilla a la que se pasa un .xrk (como el CSV que exporta RaceStudio)
+
+
 class Sesion:
     def __init__(self, path):
+        if path.lower().endswith((".xrk", ".xrz", ".drk")):
+            self._desde_xrk(path)
+            return
         with open(path, newline="", encoding="utf-8", errors="replace") as f:
             rows = list(csv.reader(f))
         self.meta = {r[0]: r[1] for r in rows[:14] if len(r) >= 2}
@@ -116,6 +127,49 @@ class Sesion:
         self.t = t
         self.datos = datos
         self.dt = 1.0 / fs
+
+    def _desde_xrk(self, path):
+        """Lee el .xrk de RaceStudio con libxrk (py -m pip install libxrk). Ahí está cada
+        trama tal como llegó; se pasa a una rejilla de FS_XRK Hz MANTENIENDO el último
+        valor (sin interpolar). Así los canales empaquetados (BMS Pk*) salen enteros y
+        válidos, cosa que el CSV exportado no garantiza: RaceStudio interpola al exportar."""
+        try:
+            import io
+            import contextlib
+            import numpy as np
+            from libxrk import aim_xrk
+        except ImportError:
+            sys.exit("Para leer .xrk hace falta libxrk:  py -m pip install libxrk   (o exporta el CSV).")
+        import warnings
+        with warnings.catch_warnings(), contextlib.redirect_stdout(io.StringIO()):
+            warnings.simplefilter("ignore")
+            log = aim_xrk(path)
+        md = log.metadata
+        fecha = md.get("Log Date", "")
+        try:     # RaceStudio la da como MM/DD/AAAA; el CSV como "Saturday, November 7, 2026"
+            fecha = datetime.strptime(fecha, "%m/%d/%Y").strftime("%A, %B %d, %Y").replace(" 0", " ")
+        except ValueError:
+            pass
+        self.meta = {"Racer": md.get("Driver", ""), "Comment": md.get("Long Comment", ""), "Date": fecha,
+                     "Time": md.get("Log Time", ""), "Vehicle": md.get("Vehicle", ""), "Sample Rate": str(int(FS_XRK))}
+        canales = {n: (t.column(0).to_numpy(), t.column(1).to_numpy()) for n, t in log.channels.items() if t.num_rows}
+        t0 = min(tc[0] for tc, _ in canales.values())
+        t1 = max(tc[-1] for tc, _ in canales.values())
+        rejilla = np.arange(t0, t1 + 1, 1000.0 / FS_XRK)
+        self.nombres = ["Time"] + [n.replace("_", " ") for n in canales]
+        self.unidades = ["s"] + ["" for _ in canales]
+        cols = [((rejilla - t0) / 1000.0).tolist()]
+        for n, (tc, v) in canales.items():
+            k = np.searchsorted(tc, rejilla, side="right") - 1
+            # antes de la primera muestra: el primer valor (igual que el CSV de RaceStudio)
+            col = v[np.clip(k, 0, None)].astype(float)
+            if n == "GPS Speed":
+                col = col * 3.6                       # el .xrk la guarda en m/s; el CSV, en km/h
+            cols.append(col.tolist())
+        self.datos = [list(fila) for fila in zip(*cols)]
+        self.col = {n: i for i, n in enumerate(self.nombres)}
+        self.t = cols[0]
+        self.dt = 1.0 / FS_XRK
 
     def nombre(self, *candidatos):
         """Nombre real del canal: exacto, o por prefijo (el AiM recorta a 16 caracteres)."""
@@ -480,8 +534,9 @@ def calcular(s, plan):
          ", ".join(b for b in bits if "Temp" in b) or "ninguno"),
         ("Sin cortes de par rodando", not [b for b in bits if "rodando" in b],
          ", ".join(b for b in bits if "rodando" in b) or "ninguno"),
-        ("REC < 128", fila["REC max (errores CAN AiM)"] is not None and fila["REC max (errores CAN AiM)"] < CRIT_REC_MAX,
-         fila["REC max (errores CAN AiM)"]),
+        # el .xrk no trae los contadores del CAN del AiM: sin dato no es un fallo
+        ("REC < 128", None if fila["REC max (errores CAN AiM)"] is None else fila["REC max (errores CAN AiM)"] < CRIT_REC_MAX,
+         fila["REC max (errores CAN AiM)"] if fila["REC max (errores CAN AiM)"] is not None else "sin dato (solo en el CSV)"),
         ("VCU viva", vcu == "sí", vcu),
         ("Sin fallo del BMS", not hubo_fallo, fila["FirstFault"]),
         ("Celda mínima bajo carga ≥ 3,0 V", celda_carga is not None and celda_carga >= CRIT_CELDA_MIN_V, celda_carga),
@@ -556,8 +611,8 @@ def elegir_archivo():
         from tkinter import filedialog
         r = tkinter.Tk()
         r.withdraw()
-        p = filedialog.askopenfilename(title="CSV exportado del AiM",
-                                       filetypes=[("CSV del AiM", "*.csv"), ("Todos", "*.*")])
+        p = filedialog.askopenfilename(title="Log del AiM (.xrk de RaceStudio o CSV exportado)",
+                                       filetypes=[("Log del AiM", "*.xrk *.csv"), ("Todos", "*.*")])
         r.destroy()
         return p
     except Exception:
@@ -600,7 +655,7 @@ def main():
 
     print("\n--- Criterios de paso ---")
     for nombre, cumple, valor in res["criterios"]:
-        print(f"  [{'OK' if cumple else 'NO'}] {nombre:36s} {fmt(valor)}")
+        print(f"  [{'--' if cumple is None else 'OK' if cumple else 'NO'}] {nombre:36s} {fmt(valor)}")
     if avisos:
         print("\n--- Avisos ---")
         for a in avisos:
