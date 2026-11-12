@@ -36,6 +36,42 @@ import aim_a_fila as m
 import aim_a_modulos as a
 
 
+def capacidades(s, vs, I, ventana=30.0):
+    """Capacidad de cada paralelo con la sesión en marcha (no hace falta reposo).
+    1) R del paralelo por regresión V-I en ventanas cortas.
+    2) OCV = V + R·I en cada ventana de 30 s -> SOC con la curva OCV del 40T.
+    3) Pendiente SOC frente a Ah gastados (Hall del BMS) -> Ah = -100 / pendiente.
+    El valor relativo (vs. mediana) es fiable; el absoluto depende de la curva OCV."""
+    t, dt = s.t, s.dt
+    ii = [x if m.ok(x) else 0.0 for x in I]
+    ah = [0.0]
+    for k in range(1, len(ii)):
+        ah.append(ah[-1] + ii[k] * dt / 3600)
+    out = {}
+    for (md, _, n), p in vs.items():
+        r = a.regresion_ventanas([t[i] for i, _ in p], [ii[i] for i, _ in p], [x for _, x in p], ventana)
+        if r is None:
+            continue
+        g = {}
+        for i, x in p:
+            if ah[i] > 0.3:
+                g.setdefault(int(t[i] // ventana), []).append((x - r * ii[i], ah[i]))
+        pts = [(a.mediana([q for _, q in v]), a.soc_ocv(a.mediana([o for o, _ in v]))) for v in g.values() if len(v) >= 10]
+        if len(pts) < 10 or max(q for q, _ in pts) - min(q for q, _ in pts) < 5.0:      # con menos de 5 Ah la OCV apenas se mueve y sale ruido
+            continue
+        mx = sum(q for q, _ in pts) / len(pts)
+        my = sum(y for _, y in pts) / len(pts)
+        b = sum((q - mx) * (y - my) for q, y in pts) / sum((q - mx) ** 2 for q, _ in pts)
+        if b < 0:
+            out[f'{a.mod(md)}_V{n}'] = -100 / b
+    if len(out) < 50:
+        print(f'capacidad: solo {len(out)} paralelos con descarga suficiente (>5 Ah); no se calcula.')
+        return None
+    med = a.mediana(out.values())
+    print(f'capacidad estimada: mediana {med:.1f} Ah por paralelo, {ah[-1]:.1f} Ah gastados (Hall)')
+    return {'par': out, 'med': med, 'ah': ah[-1]}
+
+
 def rescatar(path, salida):
     """Paso 1: CSV del AiM -> CSV por segundo con las lecturas Pk válidas."""
     s = m.Sesion(path)
@@ -103,6 +139,7 @@ def rescatar(path, salida):
     print(f'paralelos con datos: {len(vs)}/110, NTC: {len(ts)}/90')
     huecos = sorted((t[p[-1][0]] - t[p[0][0]]) / max(1, len(set(i for i, _ in p)) - 1) for p in vs.values())
     print(f'lectura cada: mediana {huecos[len(huecos)//2]:.1f} s, peor {huecos[-1]:.1f} s')
+    s.cap = capacidades(s, vs, I)
 
     try:
         idx = [i for i in range(N) if m.ok(I[i]) and abs(I[i]) > 5]
@@ -182,7 +219,7 @@ def rescatar(path, salida):
     return s
 
 
-def excel(src, titulo, dst):
+def excel(src, titulo, dst, cap=None):
     """Paso 2: CSV rescatado -> Excel con gráficas."""
     rows = list(csv.reader(open(src, encoding='utf-8-sig'), delimiter=';'))
     cab, D = rows[0], [[(float(x.replace(',', '.')) if x else None) for x in r] for r in rows[1:]]
@@ -371,14 +408,26 @@ def excel(src, titulo, dst):
     for p in debiles:
         panel.append([p.replace('_', ' '), vmin_carga[p], v_rep_ini[p], v_rep_fin[p],
                       (vmin_carga[p] - ref_c) * 1000 if ref_c else None])
+    fila_cap = None
+    if cap:
+        cp = cap['par']
+        panel += [[], ['Capacidad estimada (Ah por paralelo)', f"{cap['med']:.1f} Ah mediana", f"{cap['ah']:.1f} Ah gastados"]]
+        fila_cap = len(panel)
+        panel.append(['Menos capacidad', 'Ah', 'vs. mediana'])
+        for p in sorted(cp, key=cp.get)[:6]:
+            panel.append([p.replace('_', ' '), round(cp[p], 1), f"{cp[p] / cap['med']:.2f}".replace('.', ',')])
     panel += [[], ['Cómo leerlo'],
               ['· Gráfica de tensión: si un paralelo de color cae por debajo de la línea negra (mín del BMS) es el que manda. 2,80 V = fallo del BMS.'],
               ['· Hoja Mapa: colores por módulo y paralelo. Hoja Tira: franjas rojas = paralelo que se queda por debajo del resto en el tiempo.'],
+              ['· Capacidad: OCV estimada durante la sesión frente a Ah del Hall. El relativo (vs. mediana) es fiable; los Ah absolutos dependen de la curva OCV y se confirman con la prueba de carga.'],
               ['· Canales Pk: con el .xrk cada paralelo se refresca cada ~2,5 s; con el CSV exportado (interpolado), cada ~5-8 s. Los picos rápidos están en Celda mín BMS.']]
     est_panel = {0: {'*': 3}, 7: {'*': 1}}
     for r in range(8, 8 + nd):
         est_panel[r] = {1: 2, 2: 2, 3: 2, 4: 4}
-    est_panel[9 + nd] = {'*': 1}
+    if fila_cap:
+        est_panel[fila_cap - 1] = {'*': 1}
+        est_panel[fila_cap] = {'*': 1}
+    est_panel[next(r for r, f in enumerate(panel) if f == ['Cómo leerlo'])] = {'*': 1}
     GH = 22                                      # filas por grafica
     fila0 = len(panel) + 1
     anchors = [(0, fila0, 8, fila0 + GH), (8, fila0, 16, fila0 + GH), (0, fila0 + GH + 1, 8, fila0 + 2 * GH + 1), (8, fila0 + GH + 1, 16, fila0 + 2 * GH + 1)]
@@ -395,14 +444,16 @@ def excel(src, titulo, dst):
     mapa += bloque('Tensión mínima con carga (V)', 'Lo que más baja tirando (3er valor más bajo). Rojo = cerca de 2,8 V (fallo del BMS).', vmin_carga.get, 11, 'V')
     mapa += bloque('Tensión en reposo al final (V)', 'Mediana de los últimos 90 s parados. Rojo = el más bajo del pack (poca capacidad o desequilibrio).', v_rep_fin.get, 11, 'V')
     mapa += bloque('Tensión en reposo al inicio (V)', 'Antes de rodar.', v_rep_ini.get, 11, 'V')
+    if cap:
+        mapa += bloque('Capacidad estimada (Ah)', 'Durante la sesión (OCV frente a Ah). Rojo = menos capacidad que el resto.', lambda p: None if cap['par'].get(p) is None else round(cap['par'][p], 1), 11, 'V')
     mapa += bloque('Temperatura máxima (°C)', 'M05 T1 está excluido en el firmware.', lambda p: None if p in EXCL else t_max.get(p), 9, 'T')
     est_mapa = {}
-    for b in range(4):
+    for b in range(5 if cap else 4):
         est_mapa[14 * b] = {'*': 3}
         est_mapa[14 * b + 2] = {'*': 1}
         for r in range(14 * b + 3, 14 * b + 13):
-            est_mapa[r] = {c: 2 for c in range(1, 12)} | {0: 1}
-    esc_mapa = [('B4:L13', 'Vabs'), ('B18:L27', 'Vrel'), ('B32:L41', 'Vrel'), ('B46:J55', 'T')]
+            est_mapa[r] = {0: 1} if b >= 3 else {c: 2 for c in range(1, 12)} | {0: 1}   # 0,000 solo en tensiones
+    esc_mapa = [('B4:L13', 'Vabs'), ('B18:L27', 'Vrel'), ('B32:L41', 'Vrel')] +                ([('B46:L55', 'Vrel'), ('B60:J69', 'T')] if cap else [('B46:J55', 'T')])
 
     # --------------------------------------------------------------------------- hoja Tira (heatmap en el tiempo)
     paso = 10
@@ -502,10 +553,11 @@ def main():
     carpeta = os.path.join(os.path.dirname(os.path.abspath(__file__)), "modulos")
     print(f"\nLeyendo {os.path.basename(path)} ...")
     rescatado = os.path.join(carpeta, base + "_pack_rescatado.csv")
-    cab = rescatar(path, rescatado).meta
+    ses = rescatar(path, rescatado)
+    cab = ses.meta
     titulo = " · ".join(x for x in (cab.get("Racer", base), cab.get("Comment", ""),
                                      f'{cab.get("Date", "")} {cab.get("Time", "")}'.strip()) if x)
-    dst = excel(rescatado, titulo, os.path.join(carpeta, base + "_baterias.xlsx"))
+    dst = excel(rescatado, titulo, os.path.join(carpeta, base + "_baterias.xlsx"), getattr(ses, 'cap', None))
     print(f"\nExcel guardado en: {dst}")
 
 
