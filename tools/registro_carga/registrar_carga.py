@@ -9,6 +9,11 @@ Uso:
     python registrar_carga.py --port COM5
 o doble clic en registrar_carga.bat. Ctrl+C para terminar.
 
+Comandos al cargador desde esta misma ventana: escribe y pulsa ENTER
+(g = empezar a cargar, x = parar, c,7 = fijar 7 A, d = estado del cargador).
+Las respuestas del firmware ([CHG] ..., [I] ...) salen en pantalla y el JSON
+se sigue grabando mientras tanto.
+
 Cómo funciona: activa el JSON del dashboard (tecla 'j' del charger) y escribe cada
 línea en registros/carga_<fecha>.csv. Si se corta el USB, reintenta y sigue en el
 mismo fichero. Arráncalo ANTES de dar corriente y déjalo 30 min después de parar:
@@ -26,6 +31,11 @@ from datetime import datetime
 
 import serial
 import serial.tools.list_ports
+
+try:
+    import msvcrt          # Windows: leer el teclado sin bloquear
+except ImportError:
+    msvcrt = None
 
 BAUD = 115200
 CARPETA = os.path.join(os.path.dirname(os.path.abspath(__file__)), "registros")
@@ -73,16 +83,46 @@ def fila(d, t0):
     return out
 
 
+_tecleado = []
+
+
+def teclado(ser):
+    """Lo que se escribe en la ventana se manda al cargador al pulsar ENTER."""
+    if msvcrt is None:
+        return
+    while msvcrt.kbhit():
+        ch = msvcrt.getwch()
+        if ch in ("\r", "\n"):
+            cmd = "".join(_tecleado).strip()
+            _tecleado.clear()
+            print()
+            if cmd:
+                ser.write((cmd + "\n").encode())
+                print(f"  >> enviado al cargador: {cmd}")
+        elif ch == "\b":
+            if _tecleado:
+                _tecleado.pop()
+                print("\b \b", end="", flush=True)
+        elif ch.isprintable():
+            _tecleado.append(ch)
+            print(ch, end="", flush=True)
+
+
 def leer_json(ser, espera_s):
-    """Devuelve la primera línea JSON válida que llegue en espera_s, o None."""
+    """Devuelve la primera línea JSON válida que llegue en espera_s, o None.
+    Las demás líneas del firmware (respuestas a los comandos) se muestran."""
     fin = time.time() + espera_s
     while time.time() < fin:
+        teclado(ser)
         raw = ser.readline().decode("utf-8", errors="ignore").strip()
-        if raw.startswith("{") and raw.endswith("}"):
-            try:
-                return json.loads(raw)
-            except json.JSONDecodeError:
-                pass
+        if raw.startswith("{"):
+            if raw.endswith("}"):
+                try:
+                    return json.loads(raw)
+                except json.JSONDecodeError:
+                    pass
+        elif raw:
+            print(f"  [cargador] {raw}")
     return None
 
 
@@ -112,6 +152,7 @@ def main():
     t_prev = None
     t_aviso = 0.0
     print(f"Guardando en {ruta}\nCtrl+C para terminar (deja 30 min de reposo tras parar la carga).")
+    print("Comandos (escribe y ENTER): g = cargar, x = parar, c,7 = fijar 7 A, d = estado del cargador.")
     try:
         while True:
             try:

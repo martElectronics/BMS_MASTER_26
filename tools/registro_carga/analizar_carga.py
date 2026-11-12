@@ -11,12 +11,12 @@ o doble clic en analizar_carga.bat.
 Dos medidas:
   1. Capacidad RELATIVA (no necesita reposo ni curva de la celda): todos los paralelos
      están en serie y reciben los mismos Ah. Se mira cuántos Ah necesita cada uno para
-     subir cada tramo de 0,1 V (3,6→3,7, 3,7→3,8...). Uno con 8 de 11 celdas lo hace con
+     subir cada tramo de 0,1 V (3,6→3,7, 3,7→3,8...). Uno con 4 de 5 celdas lo hace con
      ~0,73 de los Ah de la mediana. Con corriente constante la caída I·R es casi igual en
      todo el tramo, así que se cancela.
   2. Capacidad ABSOLUTA (necesita reposo ANTES de cargar y >= 10 min DESPUÉS): tensión
      de reposo de cada paralelo -> SOC con la curva típica de la Samsung 40T -> Ah / SOC
-     ganado. Es la que dice si el pack tiene 44 Ah o menos.
+     ganado. Es la que dice si el pack tiene los 20 Ah nominales (5 x 4,0 Ah) o menos.
 Además: resistencia de cada paralelo con el escalón de corriente al arrancar la carga.
 Solo librería estándar.
 """
@@ -33,7 +33,8 @@ REPOSO_MIN_S = 600       # reposo final mínimo para fiarse de la capacidad abso
 VENTANA_REPOSO_S = 120   # se usa el final de cada reposo (lo más relajado)
 UMBRALES = [round(3.40 + 0.05 * k, 2) for k in range(16)]   # 3,40 ... 4,15 V
 TRAMO_V = 0.10
-CELDAS_PARALELO = 11
+CELDAS_PARALELO = 5       # 110S5P: 5 celdas 40T en cada paralelo
+CAP_NOMINAL_AH = 4.0 * CELDAS_PARALELO   # datasheet 40T: 4,0 Ah (4,2 -> 2,5 V a 0,2C)
 # Curva OCV-SOC típica de la Samsung 40T (la misma que aim_a_modulos.py).
 OCV_V = [3.00, 3.25, 3.40, 3.55, 3.62, 3.68, 3.76, 3.85, 3.94, 4.02, 4.10, 4.19]
 OCV_SOC = [0, 5, 10, 20, 30, 40, 50, 60, 70, 80, 90, 100]
@@ -226,14 +227,15 @@ def informe(A, path):
              ["Ah cargados", f"{A['ah_total']:.2f} Ah ({'cargador' if A['usa_cargador'] else 'Hall'}) · Hall {A['ah_hall']:.2f} Ah"],
              ["Corriente / duración", f"{A['i_med']:.1f} A · {(t[A['i1']] - t[A['i0']]) / 60:.0f} min"],
              ["Reposo antes / después", f"{A['dur_ini'] / 60:.0f} min / {A['dur_fin'] / 60:.0f} min"],
-             ["Capacidad del pack", (f"mediana {mediana(caps):.1f} Ah · el más débil {min(caps):.1f} Ah" if A["abs_ok"] and caps
+             ["Capacidad del pack", (f"mediana {mediana(caps):.1f} Ah ({mediana(caps) / CAP_NOMINAL_AH * 100:.0f} % de {CAP_NOMINAL_AH:.0f} Ah) · "
+                                     f"el más débil {min(caps):.1f} Ah ({min(caps) / CAP_NOMINAL_AH * 100:.0f} %)" if A["abs_ok"] and caps
                                      else f"sin calcular: hace falta reposo antes y ≥ {REPOSO_MIN_S // 60} min después")],
              [], ["Paralelos con menos capacidad", "capacidad relativa", "≈ celdas", "R (mΩ)", "reposo antes (V)", "reposo después (V)", "capacidad (Ah)"]]
     for p in debiles:
         r = res[p]
         panel.append([nombre(p), rel[p], rel[p] * CELDAS_PARALELO, r["r"], r["vi"], r["vf"], r["cap"]])
     panel += [[], ["Cómo leerlo"],
-              ["· Capacidad relativa: Ah que necesita el paralelo para subir cada 0,1 V frente a la mediana. 0,73 ≈ 8 de 11 celdas."],
+              ["· Capacidad relativa: Ah que necesita el paralelo para subir cada 0,1 V frente a la mediana. 0,80 ≈ 4 de 5 celdas."],
               ["· Gráfica de tensión frente a Ah: un paralelo con menos capacidad sube más deprisa (su línea se despega hacia arriba)."],
               ["· Capacidad absoluta: tensión de reposo antes/después con la curva típica de la 40T. Necesita los dos reposos."]]
     est = {0: {"*": TITULO}, 7: {"*": NEGRITA}, 9 + nd: {"*": NEGRITA}}
@@ -263,7 +265,9 @@ def informe(A, path):
     nv = max(int(p.split("_V")[1]) for p in PV)
     nt = max(int(p.split("_T")[1]) for p in PT) if PT else 0
     tmaxp = {p: max([x for x in d[p] if x is not None] or [None]) for p in PT}
-    mapa = (bloque("Capacidad relativa (1,00 = mediana)", "Rojo ≈ 0,7 (unas 8 de 11 celdas). Verde = normal.", lambda p: rel.get(p), "V", nv) +
+    mapa = (bloque("Capacidad relativa (1,00 = mediana)", "Rojo ≈ 0,8 (4 de 5 celdas). Verde = normal.", lambda p: rel.get(p), "V", nv) +
+            bloque("Capacidad absoluta (Ah)", "Con la tensión de reposo antes y después (curva típica de la 40T). Necesita los dos reposos. Rojo = la menor del pack.",
+                   lambda p: res[p]["cap"] if p in res else None, "V", nv) +
             bloque("Resistencia (mΩ)", "Escalón de tensión al arrancar la carga. Rojo = alta (unión, fusibles o celdas que faltan).", lambda p: res[p]["r"] if p in res else None, "V", nv) +
             bloque("Reposo antes de cargar (V)", "Rojo = el más bajo del pack.", lambda p: res[p]["vi"] if p in res else None, "V", nv) +
             bloque("Reposo después de cargar (V)", "", lambda p: res[p]["vf"] if p in res else None, "V", nv) +
@@ -272,13 +276,14 @@ def informe(A, path):
     from xlsx_simple import letra
     ult_v, ult_t = letra(nv), letra(nt)
     rng = lambda k, u: f"B{k * b + 4}:{u}{k * b + 3 + len(mods)}"
-    esc = [(rng(0, ult_v), "capacidad"), (rng(1, ult_v), "verde_rojo"), (rng(2, ult_v), "rojo_verde"), (rng(3, ult_v), "rojo_verde"), (rng(4, ult_t), "temperatura")]
+    esc = [(rng(0, ult_v), "capacidad"), (rng(1, ult_v), "rojo_verde"), (rng(2, ult_v), "verde_rojo"), (rng(3, ult_v), "rojo_verde"),
+           (rng(4, ult_v), "rojo_verde"), (rng(5, ult_t), "temperatura")]
     est_m = {}
-    for k in range(5):
+    for k in range(6):
         est_m[k * b] = {"*": TITULO}
         est_m[k * b + 2] = {"*": NEGRITA}
         for r_ in range(k * b + 3, k * b + 3 + len(mods)):
-            est_m[r_] = {c: (DOS_DEC if k < 2 else TRES_DEC) for c in range(1, nv + 1)} | {0: NEGRITA}
+            est_m[r_] = {c: (DOS_DEC if k < 3 else TRES_DEC) for c in range(1, nv + 1)} | {0: NEGRITA}
 
     # ---------------- Tramos ----------------
     tr = [["Paralelo"] + [f"{a:.2f}-{b_:.2f} V" for a, b_, _, _ in A["tramos"]] + ["Mediana"]]
