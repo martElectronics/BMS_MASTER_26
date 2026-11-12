@@ -65,7 +65,7 @@ corriente del cargador cada 0,5 s).
 
 Qué sale:
 - **Capacidad relativa** de cada paralelo: Ah que necesita para subir cada tramo de 0,1 V frente a la
-  mediana. 0,73 ≈ 8 de 11 celdas. No necesita reposo ni curva de la celda.
+  mediana. 0,80 ≈ 4 de 5 celdas. No necesita reposo ni curva de la celda.
 - **Capacidad absoluta** (pack y paralelo): tensión de reposo antes/después con la curva típica de la
   40T. Necesita los dos reposos (≥ 10 min el final).
 - **Resistencia** de cada paralelo con el escalón de corriente al arrancar.

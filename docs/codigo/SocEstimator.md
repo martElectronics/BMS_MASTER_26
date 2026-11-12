@@ -13,7 +13,7 @@ Estima el **% de carga** del pack combinando dos métodos (el estándar en autom
 
 ## Cómo se usa (`main.cpp`)
 ```cpp
-#define SOC_PACK_CAPACITY_AH (4.0f * 11)   // ANTES del include. 4.0 Ah celda × Np
+#define SOC_PACK_CAPACITY_AH (4.0f * 5)    // ANTES del include. 4.0 Ah celda × Np (5p)
 SocEstimator soc;
 soc.begin(minCellV);                       // en reposo al arrancar
 soc.update(packCurrentA, minCellV, bms.isVoltageReadingReliable());  // cada loop
