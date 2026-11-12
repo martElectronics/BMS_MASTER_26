@@ -30,7 +30,7 @@
 | **APPS** | Accelerator Pedal Position Sensor — los sensores (hay dos, por redundancia) que miden la posición del acelerador |
 | **FOC** | Field Oriented Control — el algoritmo de control del motor que usa el inversor; `Id`/`Iq` son sus dos componentes de corriente internos |
 | **ERPM** | RPM eléctricos del motor — hay que dividir por los pares de polos para tener las RPM mecánicas reales |
-| **"paralelo"** | cada módulo de celdas está hecho de 11 grupos de celdas en paralelo, conectados en serie entre sí; `V1..V11` son la tensión de cada uno de esos 11 grupos dentro de un módulo |
+| **"paralelo"** | cada módulo de celdas está hecho de 11 grupos de 5 celdas en paralelo, conectados en serie entre sí; `V1..V11` son la tensión de cada uno de esos 11 grupos dentro de un módulo |
 | **debounce** | filtro de "confirmar durante X ms antes de dar el fallo por bueno", para no disparar con un pico de ruido de una sola lectura |
 | **DLC** | Data Length Code — cuántos bytes de datos lleva la trama CAN |
 
@@ -580,7 +580,7 @@ Byte 7: reservado (0)
 
 > SOC **orientativo** hasta caracterizar la curva OCV-SOC real de las
 > Samsung INR21700-40T (ver `ARQUITECTURA.md §9.6`). El coulomb counting
-> con `Np=11` (44 Ah pack) ya está bien.
+> con `Np=5` (20 Ah pack) ya está bien.
 
 ---
 

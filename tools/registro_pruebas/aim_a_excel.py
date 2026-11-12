@@ -411,7 +411,7 @@ def excel(src, titulo, dst, cap=None):
     fila_cap = None
     if cap:
         cp = cap['par']
-        panel += [[], ['Capacidad estimada (Ah por paralelo)', f"{cap['med']:.1f} Ah mediana", f"{cap['ah']:.1f} Ah gastados"]]
+        panel += [[], ['Capacidad estimada (Ah por paralelo)', f"{cap['med']:.1f} Ah mediana ({cap['med'] / 20 * 100:.0f} % de 20 Ah)", f"{cap['ah']:.1f} Ah gastados"]]   # 110S5P: 5 x 4,0 Ah
         fila_cap = len(panel)
         panel.append(['Menos capacidad', 'Ah', 'vs. mediana'])
         for p in sorted(cp, key=cp.get)[:6]:
@@ -419,7 +419,7 @@ def excel(src, titulo, dst, cap=None):
     panel += [[], ['Cómo leerlo'],
               ['· Gráfica de tensión: si un paralelo de color cae por debajo de la línea negra (mín del BMS) es el que manda. 2,80 V = fallo del BMS.'],
               ['· Hoja Mapa: colores por módulo y paralelo. Hoja Tira: franjas rojas = paralelo que se queda por debajo del resto en el tiempo.'],
-              ['· Capacidad: OCV estimada durante la sesión frente a Ah del Hall. El relativo (vs. mediana) es fiable; los Ah absolutos dependen de la curva OCV y se confirman con la prueba de carga.'],
+              ['· Capacidad: OCV estimada durante la sesión frente a Ah del Hall. El relativo (vs. mediana) es fiable; los Ah absolutos dependen de la curva OCV. Nominal 20 Ah por paralelo (5 x 40T); la carga del 12-11-2026 midió 17,8 Ah. 0,80 ≈ 4 de 5 celdas.'],
               ['· Canales Pk: con el .xrk cada paralelo se refresca cada ~2,5 s; con el CSV exportado (interpolado), cada ~5-8 s. Los picos rápidos están en Celda mín BMS.']]
     est_panel = {0: {'*': 3}, 7: {'*': 1}}
     for r in range(8, 8 + nd):

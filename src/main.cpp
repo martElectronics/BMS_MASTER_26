@@ -48,11 +48,12 @@
 #include "MART_CAN.h"           // CAN (FDCAN1 PA11/PA12, 125 kbps, mapa en docs/)
 
 // Capacidad del PACK (Ah) = 4.0 (celda 40T) × Np (celdas en paralelo).
-// ✓ Topología confirmada: 12 módulos × (6+5)s × 11p → Ns=132, Np=11, 44 Ah pack
+// ✓ Topología: 12 módulos × (6+5)s × 5p → Ns=132, Np=5, 20 Ah pack (antes ponía 11p por
+// error: 11 son las celdas en SERIE de cada módulo. Confirmado con la carga del 12-11-2026)
 // (banco hoy: 10 mods → Ns=110, misma Np y misma capacidad). La capacidad
 // del pack solo depende de Np, no del nº de módulos en serie.
 // Debe ir ANTES del include de SocEstimator.h.
-#define SOC_PACK_CAPACITY_AH   (4.0f * 11)
+#define SOC_PACK_CAPACITY_AH   (4.0f * 5)
 #include "SocEstimator.h"
 #include "FanController.h"      // ventiladores: curva Tmax + feed-forward I
 #include "FaultLogger.h"        // FRAM MB85RC256V (I²C1 PB8/PB9, 0x50)

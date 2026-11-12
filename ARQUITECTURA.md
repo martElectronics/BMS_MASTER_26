@@ -277,7 +277,7 @@ solo chequea `FDCAN_PSR_BO`; solo recupera si bus-off).
 - Umbrales UV/OV/UT/OT — CONFIRMADOS contra datasheet INR21700-40T
   (rev. 2026-05-20): UV 2.80 V, OV 4.20 V (estricto al máx.), UT −20 °C,
   OT 60 °C (= FS EV5.8.4).
-- `Np` — CONFIRMADO = 11 (12 módulos × 11s11p, capacidad pack 44 Ah).
+- `Np` — CONFIRMADO = 5 (12 módulos × 11s5p, capacidad pack 20 Ah). Antes ponía 11p por error; la carga del 12-11-2026 midió 17,8 Ah (89 %).
 - Mapeo Vn↔paralelo en CAN 386-389 — CONFIRMADO (2026-05-20): par antes
   que impar, canales del BQ en orden ascendente, dummy del impar arriba.
 - Datos a confirmar (banco/equipo): caracterización OCV-SOC, baud FDCAN

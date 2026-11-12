@@ -37,7 +37,7 @@
 //   ninguno de los dos: se instancian y NO se llama a su begin()/update(), así
 //   que no tocan hardware (el PWM de los fans queda intacto) y el panel pinta
 //   esos dos campos a 0. SOC y FAN NO son válidos en el cargador — ignóralos.
-#define SOC_PACK_CAPACITY_AH   (4.0f * 11)
+#define SOC_PACK_CAPACITY_AH   (4.0f * 5)    // 110S5P (antes 11 por error)
 #include "SocEstimator.h"
 #include "FanController.h"
 #include "Telemetrydashboard.h"
@@ -962,7 +962,7 @@ void printNtcFaultDetail()
 //  Cada paralelo se compara con la mediana de su misma posición (V1..V11) en
 //  los 10 módulos: según dónde se toma la tensión sobre el busbar, las
 //  posiciones pares salen ~10 % más bajas que las impares en todo el pack.
-//  Una celda desconectada de 11 sube la R un ~10 %; la dispersión normal es ±3-5 %.
+//  Una celda desconectada de 5 sube la R un ~25 %; la dispersión normal es ±3-5 %.
 //  También imprime la tensión de reposo justo antes de la carga.
 //  Para repetirla: 'x', esperar 1-2 min sin corriente y 'g'. 'R' la reimprime.
 // ============================================================================
