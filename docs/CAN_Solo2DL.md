@@ -793,6 +793,9 @@ ya ve lo aplicado en el 0x301. Al inversor no le manda nada por CAN (§20).
 | 0x48D | VCU_WheelPulsesL / R | 4-5 / 6-7 | pulsos contados en la última ventana de 100 ms: un 0 con el coche rodando = sensor muerto |
 | 0x48F (1167) | VCU_SpeedL / R | 0-1 / 2-3 | velocidad de cada rueda (0,01 km/h), calculada con `WHEEL_DIAMETER_MM` |
 | 0x48F | VCU_SpeedAvg | 4-5 | media de las dos ruedas: la que va al display |
+| 0x490 (1168) | VCU_SuspPos | 0-1 | recorrido de suspensión, mm × 100 **con signo**: 0 = altura de marcha (opción 27), + compresión, − extensión. **100 Hz** |
+| 0x490 | VCU_SuspRaw | 2-3 | cuentas ADC crudas del potenciómetro (12 bit) |
+| 0x490 | VCU_SuspState | 4-5 | 0 OK · 1 fuera de banda · 2 sin ADC · +4 sin cero guardado |
 
 **`VCU_FaultCause`** — el primero que aplica, en este orden:
 
