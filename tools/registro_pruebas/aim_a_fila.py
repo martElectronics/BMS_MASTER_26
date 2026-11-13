@@ -15,7 +15,7 @@ py -m pip install libxrk (el resto de la herramienta no necesita instalar nada).
 
 Hace tres cosas:
   1. Imprime un resumen legible y el veredicto de los criterios de paso.
-  2. Copia al portapapeles la fila (65 columnas separadas por tabulador, coma
+  2. Copia al portapapeles la fila (69 columnas separadas por tabulador, coma
      decimal) para pegarla en la primera celda de una fila vacía de la Hoja 1.
   3. Guarda la misma fila en filas/<sesion>.tsv.
 
@@ -70,6 +70,7 @@ CABECERA = [
     "Nº aceleraciones a fondo", "Tiempo 0-75 m (s)", "Metros totales",
     "Velocidad max (km/h)", "DC max (A)", "DC reg max (A)", "AC max (Apk)",
     "AC reg max (Apk)", "RPM motor max", "kW max batería (BMS)",
+    "Ah gastados", "kWh gastados", "Consumo (Ah/km)", "Consumo (Wh/km)",
     "REC max (errores CAN AiM)", "Bits de límite del inversor activados",
     "VCU viva toda la sesión", "Fallo BMS", "FirstFault", "INV FaultCode",
     "SDC abierto por otro nodo", "Reintentos reInit BQ", "MaxFailMs", "MaxCommFailMs",
@@ -438,6 +439,22 @@ def calcular(s, plan):
     elif not pcur:
         aviso("Falta BMS PackCurrent (ID 18): kW max batería queda vacío.")
     fila["kW max batería (BMS)"] = kw
+
+    # Consumo: integral de la corriente DC del inversor (llega ~97 % de sus tramas frente
+    # a ~76 % del BMS) y de V·I; distancia = "Metros totales". Neto: la regeneración resta.
+    if idc:
+        ah = sum(x for x in idc if ok(x)) * dt / 3600
+        fila["Ah gastados"] = ah
+        wh = sum(vdc[i] * idc[i] for i in range(N) if ok(vdc[i]) and ok(idc[i])) * dt / 3600 if vdc else None
+        fila["kWh gastados"] = wh / 1000 if wh is not None else None
+        km = (fila["Metros totales"] or 0) / 1000
+        if km >= 0.5:
+            fila["Consumo (Ah/km)"] = ah / km
+            fila["Consumo (Wh/km)"] = wh / km if wh is not None else None
+        else:
+            aviso("Menos de 500 m recorridos: no se calcula el consumo por km.")
+    else:
+        fila["Ah gastados"] = fila["kWh gastados"] = fila["Consumo (Ah/km)"] = fila["Consumo (Wh/km)"] = None
     if vdc and idc:
         p_inv = [vdc[i] * idc[i] / 1000 if ok(vdc[i]) and ok(idc[i]) else 0 for i in range(N)]
         res["kw_inv"] = max(suavizar(p_inv, int(0.5 / dt) or 1))
