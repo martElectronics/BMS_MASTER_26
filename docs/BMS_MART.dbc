@@ -271,6 +271,11 @@ BO_ 1167 VCU_VehicleSpeed: 8 VCU
  SG_ VCU_SpeedR : 23|16@0+ (0.01,0) [0|655.35] "km/h" AIM
  SG_ VCU_SpeedAvg : 39|16@0+ (0.01,0) [0|655.35] "km/h" AIM
 
+BO_ 1168 VCU_Suspension: 8 VCU
+ SG_ VCU_SuspPos : 7|16@0- (0.01,0) [-327.67|327.67] "mm" AIM
+ SG_ VCU_SuspRaw : 23|16@0+ (1,0) [0|4095] "ADC" AIM
+ SG_ VCU_SuspState : 39|16@0+ (1,0) [0|6] "" AIM
+
 BO_ 769 PDM_Status: 8 PDM
  SG_ PDM_Mode : 7|8@0+ (1,0) [0|2] "" AIM
  SG_ PDM_PumpPct : 15|8@0+ (1,0) [0|100] "%" AIM
@@ -316,6 +321,10 @@ CM_ SG_ 1164 Brake1_pct "Desde 2026-11-02 brake1 no se lee (su entrada CH4 es ah
 CM_ SG_ 1164 Brake1_raw "Sale a 0 desde 2026-11-02, ver Brake1_pct.";
 CM_ BO_ 1165 "Velocidad de rueda (VCU_26, sensores Hall SNDH-H3L-G01, 22 dientes, ventana 100 ms). Pulsos = de la ultima ventana: sirven para ver un sensor muerto o con ruido.";
 CM_ BO_ 1167 "Velocidad del coche calculada por la VCU con WHEEL_DIAMETER_MM a partir de las RPM de rueda (ID 1165).";
+CM_ BO_ 1168 "Recorrido de suspension (VCU_26, potenciometro lineal SLS130 al ADC interno). 100 Hz (SUSP_TX_MS = 10 ms): poner el canal a 100 Hz en RaceStudio.";
+CM_ SG_ 1168 VCU_SuspPos "Posicion en mm CON SIGNO. Con el cero de la opcion 27: 0 = altura de marcha, + = compresion, - = extension. Sin cero (VCU_SuspState >= 4): 0 = minimo/extendido (opcion 26) o extremo electrico del sensor.";
+CM_ SG_ 1168 VCU_SuspRaw "Cuentas ADC crudas (12 bit). Para calibrar y para ver un sensor suelto.";
+CM_ SG_ 1168 VCU_SuspState "0 = OK, 1 = fuera de banda (desconectado/corto; la posicion es la ultima buena), 2 = pin sin ADC o desactivado. +4 = sin cero guardado (opcion 27).";
 CM_ SG_ 1167 VCU_SpeedAvg "Media de rueda izquierda y derecha. Es la que vale para el display.";
 CM_ BO_ 1166 "Señales de estado de la VCU. VCU_Bypass=1 es el bypass de banco (opcion 21 del menu serie): par habilitado saltandose SDC/secuencia/freno/APPS. No deberia verse nunca en pista -> alarma en dashboard.";
 CM_ SG_ 1160 VCU_FaultCause "Causa de no-R2D, primera que aplica: 0=OK 1=esperando start+freno 2=SDC abierto 3=APPS implausible 6=freno desconectado/corto 7=BYPASS DE BANCO ACTIVO (prioridad sobre todos). 4 y 5 no existen en VCU_26.";
