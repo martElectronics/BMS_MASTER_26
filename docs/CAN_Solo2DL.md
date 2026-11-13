@@ -580,7 +580,8 @@ Byte 7: reservado (0)
 
 > SOC **orientativo** hasta caracterizar la curva OCV-SOC real de las
 > Samsung INR21700-40T (ver `ARQUITECTURA.md §9.6`). El coulomb counting
-> con `Np=5` (20 Ah pack) ya está bien.
+> usa 15 Ah (el paralelo más débil, medido en la carga del 12-11-2026) y la curva
+> OCV está medida entre 20 y 90 %; por debajo de 20 % sigue siendo genérica.
 
 ---
 
