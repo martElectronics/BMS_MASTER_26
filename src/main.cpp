@@ -53,7 +53,10 @@
 // (banco hoy: 10 mods → Ns=110, misma Np y misma capacidad). La capacidad
 // del pack solo depende de Np, no del nº de módulos en serie.
 // Debe ir ANTES del include de SocEstimator.h.
-#define SOC_PACK_CAPACITY_AH   (4.0f * 5)
+// SOC = el del paralelo que LIMITA (se calcula con la celda más baja), así que la
+// capacidad es la del más débil, no la nominal: 15,0 Ah (M10 V7, M03 V1, M01 V5 con
+// 4 de 5 celdas; carga del 12-11-2026). Cuando se reparen: 17,8 Ah (la mediana).
+#define SOC_PACK_CAPACITY_AH   15.0f
 #include "SocEstimator.h"
 #include "FanController.h"      // ventiladores: curva Tmax + feed-forward I
 #include "FaultLogger.h"        // FRAM MB85RC256V (I²C1 PB8/PB9, 0x50)

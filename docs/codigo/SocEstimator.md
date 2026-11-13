@@ -13,7 +13,7 @@ Estima el **% de carga** del pack combinando dos métodos (el estándar en autom
 
 ## Cómo se usa (`main.cpp`)
 ```cpp
-#define SOC_PACK_CAPACITY_AH (4.0f * 5)    // ANTES del include. 4.0 Ah celda × Np (5p)
+#define SOC_PACK_CAPACITY_AH 15.0f   // ANTES del include. Ah del paralelo MÁS DÉBIL (el SOC usa la celda más baja)
 SocEstimator soc;
 soc.begin(minCellV);                       // en reposo al arrancar
 soc.update(packCurrentA, minCellV, bms.isVoltageReadingReliable());  // cada loop
@@ -24,7 +24,7 @@ uint8_t pct = soc.soc();                   // 0..100 (para CAN UINT8)
 ## Configuración
 | Constante | Qué |
 |---|---|
-| **`SOC_PACK_CAPACITY_AH`** | capacidad **real** del pack = 4.0 Ah × Np. **AJUSTAR a la topología.** |
+| **`SOC_PACK_CAPACITY_AH`** | Ah del paralelo **más débil** (15 Ah hoy; 17,8 si se reparan los débiles), no el nominal 4,0 × Np: el SOC se calcula con la celda más baja. |
 | `SOC_REST_CURRENT_A` (2 A) | |I| por debajo = candidato a reposo |
 | `SOC_REST_MS` (30 s) | estable este tiempo → reposo fiable |
 | `SOC_RECAL_ALPHA` (0.05) | suavidad del re-ajuste hacia OCV |

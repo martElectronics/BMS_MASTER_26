@@ -14,16 +14,17 @@
  *      la curva OCV→SOC (suavizado por EMA para no dar saltos).
  *   3. Inicialización: al arrancar (coche en reposo) SOC = OCV→SOC.
  *
- * ── ESTADO: APROXIMADO, PENDIENTE DE CARACTERIZACIÓN ────────────────────────
- *   El datasheet NO trae curva OCV–SOC (sus curvas son bajo carga, no
- *   OCV en reposo). La tabla `_OCV_SOC` de abajo es una curva NCA 21700
- *   GENÉRICA/típica, NO medida en estas celdas. Para precisión real hay
- *   que CARACTERIZAR: reposar el pack a SOC conocidos y registrar OCV,
- *   y sustituir la tabla. Hasta entonces el SOC es orientativo (el
- *   coulomb counting acota la deriva entre reposos).
+ * ── ESTADO: CURVA MEDIDA ENTRE 20 Y 90 % (carga del 12-11-2026) ───────────
+ *   El datasheet NO trae curva OCV–SOC. Los puntos de 20 a 90 % salen de
+ *   la carga a 7 A del 12-11-2026 (tools/registro_carga): tensión de los
+ *   paralelos normales menos la sobretensión a 7 A (47-49 mV, medida con
+ *   41 min de reposo final) frente a los Ah, con 17,8 Ah por paralelo.
+ *   La curva NCA genérica que había antes se pasaba hasta un 5 % en la
+ *   zona media. 0-20 % y 90-100 % siguen siendo genéricos: para medirlos,
+ *   reposo tras una tanda que acabe a ~3,2-3,3 V y carga con fase CV.
  *
- *   `SOC_PACK_CAPACITY_AH` debe ser la capacidad REAL del pack
- *   = 4.0 Ah (celda) × Np (celdas en paralelo). [AJUSTAR a la topología]
+ *   `SOC_PACK_CAPACITY_AH`: capacidad del paralelo que LIMITA (el SOC se
+ *   calcula con la celda más baja), no la nominal 4,0 Ah × Np.
  */
 
 #ifndef SOC_ESTIMATOR_H
@@ -124,15 +125,16 @@ private:
     unsigned long _restMs    = 0;
 
     /**
-     * Curva OCV→SOC GENÉRICA NCA 21700 (NO caracterizada en estas celdas).
-     * OCV en reposo (V) por celda → SOC (%). Interpolación lineal.
-     * ⚠ SUSTITUIR por la curva medida del pack real (ver cabecera).
+     * Curva OCV→SOC de la 40T. OCV en reposo (V) por celda → SOC (%).
+     * Interpolación lineal. 20-90 % medidos (ver cabecera); 0, 10 y 100 %
+     * genéricos NCA. Antes (genérica entera): 3.00 3.45 3.54 3.61 3.67 3.74
+     * 3.82 3.90 3.99 4.08 4.18.
      */
     static float _ocvToSoc(float v)
     {
-        // {OCV(V), SOC(%)} de 0 a 100, NCA típica.
-        static const float V[]  = {3.00f,3.45f,3.54f,3.61f,3.67f,3.74f,
-                                    3.82f,3.90f,3.99f,4.08f,4.18f};
+        // {OCV(V), SOC(%)} de 0 a 100.
+        static const float V[]  = {3.00f,3.40f,3.51f,3.62f,3.68f,3.77f,
+                                    3.86f,3.93f,4.03f,4.09f,4.18f};
         static const float S[]  = {0.f, 10.f, 20.f, 30.f, 40.f, 50.f,
                                     60.f, 70.f, 80.f, 90.f, 100.f};
         const int N = 11;
