@@ -124,7 +124,8 @@ El Start Bit no se repite en las tablas: lo trae el import (regla de conversión
 | BMS 386-391 (paginadas) | ~555 ms | **5 Hz** (más rápido que el envío, para no perder páginas) |
 | BMS 392 | 553 ms | **2 Hz** |
 | BMS 393-396 (endurance, paginadas) | 250 ms | **20 Hz** (ver §17b) |
-| VCU 0x488-0x48F | 100 ms (`TELEMETRY_MS`) | **10 Hz** |
+| VCU 0x488-0x48F (menos 0x489) | 100 ms (`TELEMETRY_MS`) | **10 Hz** |
+| VCU 0x489 (dirección) | 20 ms (`STEER_TX_MS`) | **50 Hz** en `VCU_SteerAngle`; `SteerRaw` 10-50 Hz |
 | VCU 0x490 (suspensión) | 10 ms (`SUSP_TX_MS`) | **100 Hz** en `VCU_SuspPos`; `SuspRaw` 10-100 Hz; `SuspState` 10 Hz |
 | Inversor DTI | el que tenga configurado el inversor | igual a su periodo |
 | PDM 0x301 | el de `sendPdmStatus()` | igual a su periodo |
@@ -825,8 +826,8 @@ ya ve lo aplicado en el 0x301. Al inversor no le manda nada por CAN (§20).
 | 0x488 (1160) | VCU_FaultCause | 0 | U8 | 1 | — | 10 | sí + enc. | causa de no-R2D, ver tabla |
 | 0x488 | VCU_ResetCause | 1 | U8 | 1 | — | 10 | sí + enc. | 0=desconocido 1=power/BOR 2=NRST 3=SW 4=IWDG 5=WWDG 6=lowpwr |
 | 0x488 | VCU_Heartbeat | 2-3 | U16 | 1 | — | 10 | sí | cuenta de loop; **se congela si el firmware se cuelga** |
-| 0x489 (1161) | VCU_SteerAngle | 0-1 | S16 | 0.1 | deg | 10 | no | ángulo del volante, + = izquierda; depende de la calibración de 3 puntos (opción 24) |
-| 0x489 | VCU_SteerRaw | 2-3 | U16 | 1 | ADC | 10 | no | cuentas ADC crudas del sensor de dirección |
+| 0x489 (1161) | VCU_SteerAngle | 0-1 | S16 | 0.1 | deg | **50** | no | **50 Hz** (`STEER_TX_MS`). Ángulo del volante, + = izquierda; depende de la calibración de 3 puntos (opción 24) |
+| 0x489 | VCU_SteerRaw | 2-3 | U16 | 1 | ADC | 10-50 | no | cuentas ADC crudas del sensor de dirección |
 | 0x48B (1163) | APPS1_pct | 0-1 | U16 | 0.1 | % | 10 | no | sensor 1 del acelerador (%) |
 | 0x48B | APPS2_pct | 2-3 | U16 | 0.1 | % | 10 | no | sensor 2 del acelerador (%) — se compara con el 1 para detectar implausibilidad |
 | 0x48B | APPS1_raw | 4-5 | U16 | 1 | ADC | 10 | no | lectura cruda del ADC del sensor 1 |
@@ -953,6 +954,7 @@ Pierburg CWA y los 2 ventiladores Delta según temperatura del inversor
   configuración de la suspensión 0x490. DBC: `VAL_` de `VCU_SuspState`.
 - **2026-11-14** — todas las tablas de canales llevan su configuración de
   RaceStudio (Formato, Gain, Ud., Hz, Stepped) generada desde el DBC. §21: + dirección 0x489.
+- **2026-11-14** — dirección 0x489 a 50 Hz con cadencia propia (`STEER_TX_MS` en la VCU).
 
 Si cambia alguna trama, actualiza primero `docs/BMS_MART.dbc` (y
 valídalo con `cantools`) y luego este doc — nunca al revés.
