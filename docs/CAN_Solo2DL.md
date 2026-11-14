@@ -69,11 +69,52 @@
 > ⚠ **Si alguna vez das de alta un canal a mano** (sin DBC): el campo
 > "Start Bit" que escribes en la UI de RaceStudio **no es el mismo número**
 > que el `First Bit` que el DBC guarda internamente para un campo de más de
-> 1 byte — RaceStudio hace una conversión propia al mostrarlo/editarlo. No
-> copies a mano el `First Bit` del DBC en el "Start Bit" manual. Mejor:
-> importa el DBC, o si tienes que crear un canal nuevo, créalo y compara el
-> grid de bits resaltado contra el campo real del mensaje (el grid nunca
-> miente, el número sí puede confundir).
+> 1 byte. En Big Endian el DBC apunta al bit **más** significativo y
+> RaceStudio al **menos** significativo (el cuadrado rojo del grid):
+>
+> | Campo | DBC (`First Bit`) | RaceStudio (Start Bit) |
+> |---|---|---|
+> | 16 bit en bytes 0-1 | 7 | **8** |
+> | 16 bit en bytes 2-3 | 23 | **24** |
+> | 16 bit en bytes 4-5 | 39 | **40** |
+> | 16 bit en bytes 6-7 | 55 | **56** |
+> | 8 bit en el byte k | 8k+7 | **8k** |
+>
+> Es decir: Start Bit = 8 × (último byte del campo). Comprobado en pantalla
+> con `BMS_MaxT` (DBC 7 → RaceStudio 8) y `BMS_StatusV`. Aun así, compara
+> siempre el grid de bits resaltado contra el campo real del mensaje (el
+> grid nunca miente, el número sí puede confundir).
+
+---
+
+## 2b. Ajustes de cada canal en RaceStudio (lo que el DBC no fija)
+
+El import trae bien Start Bit, longitud, signo, ganancia y offset. Lo que
+**hay que repasar a mano** en la ventana "CAN Measure Settings" de cada canal:
+
+| Campo | Regla |
+|---|---|
+| **Data Format** | `Signed integer` si el DBC dice `@0-` (temperaturas, corriente, par, `VCU_SuspPos`…); `Unsigned integer` si dice `@0+`. Un canal con signo puesto como Unsigned da valores absurdos al pasar a negativo (p. ej. −1 °C → 65535; −5 mm de suspensión → ~650 mm). |
+| **Gain / Offset** | El factor y el offset del DBC (0.001 en `MaxV/MinV`, 0.01 en `SuspPos`…). Ya vienen del import. |
+| **Stepped Values** | ✅ **Marcado** en todo lo discreto: flags de 1 bit, estados/enums, contadores, bitmaps, `IDmod`. Así el análisis no dibuja un 2,3 en la transición de 0 a 4. ☐ **Sin marcar** en magnitudes continuas (V, T, A, %, mm, km/h). |
+| **Encoding** | Opcional, **solo para enumeraciones** (muestra texto en vez de número). Es excluyente con Gain, así que solo vale si la ganancia es 1. Las enumeraciones del DBC (`VAL_`) ya traen sus textos: `FirstFault`, `INV_ControlMode`, `INV_FaultCode`, `VCU_FaultCause`, `VCU_ResetCause`, `VCU_AppsSt`, `VCU_SuspState`, `PDM_Mode`. **No** pongas encoding a un bitmap (ver §5). |
+| **Max. Frequency** | La del **periodo de envío** de la trama (tabla de abajo). Más alta no da más información: solo guarda la misma muestra repetida y gasta memoria. |
+| **Function / Unit** | La que corresponda (Temperature °C, Voltage V, Number #…). No afecta al valor, solo a cómo se muestra. |
+| **Short Name** | Único en toda la configuración (§18). Ojo al duplicar canales: RaceStudio copia el short name (p. ej. `BMS_MinT` acabó como "Tmax"). |
+
+**Frecuencia de cada trama** (sale del periodo de envío del firmware):
+
+| Trama | Periodo | Max. Frequency |
+|---|---|---|
+| BMS 11, 15, 16, 17, 18 | 100 ms | **10 Hz** |
+| BMS 13, 14 | 500 ms | **2 Hz** |
+| BMS 12 | 799 ms | **2 Hz** (o la más baja disponible) |
+| BMS 386-391, 392 | ~555 ms | **2 Hz** |
+| BMS 393-396 (endurance) | 250 ms | **5 Hz** |
+| VCU 0x488-0x48F | 100 ms (`TELEMETRY_MS`) | **10 Hz** |
+| VCU 0x490 (suspensión) | 10 ms (`SUSP_TX_MS`) | **100 Hz** en `VCU_SuspPos`; `SuspRaw` 10-100 Hz; `SuspState` 10 Hz |
+| Inversor DTI | el que tenga configurado el inversor | igual a su periodo |
+| PDM 0x301 | el de `sendPdmStatus()` | igual a su periodo |
 
 > En el panel del piloto agrupa los canales por color: rojo = `bmsFault` y
 > sub-fallos; amarillo = snapshot actual; gris = state. Así de un vistazo
@@ -152,6 +193,10 @@ Bytes 6-7: MinT (int16 BE, °C)
 > El canal de referencia para verificar que el import del DBC está bien: en
 > vivo `BMS_MaxV`/`BMS_MinV` deben leer ~3.7-4.0 V por celda. Si sale un
 > valor absurdo (p.ej. ~29000), el import falló o el canal está mal armado.
+>
+> **RaceStudio:** los cuatro a **10 Hz**, Stepped sin marcar. `MaxT`/`MinT`
+> **Signed** (pueden ser negativas), `MaxV`/`MinV` Unsigned con ganancia
+> 0.001. Comprueba que `BMS_MinT` tenga short name **Tmin** y no "Tmax".
 
 ---
 
@@ -180,6 +225,47 @@ Bytes 4-5: V_DELTA         (uint16 BE) — (celda máx − celda mín) en mV
 >
 > El detalle celda a celda (qué paralelo/NTC concreto) está en los frames
 > paginados 386-391 y en el snapshot del ID 15 byte 2 — ver §8.
+
+### Cómo leer el bitmap (y por qué NO lleva encoding 0/1)
+
+`StatusV`/`StatusT` **no valen solo 0 o 1**: el firmware hace
+`gsV |= 1u << m` por cada módulo `m` que falla, así que el número es la
+**suma de 2^m** de los módulos en fallo:
+
+| Qué falla | Valor |
+|---|---|
+| nada | 0 |
+| solo m=0 | 1 |
+| solo m=2 | 4 |
+| m=0 y m=3 | 1 + 8 = 9 |
+| solo m=10 | 1024 |
+
+Un encoding `0 = Sin fallo / 1 = Fallo` dejaría el 4 o el 9 sin texto. `m`
+es el **índice interno del BMS** (0 a `NUM_MODULES`−1, el mismo orden que el
+Excel CAN), que no tiene por qué coincidir con la etiqueta M01-M11 de la
+serie: confírmalo con el Excel antes de ponerle nombres.
+
+Dos formas de configurarlo en RaceStudio:
+
+**A) Un canal numérico por bitmap (recomendado).** Unsigned, ganancia 1,
+**Stepped marcado**, **sin encoding**, 2 Hz. Alarma en el dash con
+`GSV > 0`. Si salta, el número dice qué módulo es (4 = 2² → m=2). Gasta 1
+canal por bitmap.
+
+**B) Un canal de 1 bit por módulo**, si se quiere ver ya decodificado.
+Number of Bits = 1, Unsigned, Stepped marcado, encoding `0 = OK / 1 = FALLO`.
+Estos canales no están en el DBC, así que el Start Bit va a mano:
+
+| Módulo m | `StatusV` (bytes 0-1) | `StatusT` (bytes 2-3) |
+|---|---|---|
+| 0 … 7 | 8 + m (8 … 15) | 24 + m (24 … 31) |
+| 8, 9, 10 | m − 8 (0, 1, 2) | 16 + (m − 8) (16, 17, 18) |
+
+(El bit 0 de la palabra BE está en el byte de **abajo**: por eso m=0..7 van
+al segundo byte y m=8..10 al primero.) Gasta 11 canales por bitmap (22 entre
+los dos): solo si sobra presupuesto de canales.
+
+**`BMS_VDelta`:** Unsigned, ganancia 1, mV, Stepped **sin** marcar, 2 Hz.
 
 ---
 
@@ -775,6 +861,18 @@ ya ve lo aplicado en el 0x301. Al inversor no le manda nada por CAN (§20).
 > por pulso con la ventana de 100 ms. Comparada con `INV ERPM` (rueda motriz
 > calculada desde el motor), sirve para ver patinamiento en aceleración.
 >
+> **Suspensión (0x490) en RaceStudio:**
+>
+> | Canal | Start Bit (RS) | Formato | Gain | Unidad | Frecuencia | Stepped |
+> |---|---|---|---|---|---|---|
+> | `VCU_SuspPos` | 8 | **Signed** | 0.01 | mm | **100 Hz** | no |
+> | `VCU_SuspRaw` | 24 | Unsigned | 1 | — | 10-100 Hz | no |
+> | `VCU_SuspState` | 40 | Unsigned | 1 (o encoding del DBC) | — | 10 Hz | **sí** |
+>
+> `SuspPos` como Unsigned saca ~655 mm al extenderse en vez del negativo.
+> `SuspRaw` solo sirve para calibrar: es el primero que se quita si faltan
+> canales. `SuspState` vale 0/1/2 y **+4** si no hay cero guardado (4/5/6).
+>
 > IDs VCU aún sin implementar en el firmware (no están en el DBC): 0x190 y
 > 0x489/0x48A (fail codes).
 
@@ -833,6 +931,10 @@ Pierburg CWA y los 2 ventiladores Delta según temperatura del inversor
   State_CanOk, refresco con 10 módulos, bits IO del 0x481 (sí están en el
   DBC), la VCU no manda comandos al inversor, short names IPCK/VPCK.
 - **2026-10-24** — NTC 1 del board 8 (IDmod 4, T1) excluido de los fallos (§15).
+- **2026-11-14** — §2: regla Start Bit DBC → RaceStudio. Nueva §2b (Data
+  Format, Stepped, Encoding, frecuencia por trama). §5: cómo leer el bitmap
+  `StatusV/T` (sin encoding 0/1) y canales de 1 bit por módulo. §21:
+  configuración de la suspensión 0x490. DBC: `VAL_` de `VCU_SuspState`.
 
 Si cambia alguna trama, actualiza primero `docs/BMS_MART.dbc` (y
 valídalo con `cantools`) y luego este doc — nunca al revés.

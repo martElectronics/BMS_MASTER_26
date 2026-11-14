@@ -337,6 +337,7 @@ CM_ SG_ 1166 VCU_Bypass "Ver comentario del mensaje BO_ 1166.";
 VAL_ 1160 VCU_FaultCause 0 "OK" 1 "WaitStartBrake" 2 "SDCopen" 3 "AppsImplausible" 6 "BrakeFault" 7 "BYPASS_BANCO" ;
 VAL_ 1160 VCU_ResetCause 0 "unknown" 1 "PowerBOR" 2 "NRST" 3 "SW" 4 "IWDG" 5 "WWDG" 6 "lowpower" ;
 VAL_ 1166 VCU_AppsSt 0 "NORMAL" 1 "IMPL" 2 "PENDING" ;
+VAL_ 1168 VCU_SuspState 0 "OK" 1 "FueraBanda" 2 "SinADC" 4 "OK_SinCero" 5 "FueraBanda_SinCero" 6 "SinADC_SinCero" ;
 
 CM_ BO_ 769 "mart-PDM, src/main.cpp sendPdmStatus() (rev 2026-10-10). Bomba+ventiladores del inversor DTI HV-500. Bytes4-7 relleno 0xFF.";
 CM_ SG_ 769 PDM_Mode "Quien manda sobre la refrigeracion: 0=AUTO (curva termica por temps del inversor, 0x441) 1=CAN (consigna de la VCU, 0x300) 2=SERIAL (override manual de banco).";
