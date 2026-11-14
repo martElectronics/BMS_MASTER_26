@@ -888,8 +888,9 @@ ya ve lo aplicado en el 0x301. Al inversor no le manda nada por CAN (§20).
 > `SuspRaw` solo sirve para calibrar: es el primero que se quita si faltan
 > canales. `SuspState` vale 0/1/2 y **+4** si no hay cero guardado (4/5/6).
 >
-> IDs VCU aún sin implementar en el firmware (no están en el DBC): 0x190 y
-> 0x489/0x48A (fail codes).
+> **0x489 es la dirección** (`VCU_SteerAngle`/`VCU_SteerRaw`, desde 2026-11-02),
+> no los fail codes que se reservaron para él al principio. IDs VCU aún sin
+> implementar en el firmware (no están en el DBC): 0x190 y 0x48A (fail codes).
 
 ---
 
