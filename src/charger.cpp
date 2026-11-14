@@ -77,13 +77,18 @@
 // mantiene ≥ TAPER_VMAX_V, la corriente se divide entre 2; al bajar la I baja
 // la caída I·R (~7 mV/A por paralelo, medido 12-11-2026) y vMax se separa del
 // umbral. Si el siguiente escalón quedaría < TAPER_END_A, la carga TERMINA
-// (parada normal, sin fallo). Con 7 A: 7 → 3,5 → 1,75 → 0,875 → fin, la celda
-// más alta queda en reposo a ~4,18 V. ⚠ Margen al corte duro: 10 mV; no subir
-// TAPER_VMAX_V sin subir también CELL_VMAX_HARD_V (atado al OV del BMS, 4,20 V).
-#define TAPER_VMAX_V         4.185f    ///< vMax que dispara el siguiente escalón (10 mV bajo el corte duro)
+// (parada normal, sin fallo). En la carga del 14-11-2026 el OBC NO dio corriente
+// por debajo de ~3 A (pidiendo 1,7 A el Hall cae a 0 en 1 min y las celdas
+// bajan), así que con 7 A queda 7 → 3,5 → fin. ⚠ PENDIENTE confirmarlo en otra
+// carga: otro día sí pareció cargar < 3 A. Si carga, bajar TAPER_END_A a ~1,0.
+// La celda más alta queda en reposo a ~4,18 V.
+// ⚠ Margen al corte duro: solo 5 mV. Si alguna carga acaba en FALLO de OV en
+// vez de en "FIN DE CARGA", bajar TAPER_VMAX_V a 4,185. No subirlo sin subir
+// también CELL_VMAX_HARD_V (atado al OV del BMS, 4,20 V).
+#define TAPER_VMAX_V         4.19f     ///< vMax que dispara el siguiente escalón (5 mV bajo el corte duro)
 #define TAPER_HOLD_MS        3000UL    ///< vMax debe mantenerse ≥ umbral este tiempo (filtra ruido)
 #define TAPER_SETTLE_MS      15000UL   ///< mínimo entre escalones (rampa del OBC + asentamiento de V)
-#define TAPER_END_A          0.5f      ///< si el siguiente escalón queda por debajo → fin de carga
+#define TAPER_END_A          3.0f      ///< si el siguiente escalón queda por debajo → fin de carga (mínimo real del OBC)
 // Corte DURO por celda BAJA. Mismo umbral que main.cpp (CELL_UV_V) y que el
 // registro UV_THRESH del BQ (0x53 = 2.8 V). Cubre dos escenarios:
 //   · celda realmente descargada → no se carga a 3 A un pack por debajo de UV;
