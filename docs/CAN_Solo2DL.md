@@ -98,7 +98,7 @@ El import trae bien Start Bit, longitud, signo, ganancia y offset. Lo que
 | **Gain / Offset** | El factor y el offset del DBC (0.001 en `MaxV/MinV`, 0.01 en `SuspPos`…). Ya vienen del import. |
 | **Stepped Values** | ✅ **Marcado** en todo lo discreto: flags de 1 bit, estados/enums, contadores, bitmaps, `IDmod`. Así el análisis no dibuja un 2,3 en la transición de 0 a 4. ☐ **Sin marcar** en magnitudes continuas (V, T, A, %, mm, km/h). |
 | **Encoding** | Opcional, **solo para enumeraciones** (muestra texto en vez de número). Es excluyente con Gain, así que solo vale si la ganancia es 1. Las enumeraciones del DBC (`VAL_`) ya traen sus textos: `FirstFault`, `INV_ControlMode`, `INV_FaultCode`, `VCU_FaultCause`, `VCU_ResetCause`, `VCU_AppsSt`, `VCU_SuspState`, `PDM_Mode`. **No** pongas encoding a un bitmap (ver §5). |
-| **Max. Frequency** | La del **periodo de envío** de la trama (tabla de abajo). Más alta no da más información: solo guarda la misma muestra repetida y gasta memoria. |
+| **Max. Frequency** | La del **periodo de envío** de la trama (tabla de abajo). En tramas normales, más alta no da más información: solo guarda la misma muestra repetida y gasta memoria. **Excepción: las paginadas** (386-391, 393-396), donde cada envío trae un módulo distinto: ahí hay que muestrear **más rápido** que el envío o se pierden páginas. |
 | **Function / Unit** | La que corresponda (Temperature °C, Voltage V, Number #…). No afecta al valor, solo a cómo se muestra. |
 | **Short Name** | Único en toda la configuración (§18). Ojo al duplicar canales: RaceStudio copia el short name (p. ej. `BMS_MinT` acabó como "Tmax"). |
 
@@ -121,8 +121,9 @@ El Start Bit no se repite en las tablas: lo trae el import (regla de conversión
 | BMS 11, 15, 16, 17, 18 | 100 ms | **10 Hz** |
 | BMS 13, 14 | 500 ms | **2 Hz** |
 | BMS 12 | 799 ms | **2 Hz** (o la más baja disponible) |
-| BMS 386-391, 392 | ~555 ms | **2 Hz** |
-| BMS 393-396 (endurance) | 250 ms | **5 Hz** |
+| BMS 386-391 (paginadas) | ~555 ms | **5 Hz** (más rápido que el envío, para no perder páginas) |
+| BMS 392 | 553 ms | **2 Hz** |
+| BMS 393-396 (endurance, paginadas) | 250 ms | **20 Hz** (ver §17b) |
 | VCU 0x488-0x48F | 100 ms (`TELEMETRY_MS`) | **10 Hz** |
 | VCU 0x490 (suspensión) | 10 ms (`SUSP_TX_MS`) | **100 Hz** en `VCU_SuspPos`; `SuspRaw` 10-100 Hz; `SuspState` 10 Hz |
 | Inversor DTI | el que tenga configurado el inversor | igual a su periodo |
@@ -562,10 +563,10 @@ Bytes 6-7: V3     (uint16 BE, mV)
 
 | Canal | Short | Byte | Formato | Gain | Ud. | Hz | Stepped | Descripción |
 |---|---|---|---|---|---|---|---|---|
-| Mod_IDmod_386 | IM86 | 0-1 | U16 | 1 | — | 2 | sí | índice del módulo que ocupa este turno de la ronda |
-| Mod_V1 | MV01 | 2-3 | U16 | 0.001 | V | 2 | no | tensión del paralelo 1 del módulo |
-| Mod_V2 | MV02 | 4-5 | U16 | 0.001 | V | 2 | no | tensión del paralelo 2 |
-| Mod_V3 | MV03 | 6-7 | U16 | 0.001 | V | 2 | no | tensión del paralelo 3 |
+| Mod_IDmod_386 | IM86 | 0-1 | U16 | 1 | — | 5 | sí | índice del módulo que ocupa este turno de la ronda |
+| Mod_V1 | MV01 | 2-3 | U16 | 0.001 | V | 5 | no | tensión del paralelo 1 del módulo |
+| Mod_V2 | MV02 | 4-5 | U16 | 0.001 | V | 5 | no | tensión del paralelo 2 |
+| Mod_V3 | MV03 | 6-7 | U16 | 0.001 | V | 5 | no | tensión del paralelo 3 |
 
 > Los 4 IDs 386-389 comparten el mismo `IDmod` en bytes 0-1; cada uno
 > necesita su propio short name (`IM86/IM87/IM88/IM89`) porque RaceStudio
@@ -581,10 +582,10 @@ Bytes 6-7: V3     (uint16 BE, mV)
 
 | Canal | Short | Byte | Formato | Gain | Ud. | Hz | Stepped | Descripción |
 |---|---|---|---|---|---|---|---|---|
-| Mod_IDmod_387 | IM87 | 0-1 | U16 | 1 | — | 2 | sí | índice del módulo |
-| Mod_V4 | MV04 | 2-3 | U16 | 0.001 | V | 2 | no | tensión del paralelo 4 |
-| Mod_V5 | MV05 | 4-5 | U16 | 0.001 | V | 2 | no | tensión del paralelo 5 |
-| Mod_V6 | MV06 | 6-7 | U16 | 0.001 | V | 2 | no | tensión del paralelo 6 |
+| Mod_IDmod_387 | IM87 | 0-1 | U16 | 1 | — | 5 | sí | índice del módulo |
+| Mod_V4 | MV04 | 2-3 | U16 | 0.001 | V | 5 | no | tensión del paralelo 4 |
+| Mod_V5 | MV05 | 4-5 | U16 | 0.001 | V | 5 | no | tensión del paralelo 5 |
+| Mod_V6 | MV06 | 6-7 | U16 | 0.001 | V | 5 | no | tensión del paralelo 6 |
 
 ---
 
@@ -592,10 +593,10 @@ Bytes 6-7: V3     (uint16 BE, mV)
 
 | Canal | Short | Byte | Formato | Gain | Ud. | Hz | Stepped | Descripción |
 |---|---|---|---|---|---|---|---|---|
-| Mod_IDmod_388 | IM88 | 0-1 | U16 | 1 | — | 2 | sí | índice del módulo |
-| Mod_V7 | MV07 | 2-3 | U16 | 0.001 | V | 2 | no | tensión del paralelo 7 |
-| Mod_V8 | MV08 | 4-5 | U16 | 0.001 | V | 2 | no | tensión del paralelo 8 |
-| Mod_V9 | MV09 | 6-7 | U16 | 0.001 | V | 2 | no | tensión del paralelo 9 |
+| Mod_IDmod_388 | IM88 | 0-1 | U16 | 1 | — | 5 | sí | índice del módulo |
+| Mod_V7 | MV07 | 2-3 | U16 | 0.001 | V | 5 | no | tensión del paralelo 7 |
+| Mod_V8 | MV08 | 4-5 | U16 | 0.001 | V | 5 | no | tensión del paralelo 8 |
+| Mod_V9 | MV09 | 6-7 | U16 | 0.001 | V | 5 | no | tensión del paralelo 9 |
 
 ---
 
@@ -610,10 +611,10 @@ Bytes 6-7: VTot  (uint16 BE, mV) — suma de los 11 paralelos del módulo
 
 | Canal | Short | Byte | Formato | Gain | Ud. | Hz | Stepped | Descripción |
 |---|---|---|---|---|---|---|---|---|
-| Mod_IDmod_389 | IM89 | 0-1 | U16 | 1 | — | 2 | sí | índice del módulo |
-| Mod_V10 | MV10 | 2-3 | U16 | 0.001 | V | 2 | no | tensión del paralelo 10 |
-| Mod_V11 | MV11 | 4-5 | U16 | 0.001 | V | 2 | no | tensión del paralelo 11 |
-| Mod_VTotal | MVTT | 6-7 | U16 | 0.001 | V | 2 | no | suma de los 11 paralelos del módulo |
+| Mod_IDmod_389 | IM89 | 0-1 | U16 | 1 | — | 5 | sí | índice del módulo |
+| Mod_V10 | MV10 | 2-3 | U16 | 0.001 | V | 5 | no | tensión del paralelo 10 |
+| Mod_V11 | MV11 | 4-5 | U16 | 0.001 | V | 5 | no | tensión del paralelo 11 |
+| Mod_VTotal | MVTT | 6-7 | U16 | 0.001 | V | 5 | no | suma de los 11 paralelos del módulo |
 
 > `Mod_VTotal` debe coincidir con la tensión medida entre terminales del
 > módulo (margen ±20 mV por offset del ADC del BQ × 11 celdas).
@@ -629,8 +630,8 @@ Byte 1-7: T1..T7 (int8 cada uno, °C)
 
 | Canal | Short | Byte | Formato | Gain | Ud. | Hz | Stepped | Descripción |
 |---|---|---|---|---|---|---|---|---|
-| Mod_IDmod_390 | IM90 | 0 | U8 | 1 | — | 2 | sí | índice del módulo |
-| Mod_T1..T7 | MT01..MT07 | 1-7 | S8 | 1 | °C | 2 | no | temperatura de cada NTC (**signed**) |
+| Mod_IDmod_390 | IM90 | 0 | U8 | 1 | — | 5 | sí | índice del módulo |
+| Mod_T1..T7 | MT01..MT07 | 1-7 | S8 | 1 | °C | 5 | no | temperatura de cada NTC (**signed**) |
 
 > Las temperaturas son **signed int8** (rango −128..+127 °C) — si sale 236
 > en vez de −20, el canal no está marcado como Signed (el DBC ya lo marca
@@ -660,13 +661,13 @@ Byte 7: reservado (0)
 
 | Canal | Short | Byte | Formato | Gain | Ud. | Hz | Stepped | Descripción |
 |---|---|---|---|---|---|---|---|---|
-| Mod_IDmod_391 | IM91 | 0 | U8 | 1 | — | 2 | sí | índice del módulo |
-| Mod_T8 | MT08 | 1 | S8 | 1 | °C | 2 | no | temperatura NTC 8 (signed) |
-| Mod_T9 | MT09 | 2 | S8 | 1 | °C | 2 | no | temperatura NTC 9 (signed) |
-| Mod_Tmax | MTMX | 3 | S8 | 1 | °C | 2 | no | máx de T1..T9 del módulo |
-| Mod_Tmin | MTMN | 4 | S8 | 1 | °C | 2 | no | mín de T1..T9 del módulo |
-| Mod_StatusV | MSV_ | 5 | U8 | 1 | — | 2 | sí | estado de tensión del módulo |
-| Mod_StatusT | MST_ | 6 | U8 | 1 | — | 2 | sí | estado de temperatura del módulo |
+| Mod_IDmod_391 | IM91 | 0 | U8 | 1 | — | 5 | sí | índice del módulo |
+| Mod_T8 | MT08 | 1 | S8 | 1 | °C | 5 | no | temperatura NTC 8 (signed) |
+| Mod_T9 | MT09 | 2 | S8 | 1 | °C | 5 | no | temperatura NTC 9 (signed) |
+| Mod_Tmax | MTMX | 3 | S8 | 1 | °C | 5 | no | máx de T1..T9 del módulo |
+| Mod_Tmin | MTMN | 4 | S8 | 1 | °C | 5 | no | mín de T1..T9 del módulo |
+| Mod_StatusV | MSV_ | 5 | U8 | 1 | — | 5 | sí | estado de tensión del módulo |
+| Mod_StatusT | MST_ | 6 | U8 | 1 | — | 5 | sí | estado de temperatura del módulo |
 
 ---
 
@@ -704,19 +705,19 @@ Bits de cada canal, del más alto al más bajo (todos sin signo, Big Endian):
 
 | ID | Canal | Bits | Formato | Gain | Ud. | Hz | Stepped | Contenido |
 |---|---|---|---|---|---|---|---|---|
-| 393 (0x189) | BMS_PkT_A | 24 | U24 | 1 | — | 5 | sí | IDmod(4) · T1(6) · T2(6) · T3(6) · 0(2) |
-| 393 | BMS_PkT_B | 24 | U24 | 1 | — | 5 | sí | T4 · T5 · T6 · T7 (6 cada una) |
-| 393 | BMS_PkT_C | 16 | U16 | 1 | — | 5 | sí | T8(6) · T9(6) · IDmod(4) |
-| 394 (0x18A) | BMS_PkV1_A | 24 | U24 | 1 | — | 5 | sí | IDmod(4) · V1(10) · V2(10) |
-| 394 | BMS_PkV1_B | 24 | U24 | 1 | — | 5 | sí | IDmod(4) · V3(10) · V4(10) |
-| 394 | BMS_PkV1_C | 16 | U16 | 1 | — | 5 | sí | V5(10) · IDmod(4) · 0(2) |
-| 395 (0x18B) | BMS_PkV2_A/B/C | 24/24/16 | U24 / U16 | 1 | — | 5 | sí | igual que 394 con V6..V10 |
-| 396 (0x18C) | BMS_PkV3_A | 24 | U24 | 1 | — | 5 | sí | IDmod(4) · V11(10) · 0(10) |
+| 393 (0x189) | BMS_PkT_A | 24 | U24 | 1 | — | **20** | sí | IDmod(4) · T1(6) · T2(6) · T3(6) · 0(2) |
+| 393 | BMS_PkT_B | 24 | U24 | 1 | — | **20** | sí | T4 · T5 · T6 · T7 (6 cada una) |
+| 393 | BMS_PkT_C | 16 | U16 | 1 | — | **20** | sí | T8(6) · T9(6) · IDmod(4) |
+| 394 (0x18A) | BMS_PkV1_A | 24 | U24 | 1 | — | **20** | sí | IDmod(4) · V1(10) · V2(10) |
+| 394 | BMS_PkV1_B | 24 | U24 | 1 | — | **20** | sí | IDmod(4) · V3(10) · V4(10) |
+| 394 | BMS_PkV1_C | 16 | U16 | 1 | — | **20** | sí | V5(10) · IDmod(4) · 0(2) |
+| 395 (0x18B) | BMS_PkV2_A/B/C | 24/24/16 | U24 / U16 | 1 | — | **20** | sí | igual que 394 con V6..V10 |
+| 396 (0x18C) | BMS_PkV3_A | 24 | U24 | 1 | — | **20** | sí | IDmod(4) · V11(10) · 0(10) |
 
 **Configuración en RaceStudio (imprescindible):**
 1. Los 10 canales con **Number of Bits** 24 o 16 según la tabla, **Unsigned**, sin escala (Gain 1).
 2. **Stepped Values marcado** en los 10. Si el AiM interpola, el valor empaquetado no vale (el script avisa de cuántas filas descarta).
-3. **Max. Frequency 20 Hz**, para no saltarse páginas.
+3. **Max. Frequency 20 Hz**, para no saltarse páginas (es la columna Hz de la tabla).
 
 **Validar antes de usarlo (una vez, en banco):** el comando **`P`** por serie
 hace que el BMS mande un patrón conocido en vez de las medidas. Graba unos
