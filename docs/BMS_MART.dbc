@@ -336,7 +336,7 @@ VAL_ 993 INV_ControlMode 0 "unused" 1 "SPEED" 2 "CURRENT" 3 "CURRENT_BRAKE" 4 "P
 VAL_ 1089 INV_FaultCode 0 "OK" 1 "Overvoltage" 2 "Undervoltage" 3 "DRV" 4 "Overcurrent" 5 "CtrlOverTemp" 6 "MotorOverTemp" 7 "SensorWire" 8 "SensorGeneral" 9 "CANcmdError" 10 "AnalogInput" ;
 
 CM_ BO_ 1160 "VCU_26, src/Control.cpp publishTelemetry() (rev 2026-08-10). Bytes4-7 reservados a 0.";
-CM_ BO_ 1161 "Direccion (VCU_26, sensor analogico en CH4 del MCP3208, antes brake1). Solo telemetria, 100 ms. Bytes4-7 sin usar (0xFF).";
+CM_ BO_ 1161 "Direccion (VCU_26, sensor analogico en CH4 del MCP3208, antes brake1). Solo telemetria, 20 ms (50 Hz, STEER_TX_MS): poner VCU_SteerAngle a 50 Hz en RaceStudio. Bytes4-7 sin usar (0xFF).";
 CM_ SG_ 1161 VCU_SteerAngle "Angulo del VOLANTE en grados, + = izquierda (ISO 8855). Satura en +-STEER_LOCK_DEG (Config.h, 90 provisional). Depende de la calibracion de 3 puntos (opcion 24 del menu de la VCU).";
 CM_ SG_ 1161 VCU_SteerRaw "Cuentas ADC crudas (sobremuestreo x4). Sirven para calibrar y para ver un sensor suelto sin depender de la calibracion.";
 CM_ SG_ 1164 Brake1_pct "Desde 2026-11-02 brake1 no se lee (su entrada CH4 es ahora la direccion, BO_ 1161): sale a 0.";
