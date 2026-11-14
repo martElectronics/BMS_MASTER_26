@@ -69,6 +69,21 @@
 #define CHG_MAX_CURRENT_A    14.0f       ///< ⚠ TOPE duro: el serial no puede pedir más (atado al límite AC/plomos)
 
 #define CELL_VMAX_HARD_V     4.195f    ///< corte DURO por celda (seguridad independiente de Vmax). 5 mV bajo el OV del BMS/balanceador (4,20 V): corta la carga antes de enclavar el OV
+
+// ── FINAL DE CARGA POR ESCALONES (CV "por celda") ──────────────────────────
+// La CV propia del OBC es a CHG_TERM_VOLT_V de PACK (4,20 V de media). Con las
+// celdas desigualadas la más alta llega antes al corte duro de 4,195 V y la
+// carga acababa como FALLO de OV. En su lugar: cuando vMax (cargando) se
+// mantiene ≥ TAPER_VMAX_V, la corriente se divide entre 2; al bajar la I baja
+// la caída I·R (~7 mV/A por paralelo, medido 12-11-2026) y vMax se separa del
+// umbral. Si el siguiente escalón quedaría < TAPER_END_A, la carga TERMINA
+// (parada normal, sin fallo). Con 7 A: 7 → 3,5 → 1,75 → 0,875 → fin, la celda
+// más alta queda en reposo a ~4,18 V. ⚠ Margen al corte duro: 10 mV; no subir
+// TAPER_VMAX_V sin subir también CELL_VMAX_HARD_V (atado al OV del BMS, 4,20 V).
+#define TAPER_VMAX_V         4.185f    ///< vMax que dispara el siguiente escalón (10 mV bajo el corte duro)
+#define TAPER_HOLD_MS        3000UL    ///< vMax debe mantenerse ≥ umbral este tiempo (filtra ruido)
+#define TAPER_SETTLE_MS      15000UL   ///< mínimo entre escalones (rampa del OBC + asentamiento de V)
+#define TAPER_END_A          0.5f      ///< si el siguiente escalón queda por debajo → fin de carga
 // Corte DURO por celda BAJA. Mismo umbral que main.cpp (CELL_UV_V) y que el
 // registro UV_THRESH del BQ (0x53 = 2.8 V). Cubre dos escenarios:
 //   · celda realmente descargada → no se carga a 3 A un pack por debajo de UV;
@@ -233,6 +248,17 @@ static unsigned long tPrechargeStart  = 0;
 static bool          chargeRequested = false;  ///< orden start/stop por serial (ARRANCA SIN cargar)
 static float         chgCurrentA     = CHG_START_CURRENT_A;  ///< corriente DC comandada (ajustable, capada)
 static bool          charging        = false;  ///< true mientras mandamos control=0
+// Escalones de final de carga (ver TAPER_*). taperA es un TOPE aparte: no
+// toca chgCurrentA (lo que pidió el usuario) y se rearma con cada 'g'.
+static bool          taperOn         = true;   ///< 'k' lo activa/desactiva
+static float         taperA          = CHG_MAX_CURRENT_A;  ///< tope actual de los escalones
+static uint8_t       taperSteps      = 0;      ///< escalones dados en esta carga
+static bool          chargeDone      = false;  ///< la carga terminó por escalones (no por fallo)
+
+// Corriente que se manda de verdad al OBC: la del usuario capada por el escalón.
+static float chgCmdA() { return taperOn ? fminf(chgCurrentA, taperA) : chgCurrentA; }
+static void  taperReset() { taperA = CHG_MAX_CURRENT_A; taperSteps = 0; chargeDone = false; }
+void   updateTaper(unsigned long now);
 static unsigned long tLastChgRx      = 0;       ///< ms del último Message 2 recibido
 static uint8_t       chgStatus       = 0;       ///< último byte STATUS del cargador
 static float         chgOutV         = 0.0f;    ///< V de salida reportada
@@ -356,6 +382,9 @@ void loop()
 
         // Un fallo CANCELA la orden de carga: hay que re-armar con 'g'.
         if (!bmsSafe) chargeRequested = false;
+
+        // Final de carga por escalones (baja la I antes del corte duro de OV).
+        if (readOk) updateTaper(tSample);
 
         // BMS_OK refleja la SEGURIDAD del pack (no si cargamos o no).
         // Polaridad del driver: OK=HIGH, fallo=LOW (fail-safe).
@@ -749,6 +778,39 @@ void updateTson()
 }
 
 // ============================================================================
+//  Final de carga por escalones (TAPER_*). Se llama cada SAMPLE_MS con una
+//  lectura buena. Solo actúa mientras se está cargando de verdad.
+// ============================================================================
+void updateTaper(unsigned long now)
+{
+    static unsigned long tHigh = 0, tStep = 0;
+    static bool high = false;
+
+    if (!taperOn || !charging || !chargeRequested) { high = false; return; }
+
+    if (bms.getMaxVoltage() < TAPER_VMAX_V) { high = false; return; }
+    if (!high) { high = true; tHigh = now; }
+    if (now - tHigh < TAPER_HOLD_MS) return;
+    if (taperSteps > 0 && now - tStep < TAPER_SETTLE_MS) return;
+
+    const float next = chgCmdA() * 0.5f;
+    tStep = now;
+    high = false;
+    if (next < TAPER_END_A) {
+        chargeRequested = false;
+        chargeDone = true;
+        Serial.printf("\n[CHG] FIN DE CARGA: vMax=%.3f V con %.2f A (%u escalones). Parada normal, sin fallo.\n",
+                      bms.getMaxVoltage(), chgCmdA(), taperSteps);
+        Serial.println(F("[CHG]   Deja el pack en reposo >=30 min si estas registrando la carga."));
+        return;
+    }
+    taperA = next;
+    taperSteps++;
+    Serial.printf("\n[CHG] ESCALON %u: vMax=%.3f V >= %.3f V -> corriente %.2f A\n",
+                  taperSteps, bms.getMaxVoltage(), TAPER_VMAX_V, next);
+}
+
+// ============================================================================
 //  Campos extra del JSON del dashboard — estado de carga (los lee TelemetryWeb)
 // ============================================================================
 static void dashChargerJson(Stream& io)
@@ -758,6 +820,9 @@ static void dashChargerJson(Stream& io)
     io.print("\"requested\":");  io.print(chargeRequested ? "true" : "false");
     io.print(",\"charging\":");  io.print(charging        ? "true" : "false");
     io.print(",\"i\":");         io.print(chgCurrentA, 1);
+    io.print(",\"iCmd\":");      io.print(chgCmdA(), 2);      // la que va al OBC (con escalón)
+    io.print(",\"taper\":");     io.print(taperOn ? taperSteps : -1);
+    io.print(",\"done\":");      io.print(chargeDone ? "true" : "false");
     io.print(",\"iMax\":");      io.print(CHG_MAX_CURRENT_A, 1);
     io.print(",\"vSet\":");      io.print(CHG_TERM_VOLT_V, 1);
     io.print(",\"tson\":");      io.print(sdcTson ? "true" : "false");
@@ -778,7 +843,7 @@ void sendMessage1(bool allow)
 
     // Al parar, el FW antiguo manda V=0 e I=0 además del byte de control.
     uint16_t vSet = allow ? (uint16_t)lroundf(CHG_TERM_VOLT_V * 10.0f) : 0;
-    uint16_t iSet = allow ? (uint16_t)lroundf(chgCurrentA     * 10.0f) : 0;
+    uint16_t iSet = allow ? (uint16_t)lroundf(chgCmdA()       * 10.0f) : 0;
 
     uint8_t d[8] = {0};
     d[0] = (uint8_t)(vSet >> 8);    // Vmax high byte
@@ -835,9 +900,15 @@ void printChgStatus()
     } else {
         Serial.printf("COMM: OK (ventana de gracia %lu ms)\n", commWindowMs);
     }
-    Serial.printf("Solicitado: %s  I_cmd=%.1f A  →  Cargando: %s (control=%d)\n",
-                  chargeRequested ? "SI" : "NO", chgCurrentA,
+    Serial.printf("Solicitado: %s  I_cmd=%.2f A (pedida %.1f)  →  Cargando: %s (control=%d)\n",
+                  chargeRequested ? "SI" : "NO", chgCmdA(), chgCurrentA,
                   charging ? "SI" : "NO", charging ? 0 : 1);
+    if (taperOn)
+        Serial.printf("Escalones: %u (umbral vMax %.3f V, fin < %.1f A)%s\n",
+                      taperSteps, TAPER_VMAX_V, TAPER_END_A,
+                      chargeDone ? "  -> CARGA TERMINADA" : "");
+    else
+        Serial.println(F("Escalones: DESACTIVADOS ('k' para activar)"));
     Serial.printf("TSON: SDC_TSON=%d PRE_FAIL=%d | SDC_3V3=%d TSON_FAIL=%d HV_ACCU=%d IMD_OK=%d\n",
                   sdcTson, prechargeFail,
                   digitalRead(PIN_SDC_3V3), digitalRead(PIN_TSON_FAIL),
@@ -1154,6 +1225,7 @@ void printHelp()
     Serial.println(F("  g         empezar a cargar (si la seguridad da OK y el TSON esta armado)"));
     Serial.println(F("  x         parar la carga"));
     Serial.println(F("  c,<A>     corriente de carga en A (p.ej. c,7)"));
+    Serial.println(F("  k         escalones de final de carga on/off (por defecto ON)"));
     Serial.println(F("  d         estado del cargador, del pack y del OBC"));
     Serial.println(F("  v         tensiones de todas las celdas por placa"));
     Serial.println(F("  t         temperaturas de todos los NTC por placa"));
@@ -1221,8 +1293,13 @@ void handleSerial()
     switch (buf[0]) {
     case 'g':
         chargeRequested = true;
+        taperReset();   // cada 'g' empieza otra vez desde la corriente pedida
         Serial.printf("[CHG] START solicitado (%.1f A). La carga arranca si la seguridad da OK y el TSON esta armado.\n",
                       chgCurrentA);
+        break;
+    case 'k':
+        taperOn = !taperOn;
+        Serial.printf("[CHG] Escalones de final de carga: %s\n", taperOn ? "ON" : "OFF");
         break;
     case 'x':
         chargeRequested = false;
