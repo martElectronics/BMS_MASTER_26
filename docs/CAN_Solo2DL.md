@@ -102,6 +102,18 @@ El import trae bien Start Bit, longitud, signo, ganancia y offset. Lo que
 | **Function / Unit** | La que corresponda (Temperature °C, Voltage V, Number #…). No afecta al valor, solo a cómo se muestra. |
 | **Short Name** | Único en toda la configuración (§18). Ojo al duplicar canales: RaceStudio copia el short name (p. ej. `BMS_MinT` acabó como "Tmax"). |
 
+**Columnas de configuración en las tablas de canales** (§4-§22, generadas desde el DBC):
+
+| Columna | Qué poner en RaceStudio |
+|---|---|
+| **Formato** | `U16`/`U8`… = *Unsigned integer* de 16/8 bits; `S16`/`S8`… = *Signed integer*; `bit` = 1 bit, Unsigned |
+| **Gain** | campo Gain (offset siempre 0) |
+| **Ud.** | Unit After Conversion (`—` = sin unidad, `#`) |
+| **Hz** | Max. Frequency. `= DTI`: la que tenga configurada el inversor |
+| **Stepped** | `sí` = marcar Stepped Values; `sí + enc.` = además el encoding de texto que trae el DBC; `no` = sin marcar |
+
+El Start Bit no se repite en las tablas: lo trae el import (regla de conversión en §2).
+
 **Frecuencia de cada trama** (sale del periodo de envío del firmware):
 
 | Trama | Periodo | Max. Frequency |
@@ -183,12 +195,12 @@ Bytes 4-5: MinV (uint16 BE, mV)
 Bytes 6-7: MinT (int16 BE, °C)
 ```
 
-| Canal | Short | Byte | Descripción |
-|---|---|---|---|
-| BMS_MaxT | Tmax | 0-1 | Temperatura máxima del pack (signed) |
-| BMS_MaxV | Vmax | 2-3 | Tensión de celda máxima |
-| BMS_MinV | Vmin | 4-5 | Tensión de celda mínima |
-| BMS_MinT | Tmin | 6-7 | Temperatura mínima del pack (signed) |
+| Canal | Short | Byte | Formato | Gain | Ud. | Hz | Stepped | Descripción |
+|---|---|---|---|---|---|---|---|---|
+| BMS_MaxT | Tmax | 0-1 | S16 | 1 | °C | 10 | no | Temperatura máxima del pack (signed) |
+| BMS_MaxV | Vmax | 2-3 | U16 | 0.001 | V | 10 | no | Tensión de celda máxima |
+| BMS_MinV | Vmin | 4-5 | U16 | 0.001 | V | 10 | no | Tensión de celda mínima |
+| BMS_MinT | Tmin | 6-7 | S16 | 1 | °C | 10 | no | Temperatura mínima del pack (signed) |
 
 > El canal de referencia para verificar que el import del DBC está bien: en
 > vivo `BMS_MaxV`/`BMS_MinV` deben leer ~3.7-4.0 V por celda. Si sale un
@@ -213,11 +225,11 @@ Bytes 2-3: GEN_STATUS_TEMP (uint16 BE) — bit i = módulo i con algún NTC fuer
 Bytes 4-5: V_DELTA         (uint16 BE) — (celda máx − celda mín) en mV
 ```
 
-| Canal | Short | Byte | Descripción |
-|---|---|---|---|
-| BMS_StatusV | GSV_ | 0-1 | bitmap volt por módulo |
-| BMS_StatusT | GST_ | 2-3 | bitmap temp por módulo |
-| BMS_VDelta  | VDLT | 4-5 | delta de celda máx−mín (mV) |
+| Canal | Short | Byte | Formato | Gain | Ud. | Hz | Stepped | Descripción |
+|---|---|---|---|---|---|---|---|---|
+| BMS_StatusV | GSV_ | 0-1 | U16 | 1 | — | 2 | sí | bitmap volt por módulo |
+| BMS_StatusT | GST_ | 2-3 | U16 | 1 | — | 2 | sí | bitmap temp por módulo |
+| BMS_VDelta | VDLT | 4-5 | U16 | 1 | mV | 2 | no | delta de celda máx−mín (mV) |
 
 > V_DELTA solo es fiable cuando la lectura de celdas lo es: una celda abierta
 > (0 V) lo dispara. Léelo junto a `Flt_Comm`/`ReadV_CommErr` del ID 15 para
@@ -278,12 +290,12 @@ Bytes 4-5: maxCommFailMs (uint16 BE, ms)    — duración máx de un episodio de
 Bytes 6-7: lastCommFailMs (uint16 BE, ms)   — duración del episodio de comms actual/último
 ```
 
-| Canal | Short | Byte | Descripción |
-|---|---|---|---|
-| BMS_MaxFailMs | MFLM | 0-1 | duración máx de un episodio de fallo (ms) |
-| BMS_NumTryReset | NTR_ | 2-3 | reintentos de reinicialización del BQ |
-| BMS_MaxCommFailMs | MCFM | 4-5 | duración máx de un episodio de comms (ms) |
-| BMS_LastCommFailMs | LCFM | 6-7 | duración del episodio de comms actual/último (ms) |
+| Canal | Short | Byte | Formato | Gain | Ud. | Hz | Stepped | Descripción |
+|---|---|---|---|---|---|---|---|---|
+| BMS_MaxFailMs | MFLM | 0-1 | U16 | 1 | ms | 2 | no | duración máx de un episodio de fallo (ms) |
+| BMS_NumTryReset | NTR_ | 2-3 | U16 | 1 | — | 2 | sí | reintentos de reinicialización del BQ |
+| BMS_MaxCommFailMs | MCFM | 4-5 | U16 | 1 | ms | 2 | no | duración máx de un episodio de comms (ms) |
+| BMS_LastCommFailMs | LCFM | 6-7 | U16 | 1 | ms | 2 | no | duración del episodio de comms actual/último (ms) |
 
 > ⏱ **Los tiempos cuentan desde que se DETECTA la anomalía**, no desde que el
 > debounce la confirma: el reloj arranca en la primera muestra mala y para
@@ -317,13 +329,13 @@ Byte  6  : retryNet (int8)                  — §3.1/§3.3 doc ruido, ver nota 
 Byte  7  : reinitMs (uint8, ×10 ms)         — lo que bloqueó el último reInit
 ```
 
-| Canal | Short | Byte | Descripción |
-|---|---|---|---|
-| BMS_LastFailMs  | LTFT | 0-1 | duración del episodio actual/último (ms) |
-| BMS_NumCommFail | NCFA | 2-3 | nº de fallos de comunicación del episodio |
-| BMS_NumCrcFail  | NCRC | 4-5 | nº de fallos de CRC del episodio |
-| BMS_RetryNet    | RTRN | 6   | ver nota — **signed** |
-| BMS_ReinitMs    | RINT | 7   | lo que bloqueó el último reInit (auto-address), ms (resolución 10 ms, máx 2550). 0 = ninguno |
+| Canal | Short | Byte | Formato | Gain | Ud. | Hz | Stepped | Descripción |
+|---|---|---|---|---|---|---|---|---|
+| BMS_LastFailMs | LTFT | 0-1 | U16 | 1 | ms | 2 | no | duración del episodio actual/último (ms) |
+| BMS_NumCommFail | NCFA | 2-3 | U16 | 1 | — | 2 | sí | nº de fallos de comunicación del episodio |
+| BMS_NumCrcFail | NCRC | 4-5 | U16 | 1 | — | 2 | sí | nº de fallos de CRC del episodio |
+| BMS_RetryNet | RTRN | 6 | S8 | 1 | — | 2 | sí | ver nota — **signed** |
+| BMS_ReinitMs | RINT | 7 | U8 | 10 | ms | 2 | no | lo que bloqueó el último reInit (auto-address), ms (resolución 10 ms, máx 2550). 0 = ninguno |
 
 > **Por qué `BMS_MaxCommFailMs` se queda en ~499 ms:** a los 500 ms sin respuesta
 > (`COMM_REINIT_MS`) el BMS relanza el auto-address; si la cadena vuelve, el
@@ -361,45 +373,45 @@ B5-6: duración del episodio (u16 ms BE)
 B7: causa del último reset
 ```
 
-| Canal | Short | Byte | Descripción |
-|---|---|---|---|
-| BMS_Flt_V       | FV__ | 0 | UV/OV confirmado (≥1000 ms) |
-| BMS_Flt_T       | FT__ | 0 | UT/OT confirmado (≥1000 ms) |
-| BMS_Flt_NTC     | FNTC | 0 | NTC abierto confirmado |
-| BMS_Flt_Comm    | FCOM | 0 | Comms BQ caídas confirmadas |
-| BMS_Flt_Hall    | FHAL | 0 | HallSensor !OK |
-| BMS_Flt_NoInit  | FINI | 0 | `bmsInitOk = false` |
-| BMS_Fault       | BFLT | 0 | **OR global → BMS_OK LOW** |
-| Hall_Disc       | HDIS | 1 | DHAB desconectado |
-| Hall_Stuck      | HSTK | 1 | Sensor congelado |
-| Hall_Noisy      | HNOI | 1 | EMI / ΔI extremo |
-| Hall_OverI      | HOVI | 1 | Sobre-I FS (>500 A desc / <−500 A carga; con estos umbrales en la práctica no salta nunca) |
-| Hall_AdcSat     | HSAT | 1 | ADC saturado |
-| V_UV_now        | NUV_ | 2 | minV < 2.80 V (snapshot, sin debounce) |
-| V_OV_now        | NOV_ | 2 | maxV > 4.20 V (snapshot, sin debounce) |
-| T_UT_now        | NUT_ | 2 | minT < −20 °C (snapshot, sin debounce) |
-| T_OT_now        | NOT_ | 2 | maxT > 60 °C (snapshot, sin debounce) |
-| NTC_open_now    | NNTC | 2 | `hasOpenNtc` (snapshot, sin debounce) |
-| ReadV_CommErr   | RVCO | 2 | última lectura V = COMM_ERROR |
-| ReadV_CrcErr    | RVCR | 2 | última lectura V = CRC_ERROR |
-| ReadT_Err       | RTER | 2 | última lectura T ≠ OK |
-| State_AutoAddr  | SADR | 3 | `bms.isOK`: cadena de BQ direccionada. **Baja a 0 mientras dura un reInit** (~0.3-0.4 s) y vuelve a 1 si recupera; el BMS sigue mandando CAN durante el reInit |
-| State_BmsInit   | SINI | 3 | `bmsInitOk` |
-| State_CanOk     | SCAN | 3 | FDCAN inicializó OK **y** no está en bus-off ahora mismo |
-| SDC_TSON        | STSN | 3 | Latch TSON cerrado |
-| Precharge_Fail  | PFAI | 3 | Precarga falló (enclavado → reset alim.) |
-| IMD_OK          | IMDK | 3 | IMD OK |
-| Pin_SDC_3V3     | PSDC | 3 | SDC presente |
-| TSON_Fail       | TSNF | 3 | TSON_FAIL activo |
-| FirstFault      | FFLT | 4 | **Enum**: 0=none 1=V 2=T 3=NTC 4=Comm 5=Hall 6=!Init |
-| EpisodeMs       | EPMS | 5-6 | Duración episodio actual (ms, clamp 65535) |
-| Rst_LPWR        | RLPW | 7 | Reset por low-power |
-| Rst_WWDG        | RWWD | 7 | Reset por window-WDG |
-| Rst_IWDG        | RIWD | 7 | **Reset por IWDG (loop colgado)** |
-| Rst_SOFT        | RSFT | 7 | Reset software (cmd `r`) |
-| Rst_BOR         | RBOR | 7 | Power-on / brown-out |
-| Rst_PIN         | RPIN | 7 | Reset por pin NRST |
-| Rst_OBL         | ROBL | 7 | Option-byte loader |
+| Canal | Short | Byte | Formato | Gain | Ud. | Hz | Stepped | Descripción |
+|---|---|---|---|---|---|---|---|---|
+| BMS_Flt_V | FV__ | 0 | bit | 1 | — | 10 | sí | UV/OV confirmado (≥1000 ms) |
+| BMS_Flt_T | FT__ | 0 | bit | 1 | — | 10 | sí | UT/OT confirmado (≥1000 ms) |
+| BMS_Flt_NTC | FNTC | 0 | bit | 1 | — | 10 | sí | NTC abierto confirmado |
+| BMS_Flt_Comm | FCOM | 0 | bit | 1 | — | 10 | sí | Comms BQ caídas confirmadas |
+| BMS_Flt_Hall | FHAL | 0 | bit | 1 | — | 10 | sí | HallSensor !OK |
+| BMS_Flt_NoInit | FINI | 0 | bit | 1 | — | 10 | sí | `bmsInitOk = false` |
+| BMS_Fault | BFLT | 0 | bit | 1 | — | 10 | sí | **OR global → BMS_OK LOW** |
+| Hall_Disc | HDIS | 1 | bit | 1 | — | 10 | sí | DHAB desconectado |
+| Hall_Stuck | HSTK | 1 | bit | 1 | — | 10 | sí | Sensor congelado |
+| Hall_Noisy | HNOI | 1 | bit | 1 | — | 10 | sí | EMI / ΔI extremo |
+| Hall_OverI | HOVI | 1 | bit | 1 | — | 10 | sí | Sobre-I FS (>500 A desc / <−500 A carga; con estos umbrales en la práctica no salta nunca) |
+| Hall_AdcSat | HSAT | 1 | bit | 1 | — | 10 | sí | ADC saturado |
+| V_UV_now | NUV_ | 2 | bit | 1 | — | 10 | sí | minV < 2.80 V (snapshot, sin debounce) |
+| V_OV_now | NOV_ | 2 | bit | 1 | — | 10 | sí | maxV > 4.20 V (snapshot, sin debounce) |
+| T_UT_now | NUT_ | 2 | bit | 1 | — | 10 | sí | minT < −20 °C (snapshot, sin debounce) |
+| T_OT_now | NOT_ | 2 | bit | 1 | — | 10 | sí | maxT > 60 °C (snapshot, sin debounce) |
+| NTC_open_now | NNTC | 2 | bit | 1 | — | 10 | sí | `hasOpenNtc` (snapshot, sin debounce) |
+| ReadV_CommErr | RVCO | 2 | bit | 1 | — | 10 | sí | última lectura V = COMM_ERROR |
+| ReadV_CrcErr | RVCR | 2 | bit | 1 | — | 10 | sí | última lectura V = CRC_ERROR |
+| ReadT_Err | RTER | 2 | bit | 1 | — | 10 | sí | última lectura T ≠ OK |
+| State_AutoAddr | SADR | 3 | bit | 1 | — | 10 | sí | `bms.isOK`: cadena de BQ direccionada. **Baja a 0 mientras dura un reInit** (~0.3-0.4 s) y vuelve a 1 si recupera; el BMS sigue mandando CAN durante el reInit |
+| State_BmsInit | SINI | 3 | bit | 1 | — | 10 | sí | `bmsInitOk` |
+| State_CanOk | SCAN | 3 | bit | 1 | — | 10 | sí | FDCAN inicializó OK **y** no está en bus-off ahora mismo |
+| SDC_TSON | STSN | 3 | bit | 1 | — | 10 | sí | Latch TSON cerrado |
+| Precharge_Fail | PFAI | 3 | bit | 1 | — | 10 | sí | Precarga falló (enclavado → reset alim.) |
+| IMD_OK | IMDK | 3 | bit | 1 | — | 10 | sí | IMD OK |
+| Pin_SDC_3V3 | PSDC | 3 | bit | 1 | — | 10 | sí | SDC presente |
+| TSON_Fail | TSNF | 3 | bit | 1 | — | 10 | sí | TSON_FAIL activo |
+| FirstFault | FFLT | 4 | U8 | 1 | — | 10 | sí + enc. | **Enum**: 0=none 1=V 2=T 3=NTC 4=Comm 5=Hall 6=!Init |
+| EpisodeMs | EPMS | 5-6 | U16 | 1 | ms | 10 | no | Duración episodio actual (ms, clamp 65535) |
+| Rst_LPWR | RLPW | 7 | bit | 1 | — | 10 | sí | Reset por low-power |
+| Rst_WWDG | RWWD | 7 | bit | 1 | — | 10 | sí | Reset por window-WDG |
+| Rst_IWDG | RIWD | 7 | bit | 1 | — | 10 | sí | **Reset por IWDG (loop colgado)** |
+| Rst_SOFT | RSFT | 7 | bit | 1 | — | 10 | sí | Reset software (cmd `r`) |
+| Rst_BOR | RBOR | 7 | bit | 1 | — | 10 | sí | Power-on / brown-out |
+| Rst_PIN | RPIN | 7 | bit | 1 | — | 10 | sí | Reset por pin NRST |
+| Rst_OBL | ROBL | 7 | bit | 1 | — | 10 | sí | Option-byte loader |
 
 > **B3 reorganizado (PCB nueva):** lleva el estado de la máquina TSON.
 > `SDC_TSON` = latch cerrado; `Precharge_Fail` = enclavado hasta reset de
@@ -440,14 +452,14 @@ Byte 4: cntFltHall — de fallo del Hall
 Byte 5: cntFltInit — de init BQ fallido
 ```
 
-| Canal | Short | Byte | Descripción |
-|---|---|---|---|
-| BMS_CntV    | CNTV | 0 | nº episodios fallo V |
-| BMS_CntT    | CNTT | 1 | nº episodios fallo T |
-| BMS_CntNTC  | CNTN | 2 | nº episodios NTC abierto |
-| BMS_CntComm | CNTC | 3 | nº episodios comms BQ |
-| BMS_CntHall | CNTH | 4 | nº episodios Hall |
-| BMS_CntInit | CNTI | 5 | nº episodios init BQ |
+| Canal | Short | Byte | Formato | Gain | Ud. | Hz | Stepped | Descripción |
+|---|---|---|---|---|---|---|---|---|
+| BMS_CntV | CNTV | 0 | U8 | 1 | — | 10 | sí | nº episodios fallo V |
+| BMS_CntT | CNTT | 1 | U8 | 1 | — | 10 | sí | nº episodios fallo T |
+| BMS_CntNTC | CNTN | 2 | U8 | 1 | — | 10 | sí | nº episodios NTC abierto |
+| BMS_CntComm | CNTC | 3 | U8 | 1 | — | 10 | sí | nº episodios comms BQ |
+| BMS_CntHall | CNTH | 4 | U8 | 1 | — | 10 | sí | nº episodios Hall |
+| BMS_CntInit | CNTI | 5 | U8 | 1 | — | 10 | sí | nº episodios init BQ |
 
 > Complementa al ID 15: el ID 15 dice qué pasa **ahora**; el ID 16 dice
 > **cuántas veces** ha pasado cada cosa aunque ya se haya despejado. Son
@@ -475,20 +487,20 @@ Byte 5-6 : uptime en segundos (uint16 BE, satura a 65535 ≈ 18 h)
 Byte 7   : cntBusOff — nº de episodios de bus-off del FDCAN
 ```
 
-| Canal | Short | Byte | Descripción |
-|---|---|---|---|
-| BMS_StkSdcLost  | SKSD | 0 | SDC_3V3 cayó alguna vez — **mantener, es la que dice si el coche paró por el BMS o por otro nodo** |
-| BMS_StkTsonDis  | SKTD | 0 | el latch TSON se desarmó alguna vez |
-| BMS_StkTsonFail | SKTF | 0 | TSON_FAIL se activó alguna vez |
-| BMS_StkImdLost  | SKIM | 0 | IMD_OK cayó alguna vez |
-| BMS_StkPreFail  | SKPF | 0 | precarga falló (latch duro) |
-| BMS_StkBmsFault | SKBF | 0 | bmsFault confirmado alguna vez |
-| BMS_CntTsonDis  | CNTD | 1 | nº de desarmes del TSON — *forense* |
-| BMS_CntSdcLost  | CNSD | 2 | nº de caídas de SDC_3V3 — *forense* |
-| BMS_CntImdLost  | CNIM | 3 | nº de caídas de IMD_OK — *forense* |
-| BMS_AliveCnt    | ALIV | 4 | contador de vida (+1 cada 100 ms) — **mantener, heartbeat del BMS** |
-| BMS_Uptime      | UPTI | 5-6 | segundos desde el arranque |
-| BMS_CntBusOff   | CNBO | 7 | nº de episodios de bus-off del FDCAN — *forense* |
+| Canal | Short | Byte | Formato | Gain | Ud. | Hz | Stepped | Descripción |
+|---|---|---|---|---|---|---|---|---|
+| BMS_StkSdcLost | SKSD | 0 | bit | 1 | — | 10 | sí | SDC_3V3 cayó alguna vez — **mantener, es la que dice si el coche paró por el BMS o por otro nodo** |
+| BMS_StkTsonDis | SKTD | 0 | bit | 1 | — | 10 | sí | el latch TSON se desarmó alguna vez |
+| BMS_StkTsonFail | SKTF | 0 | bit | 1 | — | 10 | sí | TSON_FAIL se activó alguna vez |
+| BMS_StkImdLost | SKIM | 0 | bit | 1 | — | 10 | sí | IMD_OK cayó alguna vez |
+| BMS_StkPreFail | SKPF | 0 | bit | 1 | — | 10 | sí | precarga falló (latch duro) |
+| BMS_StkBmsFault | SKBF | 0 | bit | 1 | — | 10 | sí | bmsFault confirmado alguna vez |
+| BMS_CntTsonDis | CNTD | 1 | U8 | 1 | — | 10 | sí | nº de desarmes del TSON — *forense* |
+| BMS_CntSdcLost | CNSD | 2 | U8 | 1 | — | 10 | sí | nº de caídas de SDC_3V3 — *forense* |
+| BMS_CntImdLost | CNIM | 3 | U8 | 1 | — | 10 | sí | nº de caídas de IMD_OK — *forense* |
+| BMS_AliveCnt | ALIV | 4 | U8 | 1 | — | 10 | sí | contador de vida (+1 cada 100 ms) — **mantener, heartbeat del BMS** |
+| BMS_Uptime | UPTI | 5-6 | U16 | 1 | s | 10 | no | segundos desde el arranque |
+| BMS_CntBusOff | CNBO | 7 | U8 | 1 | — | 10 | sí | nº de episodios de bus-off del FDCAN — *forense* |
 
 ### Contador de vida (B4) y uptime (B5-6)
 
@@ -527,10 +539,10 @@ Bytes 0-1: corriente del Hall (int16 BE, 0,1 A)  — + descarga, − carga
 Bytes 2-3: tensión del pack   (uint16 BE, 0,1 V) — suma de todas las celdas
 ```
 
-| Canal | Short | Byte | Descripción |
-|---|---|---|---|
-| BMS_PackCurrent | IPCK | 0-1 | corriente del pack medida por el sensor Hall del BMS (A, **signed**: positiva descargando, negativa cargando o regenerando) |
-| BMS_PackVoltage | VPCK | 2-3 | tensión del pack (V) = suma de las tensiones de celda que leen los BQ |
+| Canal | Short | Byte | Formato | Gain | Ud. | Hz | Stepped | Descripción |
+|---|---|---|---|---|---|---|---|---|
+| BMS_PackCurrent | IPCK | 0-1 | S16 | 0.1 | A | 10 | no | corriente del pack medida por el sensor Hall del BMS (A, **signed**: positiva descargando, negativa cargando o regenerando) |
+| BMS_PackVoltage | VPCK | 2-3 | U16 | 0.1 | V | 10 | no | tensión del pack (V) = suma de las tensiones de celda que leen los BQ |
 
 > `BMS_PackVoltage` es la suma de celdas, no una medida entre bornes: no
 > incluye la caída en pletinas, conectores y fusible, así que bajo carga
@@ -548,12 +560,12 @@ Bytes 4-5: V2     (uint16 BE, mV)
 Bytes 6-7: V3     (uint16 BE, mV)
 ```
 
-| Canal | Short | Byte | Descripción |
-|---|---|---|---|
-| Mod_IDmod_386 | IM86 | 0-1 | índice del módulo que ocupa este turno de la ronda |
-| Mod_V1        | MV01 | 2-3 | tensión del paralelo 1 del módulo |
-| Mod_V2        | MV02 | 4-5 | tensión del paralelo 2 |
-| Mod_V3        | MV03 | 6-7 | tensión del paralelo 3 |
+| Canal | Short | Byte | Formato | Gain | Ud. | Hz | Stepped | Descripción |
+|---|---|---|---|---|---|---|---|---|
+| Mod_IDmod_386 | IM86 | 0-1 | U16 | 1 | — | 2 | sí | índice del módulo que ocupa este turno de la ronda |
+| Mod_V1 | MV01 | 2-3 | U16 | 0.001 | V | 2 | no | tensión del paralelo 1 del módulo |
+| Mod_V2 | MV02 | 4-5 | U16 | 0.001 | V | 2 | no | tensión del paralelo 2 |
+| Mod_V3 | MV03 | 6-7 | U16 | 0.001 | V | 2 | no | tensión del paralelo 3 |
 
 > Los 4 IDs 386-389 comparten el mismo `IDmod` en bytes 0-1; cada uno
 > necesita su propio short name (`IM86/IM87/IM88/IM89`) porque RaceStudio
@@ -567,23 +579,23 @@ Bytes 6-7: V3     (uint16 BE, mV)
 
 ## 12. ID 387 (0x183) — Tensiones V4-V6 · 8 bytes · paginado 556 ms — *forense*
 
-| Canal | Short | Byte | Descripción |
-|---|---|---|---|
-| Mod_IDmod_387 | IM87 | 0-1 | índice del módulo |
-| Mod_V4        | MV04 | 2-3 | tensión del paralelo 4 |
-| Mod_V5        | MV05 | 4-5 | tensión del paralelo 5 |
-| Mod_V6        | MV06 | 6-7 | tensión del paralelo 6 |
+| Canal | Short | Byte | Formato | Gain | Ud. | Hz | Stepped | Descripción |
+|---|---|---|---|---|---|---|---|---|
+| Mod_IDmod_387 | IM87 | 0-1 | U16 | 1 | — | 2 | sí | índice del módulo |
+| Mod_V4 | MV04 | 2-3 | U16 | 0.001 | V | 2 | no | tensión del paralelo 4 |
+| Mod_V5 | MV05 | 4-5 | U16 | 0.001 | V | 2 | no | tensión del paralelo 5 |
+| Mod_V6 | MV06 | 6-7 | U16 | 0.001 | V | 2 | no | tensión del paralelo 6 |
 
 ---
 
 ## 13. ID 388 (0x184) — Tensiones V7-V9 · 8 bytes · paginado 556 ms — *forense*
 
-| Canal | Short | Byte | Descripción |
-|---|---|---|---|
-| Mod_IDmod_388 | IM88 | 0-1 | índice del módulo |
-| Mod_V7        | MV07 | 2-3 | tensión del paralelo 7 |
-| Mod_V8        | MV08 | 4-5 | tensión del paralelo 8 |
-| Mod_V9        | MV09 | 6-7 | tensión del paralelo 9 |
+| Canal | Short | Byte | Formato | Gain | Ud. | Hz | Stepped | Descripción |
+|---|---|---|---|---|---|---|---|---|
+| Mod_IDmod_388 | IM88 | 0-1 | U16 | 1 | — | 2 | sí | índice del módulo |
+| Mod_V7 | MV07 | 2-3 | U16 | 0.001 | V | 2 | no | tensión del paralelo 7 |
+| Mod_V8 | MV08 | 4-5 | U16 | 0.001 | V | 2 | no | tensión del paralelo 8 |
+| Mod_V9 | MV09 | 6-7 | U16 | 0.001 | V | 2 | no | tensión del paralelo 9 |
 
 ---
 
@@ -596,12 +608,12 @@ Bytes 4-5: V11   (uint16 BE, mV)
 Bytes 6-7: VTot  (uint16 BE, mV) — suma de los 11 paralelos del módulo
 ```
 
-| Canal | Short | Byte | Descripción |
-|---|---|---|---|
-| Mod_IDmod_389 | IM89 | 0-1 | índice del módulo |
-| Mod_V10       | MV10 | 2-3 | tensión del paralelo 10 |
-| Mod_V11       | MV11 | 4-5 | tensión del paralelo 11 |
-| Mod_VTotal    | MVTT | 6-7 | suma de los 11 paralelos del módulo |
+| Canal | Short | Byte | Formato | Gain | Ud. | Hz | Stepped | Descripción |
+|---|---|---|---|---|---|---|---|---|
+| Mod_IDmod_389 | IM89 | 0-1 | U16 | 1 | — | 2 | sí | índice del módulo |
+| Mod_V10 | MV10 | 2-3 | U16 | 0.001 | V | 2 | no | tensión del paralelo 10 |
+| Mod_V11 | MV11 | 4-5 | U16 | 0.001 | V | 2 | no | tensión del paralelo 11 |
+| Mod_VTotal | MVTT | 6-7 | U16 | 0.001 | V | 2 | no | suma de los 11 paralelos del módulo |
 
 > `Mod_VTotal` debe coincidir con la tensión medida entre terminales del
 > módulo (margen ±20 mV por offset del ADC del BQ × 11 celdas).
@@ -615,10 +627,10 @@ Byte 0: IDmod (uint8)
 Byte 1-7: T1..T7 (int8 cada uno, °C)
 ```
 
-| Canal | Short | Byte | Descripción |
-|---|---|---|---|
-| Mod_IDmod_390 | IM90 | 0 | índice del módulo |
-| Mod_T1..T7    | MT01..MT07 | 1-7 | temperatura de cada NTC (**signed**) |
+| Canal | Short | Byte | Formato | Gain | Ud. | Hz | Stepped | Descripción |
+|---|---|---|---|---|---|---|---|---|
+| Mod_IDmod_390 | IM90 | 0 | U8 | 1 | — | 2 | sí | índice del módulo |
+| Mod_T1..T7 | MT01..MT07 | 1-7 | S8 | 1 | °C | 2 | no | temperatura de cada NTC (**signed**) |
 
 > Las temperaturas son **signed int8** (rango −128..+127 °C) — si sale 236
 > en vez de −20, el canal no está marcado como Signed (el DBC ya lo marca
@@ -646,23 +658,23 @@ Byte 6: stT (uint8)      — 0=OK 1=UT 2=OT  (módulo)
 Byte 7: reservado (0)
 ```
 
-| Canal | Short | Byte | Descripción |
-|---|---|---|---|
-| Mod_IDmod_391 | IM91 | 0 | índice del módulo |
-| Mod_T8        | MT08 | 1 | temperatura NTC 8 (signed) |
-| Mod_T9        | MT09 | 2 | temperatura NTC 9 (signed) |
-| Mod_Tmax      | MTMX | 3 | máx de T1..T9 del módulo |
-| Mod_Tmin      | MTMN | 4 | mín de T1..T9 del módulo |
-| Mod_StatusV   | MSV_ | 5 | estado de tensión del módulo |
-| Mod_StatusT   | MST_ | 6 | estado de temperatura del módulo |
+| Canal | Short | Byte | Formato | Gain | Ud. | Hz | Stepped | Descripción |
+|---|---|---|---|---|---|---|---|---|
+| Mod_IDmod_391 | IM91 | 0 | U8 | 1 | — | 2 | sí | índice del módulo |
+| Mod_T8 | MT08 | 1 | S8 | 1 | °C | 2 | no | temperatura NTC 8 (signed) |
+| Mod_T9 | MT09 | 2 | S8 | 1 | °C | 2 | no | temperatura NTC 9 (signed) |
+| Mod_Tmax | MTMX | 3 | S8 | 1 | °C | 2 | no | máx de T1..T9 del módulo |
+| Mod_Tmin | MTMN | 4 | S8 | 1 | °C | 2 | no | mín de T1..T9 del módulo |
+| Mod_StatusV | MSV_ | 5 | U8 | 1 | — | 2 | sí | estado de tensión del módulo |
+| Mod_StatusT | MST_ | 6 | U8 | 1 | — | 2 | sí | estado de temperatura del módulo |
 
 ---
 
 ## 17. ID 392 (0x188) — SOC · 1 byte · 553 ms
 
-| Canal | Short | Byte | Descripción |
-|---|---|---|---|
-| BMS_SOC | SOC_ | 0 | Estado de carga del pack (%) |
+| Canal | Short | Byte | Formato | Gain | Ud. | Hz | Stepped | Descripción |
+|---|---|---|---|---|---|---|---|---|
+| BMS_SOC | SOC_ | 0 | U8 | 1 | % | 2 | no | Estado de carga del pack (%) |
 
 > SOC **orientativo** hasta caracterizar la curva OCV-SOC real de las
 > Samsung INR21700-40T (ver `ARQUITECTURA.md §9.6`). El coulomb counting
@@ -690,16 +702,16 @@ siguen estando `BMS_MinV`/`BMS_MaxV` (ID 11), mucho más rápidos.
 
 Bits de cada canal, del más alto al más bajo (todos sin signo, Big Endian):
 
-| ID | Canal | Bits | Contenido |
-|---|---|---|---|
-| 393 (0x189) | BMS_PkT_A | 24 | IDmod(4) · T1(6) · T2(6) · T3(6) · 0(2) |
-| 393 | BMS_PkT_B | 24 | T4 · T5 · T6 · T7 (6 cada una) |
-| 393 | BMS_PkT_C | 16 | T8(6) · T9(6) · IDmod(4) |
-| 394 (0x18A) | BMS_PkV1_A | 24 | IDmod(4) · V1(10) · V2(10) |
-| 394 | BMS_PkV1_B | 24 | IDmod(4) · V3(10) · V4(10) |
-| 394 | BMS_PkV1_C | 16 | V5(10) · IDmod(4) · 0(2) |
-| 395 (0x18B) | BMS_PkV2_A/B/C | 24/24/16 | igual que 394 con V6..V10 |
-| 396 (0x18C) | BMS_PkV3_A | 24 | IDmod(4) · V11(10) · 0(10) |
+| ID | Canal | Bits | Formato | Gain | Ud. | Hz | Stepped | Contenido |
+|---|---|---|---|---|---|---|---|---|
+| 393 (0x189) | BMS_PkT_A | 24 | U24 | 1 | — | 5 | sí | IDmod(4) · T1(6) · T2(6) · T3(6) · 0(2) |
+| 393 | BMS_PkT_B | 24 | U24 | 1 | — | 5 | sí | T4 · T5 · T6 · T7 (6 cada una) |
+| 393 | BMS_PkT_C | 16 | U16 | 1 | — | 5 | sí | T8(6) · T9(6) · IDmod(4) |
+| 394 (0x18A) | BMS_PkV1_A | 24 | U24 | 1 | — | 5 | sí | IDmod(4) · V1(10) · V2(10) |
+| 394 | BMS_PkV1_B | 24 | U24 | 1 | — | 5 | sí | IDmod(4) · V3(10) · V4(10) |
+| 394 | BMS_PkV1_C | 16 | U16 | 1 | — | 5 | sí | V5(10) · IDmod(4) · 0(2) |
+| 395 (0x18B) | BMS_PkV2_A/B/C | 24/24/16 | U24 / U16 | 1 | — | 5 | sí | igual que 394 con V6..V10 |
+| 396 (0x18C) | BMS_PkV3_A | 24 | U24 | 1 | — | 5 | sí | IDmod(4) · V11(10) · 0(10) |
 
 **Configuración en RaceStudio (imprescindible):**
 1. Los 10 canales con **Number of Bits** 24 o 16 según la tabla, **Unsigned**, sin escala (Gain 1).
@@ -797,28 +809,28 @@ DBC.
 > tabla tenía el Start Bit de los campos multi-byte al revés (apuntaba al
 > último byte del campo en vez de al primero); ya corregido en el DBC.
 
-| ID | Packet | Canal | Byte | Descripción |
-|---|---|---|---|---|
-| 0x3E1 | 0x1F | INV_ControlMode | 0 | 1=SPEED 2=CURRENT 3=CURRENT_BRAKE 4=POS 7=NONE |
-| 0x3E1 | 0x1F | INV_TargetIq    | 1-2 | objetivo de corriente Iq (excluye límites) |
-| 0x3E1 | 0x1F | INV_MotorPos    | 3-4 | posición del motor (°) |
-| 0x3E1 | 0x1F | INV_MotorStill  | 5 | 1=parado 0=girando |
-| 0x401 | 0x20 | INV_ERPM        | 0-3 | RPM eléctrico (÷ pares de polos = RPM mecánico) |
-| 0x401 | 0x20 | INV_Duty        | 4-5 | duty cycle del inversor (%, signo = motor/regen) |
-| 0x401 | 0x20 | INV_VinDC       | 6-7 | tensión DC de entrada |
-| 0x421 | 0x21 | INV_AC_Current  | 0-1 | corriente de fase (AC) |
-| 0x421 | 0x21 | INV_DC_Current  | 2-3 | corriente de bus (DC, signo = motor/regen) |
-| 0x441 | 0x22 | INV_CtrlTemp    | 0-1 | temperatura de los semiconductores |
-| 0x441 | 0x22 | INV_MotorTemp   | 2-3 | temperatura del motor (sensor del inversor) |
-| 0x441 | 0x22 | INV_FaultCode   | 4 | ver tabla de abajo |
-| 0x461 | 0x23 | INV_Id          | 0-3 | componente Id del FOC (debug avanzado) |
-| 0x461 | 0x23 | INV_Iq          | 4-7 | componente Iq del FOC (debug avanzado) |
-| 0x481 | 0x24 | INV_Throttle    | 0 | señal de acelerador que ve el inversor |
-| 0x481 | 0x24 | INV_Brake       | 1 | señal de freno que ve el inversor |
-| 0x481 | 0x24 | INV_DriveEnable | 3, bit0 | 1=drive habilitado |
-| 0x481 | 0x24 | INV_CANmapVer   | 7 | versión del mapa CAN (25 = v2.5) |
-| 0x4A1 | 0x25 | INV_Max/MinAC_cfg/avail | 0-7 | límites de corriente AC configurados/disponibles |
-| 0x4C1 | 0x26 | INV_Max/MinDC_cfg/avail | 0-7 | límites de corriente DC configurados/disponibles |
+| ID | Packet | Canal | Byte | Formato | Gain | Ud. | Hz | Stepped | Descripción |
+|---|---|---|---|---|---|---|---|---|---|
+| 0x3E1 | 0x1F | INV_ControlMode | 0 | U8 | 1 | — | = DTI | sí + enc. | 1=SPEED 2=CURRENT 3=CURRENT_BRAKE 4=POS 7=NONE |
+| 0x3E1 | 0x1F | INV_TargetIq | 1-2 | S16 | 0.1 | A | = DTI | no | objetivo de corriente Iq (excluye límites) |
+| 0x3E1 | 0x1F | INV_MotorPos | 3-4 | U16 | 0.1 | deg | = DTI | no | posición del motor (°) |
+| 0x3E1 | 0x1F | INV_MotorStill | 5 | U8 | 1 | — | = DTI | sí | 1=parado 0=girando |
+| 0x401 | 0x20 | INV_ERPM | 0-3 | S32 | 1 | ERPM | = DTI | no | RPM eléctrico (÷ pares de polos = RPM mecánico) |
+| 0x401 | 0x20 | INV_Duty | 4-5 | S16 | 0.1 | % | = DTI | no | duty cycle del inversor (%, signo = motor/regen) |
+| 0x401 | 0x20 | INV_VinDC | 6-7 | S16 | 1 | V | = DTI | no | tensión DC de entrada |
+| 0x421 | 0x21 | INV_AC_Current | 0-1 | S16 | 0.1 | A | = DTI | no | corriente de fase (AC) |
+| 0x421 | 0x21 | INV_DC_Current | 2-3 | S16 | 0.1 | A | = DTI | no | corriente de bus (DC, signo = motor/regen) |
+| 0x441 | 0x22 | INV_CtrlTemp | 0-1 | S16 | 0.1 | °C | = DTI | no | temperatura de los semiconductores |
+| 0x441 | 0x22 | INV_MotorTemp | 2-3 | S16 | 0.1 | °C | = DTI | no | temperatura del motor (sensor del inversor) |
+| 0x441 | 0x22 | INV_FaultCode | 4 | U8 | 1 | — | = DTI | sí + enc. | ver tabla de abajo |
+| 0x461 | 0x23 | INV_Id | 0-3 | S32 | 0.01 | A | = DTI | no | componente Id del FOC (debug avanzado) |
+| 0x461 | 0x23 | INV_Iq | 4-7 | S32 | 0.01 | A | = DTI | no | componente Iq del FOC (debug avanzado) |
+| 0x481 | 0x24 | INV_Throttle | 0 | S8 | 1 | % | = DTI | no | señal de acelerador que ve el inversor |
+| 0x481 | 0x24 | INV_Brake | 1 | S8 | 1 | % | = DTI | no | señal de freno que ve el inversor |
+| 0x481 | 0x24 | INV_DriveEnable | 3, bit0 | bit | 1 | — | = DTI | sí | 1=drive habilitado |
+| 0x481 | 0x24 | INV_CANmapVer | 7 | U8 | 1 | — | = DTI | sí | versión del mapa CAN (25 = v2.5) |
+| 0x4A1 | 0x25 | INV_Max/MinAC_cfg/avail | 0-7 | S16 | 0.1 | A | = DTI | no | límites de corriente AC configurados/disponibles |
+| 0x4C1 | 0x26 | INV_Max/MinDC_cfg/avail | 0-7 | S16 | 0.1 | A | = DTI | no | límites de corriente DC configurados/disponibles |
 
 **`INV_FaultCode` (0x441 byte 4):** 0=OK · 1=Overvoltage · 2=Undervoltage ·
 3=DRV · 4=Overcurrent · 5=Ctrl OverTemp · 6=Motor OverTemp · 7=Sensor wire ·
@@ -855,33 +867,35 @@ ya ve lo aplicado en el 0x301. Al inversor no le manda nada por CAN (§20).
 
 > Fuente: repo `VCU_26`, `src/Control.cpp` → `publishTelemetry()`.
 
-| ID | Canal | Byte | Descripción |
-|---|---|---|---|
-| 0x488 (1160) | VCU_FaultCause | 0 | causa de no-R2D, ver tabla |
-| 0x488 | VCU_ResetCause | 1 | 0=desconocido 1=power/BOR 2=NRST 3=SW 4=IWDG 5=WWDG 6=lowpwr |
-| 0x488 | VCU_Heartbeat  | 2-3 | cuenta de loop; **se congela si el firmware se cuelga** |
-| 0x48B (1163) | APPS1_pct | 0-1 | sensor 1 del acelerador (%) |
-| 0x48B | APPS2_pct | 2-3 | sensor 2 del acelerador (%) — se compara con el 1 para detectar implausibilidad |
-| 0x48B | APPS1_raw | 4-5 | lectura cruda del ADC del sensor 1 |
-| 0x48B | APPS2_raw | 6-7 | lectura cruda del ADC del sensor 2 |
-| 0x48C (1164) | Brake1_pct | 0-1 | sensor 1 de freno (%, TODO: hoy siempre 0) |
-| 0x48C | Brake2_pct | 2-3 | sensor 2 de freno (%, TODO: hoy siempre 0) |
-| 0x48C | Brake1_raw | 4-5 | lectura cruda del ADC del sensor 1 |
-| 0x48C | Brake2_raw | 6-7 | lectura cruda del ADC del sensor 2 |
-| 0x48E (1166) | VCU_Vbat   | 0-1 | tensión de batería de baja (ADC crudo, TODO escalar a V) |
-| 0x48E | VCU_SDC    | 2 | SDC presente (visto por la VCU) |
-| 0x48E | VCU_Start  | 3 | pulsador Start |
-| 0x48E | VCU_R2D    | 4 | Ready-to-Drive (lógica positiva: 1=activo) |
-| 0x48E | VCU_AppsSt | 5 | 0=NORMAL 1=IMPL 2=PENDING |
-| 0x48E | VCU_BrakeFlt | 6 | freno desconectado/en corto → tumba el R2D |
-| 0x48E | VCU_Bypass   | 7 | ⚠ bypass de banco: R2D forzado sin enclavamientos |
-| 0x48D (1165) | VCU_WheelRpmL / R | 0-1 / 2-3 | RPM de cada rueda trasera (0,1 rpm), sensor Hall de 22 dientes |
-| 0x48D | VCU_WheelPulsesL / R | 4-5 / 6-7 | pulsos contados en la última ventana de 100 ms: un 0 con el coche rodando = sensor muerto |
-| 0x48F (1167) | VCU_SpeedL / R | 0-1 / 2-3 | velocidad de cada rueda (0,01 km/h), calculada con `WHEEL_DIAMETER_MM` |
-| 0x48F | VCU_SpeedAvg | 4-5 | media de las dos ruedas: la que va al display |
-| 0x490 (1168) | VCU_SuspPos | 0-1 | recorrido de suspensión, mm × 100 **con signo**: 0 = altura de marcha (opción 27), + compresión, − extensión. **100 Hz** |
-| 0x490 | VCU_SuspRaw | 2-3 | cuentas ADC crudas del potenciómetro (12 bit) |
-| 0x490 | VCU_SuspState | 4-5 | 0 OK · 1 fuera de banda · 2 sin ADC · +4 sin cero guardado |
+| ID | Canal | Byte | Formato | Gain | Ud. | Hz | Stepped | Descripción |
+|---|---|---|---|---|---|---|---|---|
+| 0x488 (1160) | VCU_FaultCause | 0 | U8 | 1 | — | 10 | sí + enc. | causa de no-R2D, ver tabla |
+| 0x488 | VCU_ResetCause | 1 | U8 | 1 | — | 10 | sí + enc. | 0=desconocido 1=power/BOR 2=NRST 3=SW 4=IWDG 5=WWDG 6=lowpwr |
+| 0x488 | VCU_Heartbeat | 2-3 | U16 | 1 | — | 10 | sí | cuenta de loop; **se congela si el firmware se cuelga** |
+| 0x489 (1161) | VCU_SteerAngle | 0-1 | S16 | 0.1 | deg | 10 | no | ángulo del volante, + = izquierda; depende de la calibración de 3 puntos (opción 24) |
+| 0x489 | VCU_SteerRaw | 2-3 | U16 | 1 | ADC | 10 | no | cuentas ADC crudas del sensor de dirección |
+| 0x48B (1163) | APPS1_pct | 0-1 | U16 | 0.1 | % | 10 | no | sensor 1 del acelerador (%) |
+| 0x48B | APPS2_pct | 2-3 | U16 | 0.1 | % | 10 | no | sensor 2 del acelerador (%) — se compara con el 1 para detectar implausibilidad |
+| 0x48B | APPS1_raw | 4-5 | U16 | 1 | ADC | 10 | no | lectura cruda del ADC del sensor 1 |
+| 0x48B | APPS2_raw | 6-7 | U16 | 1 | ADC | 10 | no | lectura cruda del ADC del sensor 2 |
+| 0x48C (1164) | Brake1_pct | 0-1 | U16 | 0.1 | % | 10 | no | sensor 1 de freno (%, TODO: hoy siempre 0) |
+| 0x48C | Brake2_pct | 2-3 | U16 | 0.1 | % | 10 | no | sensor 2 de freno (%, TODO: hoy siempre 0) |
+| 0x48C | Brake1_raw | 4-5 | U16 | 1 | ADC | 10 | no | lectura cruda del ADC del sensor 1 |
+| 0x48C | Brake2_raw | 6-7 | U16 | 1 | ADC | 10 | no | lectura cruda del ADC del sensor 2 |
+| 0x48E (1166) | VCU_Vbat | 0-1 | U16 | 1 | — | 10 | no | tensión de batería de baja (ADC crudo, TODO escalar a V) |
+| 0x48E | VCU_SDC | 2 | U8 | 1 | — | 10 | sí | SDC presente (visto por la VCU) |
+| 0x48E | VCU_Start | 3 | U8 | 1 | — | 10 | sí | pulsador Start |
+| 0x48E | VCU_R2D | 4 | U8 | 1 | — | 10 | sí | Ready-to-Drive (lógica positiva: 1=activo) |
+| 0x48E | VCU_AppsSt | 5 | U8 | 1 | — | 10 | sí + enc. | 0=NORMAL 1=IMPL 2=PENDING |
+| 0x48E | VCU_BrakeFlt | 6 | U8 | 1 | — | 10 | sí | freno desconectado/en corto → tumba el R2D |
+| 0x48E | VCU_Bypass | 7 | U8 | 1 | — | 10 | sí | ⚠ bypass de banco: R2D forzado sin enclavamientos |
+| 0x48D (1165) | VCU_WheelRpmL / R | 0-1 / 2-3 | U16 | 0.1 | rpm | 10 | no | RPM de cada rueda trasera (0,1 rpm), sensor Hall de 22 dientes |
+| 0x48D | VCU_WheelPulsesL / R | 4-5 / 6-7 | U16 | 1 | — | 10 | no | pulsos contados en la última ventana de 100 ms: un 0 con el coche rodando = sensor muerto |
+| 0x48F (1167) | VCU_SpeedL / R | 0-1 / 2-3 | U16 | 0.01 | km/h | 10 | no | velocidad de cada rueda (0,01 km/h), calculada con `WHEEL_DIAMETER_MM` |
+| 0x48F | VCU_SpeedAvg | 4-5 | U16 | 0.01 | km/h | 10 | no | media de las dos ruedas: la que va al display |
+| 0x490 (1168) | VCU_SuspPos | 0-1 | S16 | 0.01 | mm | **100** | no | recorrido de suspensión, mm × 100 **con signo**: 0 = altura de marcha (opción 27), + compresión, − extensión. **100 Hz** |
+| 0x490 | VCU_SuspRaw | 2-3 | U16 | 1 | ADC | 10-100 | no | cuentas ADC crudas del potenciómetro (12 bit) |
+| 0x490 | VCU_SuspState | 4-5 | U16 | 1 | — | 10 | sí + enc. | 0 OK · 1 fuera de banda · 2 sin ADC · +4 sin cero guardado |
 
 **`VCU_FaultCause`** — el primero que aplica, en este orden:
 
@@ -934,13 +948,13 @@ Pierburg CWA y los 2 ventiladores Delta según temperatura del inversor
 
 > Fuente: repo `mart-PDM`, `src/main.cpp` → `sendPdmStatus()`.
 
-| ID | Canal | Byte | Descripción |
-|---|---|---|---|
-| 0x301 (769) | PDM_Mode | 0 | 0=AUTO (curva térmica) 1=CAN (consigna VCU) 2=SERIAL (override de banco) |
-| 0x301 | PDM_PumpPct | 1 | % de duty de bomba aplicado |
-| 0x301 | PDM_FanPct | 2 | % de duty de ventiladores aplicado |
-| 0x301 | PDM_Failsafe | 3, bit0 | 1 = sin temperaturas del inversor → demanda fija de emergencia |
-| 0x301 | PDM_SafetyFloor | 3, bit1 | 1 = cerca del límite térmico, la curva subió la consigna por encima de lo pedido |
+| ID | Canal | Byte | Formato | Gain | Ud. | Hz | Stepped | Descripción |
+|---|---|---|---|---|---|---|---|---|
+| 0x301 (769) | PDM_Mode | 0 | U8 | 1 | — | 10 | sí + enc. | 0=AUTO (curva térmica) 1=CAN (consigna VCU) 2=SERIAL (override de banco) |
+| 0x301 | PDM_PumpPct | 1 | U8 | 1 | % | 10 | no | % de duty de bomba aplicado |
+| 0x301 | PDM_FanPct | 2 | U8 | 1 | % | 10 | no | % de duty de ventiladores aplicado |
+| 0x301 | PDM_Failsafe | 3, bit0 | bit | 1 | — | 10 | sí | 1 = sin temperaturas del inversor → demanda fija de emergencia |
+| 0x301 | PDM_SafetyFloor | 3, bit1 | bit | 1 | — | 10 | sí | 1 = cerca del límite térmico, la curva subió la consigna por encima de lo pedido |
 
 > El PDM lee la temperatura del inversor directamente del CAN del propio
 > inversor (0x441, §20) y la consigna de refrigeración de la VCU en 0x300
@@ -985,6 +999,8 @@ Pierburg CWA y los 2 ventiladores Delta según temperatura del inversor
   Format, Stepped, Encoding, frecuencia por trama). §5: cómo leer el bitmap
   `StatusV/T` (sin encoding 0/1) y canales de 1 bit por módulo. §21:
   configuración de la suspensión 0x490. DBC: `VAL_` de `VCU_SuspState`.
+- **2026-11-14** — todas las tablas de canales llevan su configuración de
+  RaceStudio (Formato, Gain, Ud., Hz, Stepped) generada desde el DBC. §21: + dirección 0x489.
 
 Si cambia alguna trama, actualiza primero `docs/BMS_MART.dbc` (y
 valídalo con `cantools`) y luego este doc — nunca al revés.
