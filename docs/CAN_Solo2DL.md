@@ -124,7 +124,8 @@ El Start Bit no se repite en las tablas: lo trae el import (regla de conversión
 | BMS 386-391 (paginadas) | ~555 ms | **5 Hz** (más rápido que el envío, para no perder páginas) |
 | BMS 392 | 553 ms | **2 Hz** |
 | BMS 393-396 (endurance, paginadas) | 250 ms | **20 Hz** (ver §17b) |
-| VCU 0x488-0x48F (menos 0x489) | 100 ms (`TELEMETRY_MS`) | **10 Hz** |
+| VCU 0x488-0x48E (menos 0x489) | 100 ms (`TELEMETRY_MS`) | **10 Hz** |
+| VCU 0x48F (velocidad de rueda) | 20 ms (`WHEEL_TX_MS`) | **50 Hz** |
 | VCU 0x489 (dirección) | 20 ms (`STEER_TX_MS`) | **50 Hz** en `VCU_SteerAngle`; `SteerRaw` 10-50 Hz |
 | VCU 0x490 (suspensión) | 10 ms (`SUSP_TX_MS`) | **100 Hz** en `VCU_SuspPos`; `SuspRaw` 10-100 Hz; `SuspState` 10 Hz |
 | Inversor DTI | el que tenga configurado el inversor | igual a su periodo |
@@ -891,10 +892,10 @@ ya ve lo aplicado en el 0x301. Al inversor no le manda nada por CAN (§20).
 | 0x48E | VCU_AppsSt | 5 | U8 | 1 | — | 10 | sí + enc. | 0=NORMAL 1=IMPL 2=PENDING |
 | 0x48E | VCU_BrakeFlt | 6 | U8 | 1 | — | 10 | sí | freno desconectado/en corto → tumba el R2D |
 | 0x48E | VCU_Bypass | 7 | U8 | 1 | — | 10 | sí | ⚠ bypass de banco: R2D forzado sin enclavamientos |
-| 0x48D (1165) | VCU_WheelRpmL / R | 0-1 / 2-3 | U16 | 0.1 | rpm | 10 | no | RPM de cada rueda trasera (0,1 rpm), sensor Hall de 22 dientes |
+| 0x48D (1165) | VCU_WheelRpmL / R | 0-1 / 2-3 | U16 | 0.1 | rpm | 10 | no | RPM de cada rueda **delantera** (0,1 rpm), sensor Hall de 22 dientes, medida por tiempo entre dientes |
 | 0x48D | VCU_WheelPulsesL / R | 4-5 / 6-7 | U16 | 1 | — | 10 | no | pulsos contados en la última ventana de 100 ms: un 0 con el coche rodando = sensor muerto |
-| 0x48F (1167) | VCU_SpeedL / R | 0-1 / 2-3 | U16 | 0.01 | km/h | 10 | no | velocidad de cada rueda (0,01 km/h), calculada con `WHEEL_DIAMETER_MM` |
-| 0x48F | VCU_SpeedAvg | 4-5 | U16 | 0.01 | km/h | 10 | no | media de las dos ruedas: la que va al display |
+| 0x48F (1167) | VCU_SpeedL / R | 0-1 / 2-3 | U16 | 0.01 | km/h | **50** | no | **50 Hz** (`WHEEL_TX_MS`). Velocidad de cada rueda delantera (0,01 km/h), calculada con `WHEEL_DIAMETER_MM` |
+| 0x48F | VCU_SpeedAvg | 4-5 | U16 | 0.01 | km/h | **50** | no | media de las dos ruedas: la que va al display |
 | 0x490 (1168) | VCU_SuspPos | 0-1 | S16 | 0.01 | mm | **100** | no | recorrido de suspensión, mm × 100 **con signo**: 0 = altura de marcha (opción 27), + compresión, − extensión. **100 Hz** |
 | 0x490 | VCU_SuspRaw | 2-3 | U16 | 1 | ADC | 10-100 | no | cuentas ADC crudas del potenciómetro (12 bit) |
 | 0x490 | VCU_SuspState | 4-5 | U16 | 1 | — | 10 | sí + enc. | 0 OK · 1 fuera de banda · 2 sin ADC · +4 sin cero guardado |
@@ -920,10 +921,17 @@ ya ve lo aplicado en el 0x301. Al inversor no le manda nada por CAN (§20).
 > incrementar con la VCU alimentada, el loop está colgado. Combínalo con
 > `VCU_ResetCause = 4` (IWDG) para detectar el ciclo cuelgue → reset.
 >
-> **Velocidad de rueda (0x48D y 0x48F):** solo en el firmware de la VCU para
-> ESP32-S3 (`WHEEL_SPEED_ENABLED`); en la Nucleo sale a 0. Resolución ~2 km/h
-> por pulso con la ventana de 100 ms. Comparada con `INV ERPM` (rueda motriz
-> calculada desde el motor), sirve para ver patinamiento en aceleración.
+> **Velocidad de rueda (0x48D y 0x48F):** sensores en las ruedas **DELANTERAS**
+> (no motrices): es la velocidad real respecto al suelo. Desde 2026-11-15 se mide
+> por **tiempo entre dientes** (la ISR apunta `micros()` de cada diente), así que la
+> resolución ya no depende de la ventana (antes ~2 km/h por pulso con 100 ms), y la
+> 0x48F sale a **50 Hz**. Comparada con `INV_ERPM` (traseras, vía motor:
+> ERPM ÷ 10 pares de polos ÷ 4,0 de relación × circunferencia), da el
+> **deslizamiento** de las traseras en aceleración y en frenada regenerativa. El
+> inversor va a 40 Hz: al comparar, remuestrear una sobre la otra. ⚠ Calibrar antes
+> `WHEEL_DIAMETER_MM` con el GPS en recta: un 5 % de error de circunferencia se ve
+> como un 5 % de deslizamiento falso. Por debajo de ~0,4 km/h sale 0
+> (`WHEEL_STOP_MS`).
 >
 > **Suspensión (0x490) en RaceStudio:**
 >
@@ -1005,6 +1013,8 @@ Pierburg CWA y los 2 ventiladores Delta según temperatura del inversor
 - **2026-11-14** — todas las tablas de canales llevan su configuración de
   RaceStudio (Formato, Gain, Ud., Hz, Stepped) generada desde el DBC. §21: + dirección 0x489.
 - **2026-11-14** — dirección 0x489 a 50 Hz con cadencia propia (`STEER_TX_MS` en la VCU).
+- **2026-11-15** — velocidad de rueda: sensores en las DELANTERAS, medida por tiempo
+  entre dientes y 0x48F a 50 Hz (`WHEEL_TX_MS`), para el deslizamiento frente a `INV_ERPM`.
 
 Si cambia alguna trama, actualiza primero `docs/BMS_MART.dbc` (y
 valídalo con `cantools`) y luego este doc — nunca al revés.
