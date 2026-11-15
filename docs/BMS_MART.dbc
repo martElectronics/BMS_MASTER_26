@@ -294,6 +294,12 @@ BO_ 1168 VCU_Suspension: 8 VCU
  SG_ VCU_SuspRaw : 23|16@0+ (1,0) [0|4095] "ADC" AIM
  SG_ VCU_SuspState : 39|16@0+ (1,0) [0|6] "" AIM
 
+BO_ 1169 VCU_Fast: 8 VCU
+ SG_ VCU_FastSusp : 7|16@0- (0.01,0) [-327.67|327.67] "mm" AIM
+ SG_ VCU_FastSpeedL : 23|16@0+ (0.01,0) [0|655.35] "km/h" AIM
+ SG_ VCU_FastSpeedR : 39|16@0+ (0.01,0) [0|655.35] "km/h" AIM
+ SG_ VCU_FastSteer : 55|16@0- (0.1,0) [-3276.7|3276.7] "deg" AIM
+
 BO_ 769 PDM_Status: 8 PDM
  SG_ PDM_Mode : 7|8@0+ (1,0) [0|2] "" AIM
  SG_ PDM_PumpPct : 15|8@0+ (1,0) [0|100] "%" AIM
@@ -336,14 +342,14 @@ VAL_ 993 INV_ControlMode 0 "unused" 1 "SPEED" 2 "CURRENT" 3 "CURRENT_BRAKE" 4 "P
 VAL_ 1089 INV_FaultCode 0 "OK" 1 "Overvoltage" 2 "Undervoltage" 3 "DRV" 4 "Overcurrent" 5 "CtrlOverTemp" 6 "MotorOverTemp" 7 "SensorWire" 8 "SensorGeneral" 9 "CANcmdError" 10 "AnalogInput" ;
 
 CM_ BO_ 1160 "VCU_26, src/Control.cpp publishTelemetry() (rev 2026-08-10). Bytes4-7 reservados a 0.";
-CM_ BO_ 1161 "Direccion (VCU_26, sensor analogico en CH4 del MCP3208, antes brake1). Solo telemetria, 20 ms (50 Hz, STEER_TX_MS): poner VCU_SteerAngle a 50 Hz en RaceStudio. Bytes4-7 sin usar (0xFF).";
+CM_ BO_ 1161 "Direccion (VCU_26, sensor analogico en CH4 del MCP3208, antes brake1). Solo telemetria, 100 ms (10 Hz). El angulo rapido va en VCU_FastSteer (ID 1169, 200 Hz). Bytes4-7 sin usar (0xFF).";
 CM_ SG_ 1161 VCU_SteerAngle "Angulo del VOLANTE en grados, + = izquierda (ISO 8855). Satura en +-STEER_LOCK_DEG (Config.h, 90 provisional). Depende de la calibracion de 3 puntos (opcion 24 del menu de la VCU).";
 CM_ SG_ 1161 VCU_SteerRaw "Cuentas ADC crudas (sobremuestreo x4). Sirven para calibrar y para ver un sensor suelto sin depender de la calibracion.";
 CM_ SG_ 1164 Brake1_pct "Desde 2026-11-02 brake1 no se lee (su entrada CH4 es ahora la direccion, BO_ 1161): sale a 0.";
 CM_ SG_ 1164 Brake1_raw "Sale a 0 desde 2026-11-02, ver Brake1_pct.";
 CM_ BO_ 1165 "Velocidad de rueda DELANTERA (VCU_26, sensores Hall SNDH-H3L-G01, 22 dientes). RPM por tiempo entre dientes. 100 ms. Pulsos = de la ultima ventana de 100 ms: sirven para ver un sensor muerto o con ruido.";
-CM_ BO_ 1167 "Velocidad de las ruedas DELANTERAS (no motrices) calculada por la VCU con WHEEL_DIAMETER_MM. 20 ms (50 Hz, WHEEL_TX_MS): poner VCU_SpeedL/R/Avg a 50 Hz en RaceStudio. Frente a INV_ERPM da el deslizamiento de las traseras.";
-CM_ BO_ 1168 "Recorrido de suspension (VCU_26, potenciometro lineal SLS130 al ADC interno). 100 Hz (SUSP_TX_MS = 10 ms): poner el canal a 100 Hz en RaceStudio.";
+CM_ BO_ 1167 "Velocidad de las ruedas DELANTERAS (no motrices) calculada por la VCU con WHEEL_DIAMETER_MM. 100 ms (10 Hz). Izq/der rapidas en VCU_FastSpeedL/R (ID 1169, 200 Hz). Frente a INV_ERPM da el deslizamiento de las traseras.";
+CM_ BO_ 1168 "Recorrido de suspension (VCU_26, potenciometro lineal SLS130 al ADC interno). 100 ms (10 Hz). La posicion rapida va en VCU_FastSusp (ID 1169, 200 Hz).";
 CM_ SG_ 1168 VCU_SuspPos "Posicion en mm CON SIGNO. Con el cero de la opcion 27: 0 = altura de marcha, + = compresion, - = extension. Sin cero (VCU_SuspState >= 4): 0 = minimo/extendido (opcion 26) o extremo electrico del sensor.";
 CM_ SG_ 1168 VCU_SuspRaw "Cuentas ADC crudas (12 bit). Para calibrar y para ver un sensor suelto.";
 CM_ SG_ 1168 VCU_SuspState "0 = OK, 1 = fuera de banda (desconectado/corto; la posicion es la ultima buena), 2 = pin sin ADC o desactivado. +4 = sin cero guardado (opcion 27).";
@@ -359,6 +365,11 @@ CM_ SG_ 1166 VCU_Bypass "Ver comentario del mensaje BO_ 1166.";
 VAL_ 1160 VCU_FaultCause 0 "OK" 1 "WaitStartBrake" 2 "SDCopen" 3 "AppsImplausible" 6 "BrakeFault" 7 "BYPASS_BANCO" ;
 VAL_ 1160 VCU_ResetCause 0 "unknown" 1 "PowerBOR" 2 "NRST" 3 "SW" 4 "IWDG" 5 "WWDG" 6 "lowpower" ;
 VAL_ 1166 VCU_AppsSt 0 "NORMAL" 1 "IMPL" 2 "PENDING" ;
+CM_ BO_ 1169 "Trama RAPIDA de la VCU, 5 ms (200 Hz, FAST_TX_MS): suspension + ruedas DELANTERAS + volante en una sola trama (misma carga de bus que 0x489/0x48F/0x490 rapidas por separado). Poner los 4 canales a 200 Hz en RaceStudio. Estado/raw/media en 1161/1167/1168 a 10 Hz.";
+CM_ SG_ 1169 VCU_FastSusp "Igual que VCU_SuspPos: mm CON SIGNO, 0 = altura de marcha (opcion 27), + compresion, - extension.";
+CM_ SG_ 1169 VCU_FastSpeedL "Rueda delantera izquierda, igual que VCU_SpeedL. Por tiempo entre dientes.";
+CM_ SG_ 1169 VCU_FastSpeedR "Rueda delantera derecha, igual que VCU_SpeedR.";
+CM_ SG_ 1169 VCU_FastSteer "Angulo del volante, igual que VCU_SteerAngle: + = izquierda.";
 VAL_ 1168 VCU_SuspState 0 "OK" 1 "FueraBanda" 2 "SinADC" 4 "OK_SinCero" 5 "FueraBanda_SinCero" 6 "SinADC_SinCero" ;
 
 CM_ BO_ 769 "mart-PDM, src/main.cpp sendPdmStatus() (rev 2026-10-10). Bomba+ventiladores del inversor DTI HV-500. Bytes4-7 relleno 0xFF.";

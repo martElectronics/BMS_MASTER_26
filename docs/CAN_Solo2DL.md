@@ -124,10 +124,8 @@ El Start Bit no se repite en las tablas: lo trae el import (regla de conversión
 | BMS 386-391 (paginadas) | ~555 ms | **5 Hz** (más rápido que el envío, para no perder páginas) |
 | BMS 392 | 553 ms | **2 Hz** |
 | BMS 393-396 (endurance, paginadas) | 250 ms | **20 Hz** (ver §17b) |
-| VCU 0x488-0x48E (menos 0x489) | 100 ms (`TELEMETRY_MS`) | **10 Hz** |
-| VCU 0x48F (velocidad de rueda) | 20 ms (`WHEEL_TX_MS`) | **50 Hz** |
-| VCU 0x489 (dirección) | 20 ms (`STEER_TX_MS`) | **50 Hz** en `VCU_SteerAngle`; `SteerRaw` 10-50 Hz |
-| VCU 0x490 (suspensión) | 10 ms (`SUSP_TX_MS`) | **100 Hz** en `VCU_SuspPos`; `SuspRaw` 10-100 Hz; `SuspState` 10 Hz |
+| VCU 0x488-0x490 | 100 ms (`TELEMETRY_MS`) | **10 Hz** |
+| VCU 0x491 (rápida: suspensión + ruedas + volante) | 5 ms (`FAST_TX_MS`) | **200 Hz** |
 | Inversor DTI | el que tenga configurado el inversor | igual a su periodo |
 | PDM 0x301 | el de `sendPdmStatus()` | igual a su periodo |
 
@@ -875,8 +873,8 @@ ya ve lo aplicado en el 0x301. Al inversor no le manda nada por CAN (§20).
 | 0x488 (1160) | VCU_FaultCause | 0 | U8 | 1 | — | 10 | sí + enc. | causa de no-R2D, ver tabla |
 | 0x488 | VCU_ResetCause | 1 | U8 | 1 | — | 10 | sí + enc. | 0=desconocido 1=power/BOR 2=NRST 3=SW 4=IWDG 5=WWDG 6=lowpwr |
 | 0x488 | VCU_Heartbeat | 2-3 | U16 | 1 | — | 10 | sí | cuenta de loop; **se congela si el firmware se cuelga** |
-| 0x489 (1161) | VCU_SteerAngle | 0-1 | S16 | 0.1 | deg | **50** | no | **50 Hz** (`STEER_TX_MS`). Ángulo del volante, + = izquierda; depende de la calibración de 3 puntos (opción 24) |
-| 0x489 | VCU_SteerRaw | 2-3 | U16 | 1 | ADC | 10-50 | no | cuentas ADC crudas del sensor de dirección |
+| 0x489 (1161) | VCU_SteerAngle | 0-1 | S16 | 0.1 | deg | 10 | no | ángulo del volante (el de 200 Hz es `VCU_FastSteer`), + = izquierda; depende de la calibración de 3 puntos (opción 24) |
+| 0x489 | VCU_SteerRaw | 2-3 | U16 | 1 | ADC | 10 | no | cuentas ADC crudas del sensor de dirección |
 | 0x48B (1163) | APPS1_pct | 0-1 | U16 | 0.1 | % | 10 | no | sensor 1 del acelerador (%) |
 | 0x48B | APPS2_pct | 2-3 | U16 | 0.1 | % | 10 | no | sensor 2 del acelerador (%) — se compara con el 1 para detectar implausibilidad |
 | 0x48B | APPS1_raw | 4-5 | U16 | 1 | ADC | 10 | no | lectura cruda del ADC del sensor 1 |
@@ -894,11 +892,15 @@ ya ve lo aplicado en el 0x301. Al inversor no le manda nada por CAN (§20).
 | 0x48E | VCU_Bypass | 7 | U8 | 1 | — | 10 | sí | ⚠ bypass de banco: R2D forzado sin enclavamientos |
 | 0x48D (1165) | VCU_WheelRpmL / R | 0-1 / 2-3 | U16 | 0.1 | rpm | 10 | no | RPM de cada rueda **delantera** (0,1 rpm), sensor Hall de 22 dientes, medida por tiempo entre dientes |
 | 0x48D | VCU_WheelPulsesL / R | 4-5 / 6-7 | U16 | 1 | — | 10 | no | pulsos contados en la última ventana de 100 ms: un 0 con el coche rodando = sensor muerto |
-| 0x48F (1167) | VCU_SpeedL / R | 0-1 / 2-3 | U16 | 0.01 | km/h | **50** | no | **50 Hz** (`WHEEL_TX_MS`). Velocidad de cada rueda delantera (0,01 km/h), calculada con `WHEEL_DIAMETER_MM` |
-| 0x48F | VCU_SpeedAvg | 4-5 | U16 | 0.01 | km/h | **50** | no | media de las dos ruedas: la que va al display |
-| 0x490 (1168) | VCU_SuspPos | 0-1 | S16 | 0.01 | mm | **100** | no | recorrido de suspensión, mm × 100 **con signo**: 0 = altura de marcha (opción 27), + compresión, − extensión. **100 Hz** |
-| 0x490 | VCU_SuspRaw | 2-3 | U16 | 1 | ADC | 10-100 | no | cuentas ADC crudas del potenciómetro (12 bit) |
+| 0x48F (1167) | VCU_SpeedL / R | 0-1 / 2-3 | U16 | 0.01 | km/h | 10 | no | (las de 200 Hz son `VCU_FastSpeedL/R`). Velocidad de cada rueda delantera (0,01 km/h), calculada con `WHEEL_DIAMETER_MM` |
+| 0x48F | VCU_SpeedAvg | 4-5 | U16 | 0.01 | km/h | 10 | no | media de las dos ruedas: la que va al display |
+| 0x490 (1168) | VCU_SuspPos | 0-1 | S16 | 0.01 | mm | 10 | no | recorrido de suspensión, mm × 100 **con signo**: 0 = altura de marcha (opción 27), + compresión, − extensión (el de 200 Hz es `VCU_FastSusp`) |
+| 0x490 | VCU_SuspRaw | 2-3 | U16 | 1 | ADC | 10 | no | cuentas ADC crudas del potenciómetro (12 bit) |
 | 0x490 | VCU_SuspState | 4-5 | U16 | 1 | — | 10 | sí + enc. | 0 OK · 1 fuera de banda · 2 sin ADC · +4 sin cero guardado |
+| **0x491 (1169)** | **VCU_FastSusp** | 0-1 | S16 | 0.01 | mm | **200** | no | suspensión, igual que `VCU_SuspPos` |
+| 0x491 | **VCU_FastSpeedL** | 2-3 | U16 | 0.01 | km/h | **200** | no | rueda delantera izquierda |
+| 0x491 | **VCU_FastSpeedR** | 4-5 | U16 | 0.01 | km/h | **200** | no | rueda delantera derecha |
+| 0x491 | **VCU_FastSteer** | 6-7 | S16 | 0.1 | deg | **200** | no | volante, + = izquierda |
 
 **`VCU_FaultCause`** — el primero que aplica, en este orden:
 
@@ -925,7 +927,7 @@ ya ve lo aplicado en el 0x301. Al inversor no le manda nada por CAN (§20).
 > (no motrices): es la velocidad real respecto al suelo. Desde 2026-11-15 se mide
 > por **tiempo entre dientes** (la ISR apunta `micros()` de cada diente), así que la
 > resolución ya no depende de la ventana (antes ~2 km/h por pulso con 100 ms), y la
-> 0x48F sale a **50 Hz**. Comparada con `INV_ERPM` (traseras, vía motor:
+> las de cada rueda salen a **200 Hz** en la 0x491. Comparada con `INV_ERPM` (traseras, vía motor:
 > ERPM ÷ 10 pares de polos ÷ 4,0 de relación × circunferencia), da el
 > **deslizamiento** de las traseras en aceleración y en frenada regenerativa. El
 > inversor va a 40 Hz: al comparar, remuestrear una sobre la otra. ⚠ Calibrar antes
@@ -933,12 +935,25 @@ ya ve lo aplicado en el 0x301. Al inversor no le manda nada por CAN (§20).
 > como un 5 % de deslizamiento falso. Por debajo de ~0,4 km/h sale 0
 > (`WHEEL_STOP_MS`).
 >
+> **Trama rápida 0x491 (200 Hz, `FAST_TX_MS`):** suspensión, las dos ruedas
+> delanteras y el volante en UNA trama de 8 B. Mandar esas tres cosas rápidas por
+> separado costaba las mismas 200 tramas/s (0x489 a 50 + 0x48F a 50 + 0x490 a 100);
+> así va todo a 200 Hz con la misma carga de bus. Las 0x489/0x48F/0x490 quedan a
+> 10 Hz con raw, estado y media, para diagnóstico y calibración.
+>
+> | Canal | Start Bit (RS) | Formato | Gain | Unidad | Frecuencia | Stepped |
+> |---|---|---|---|---|---|---|
+> | `VCU_FastSusp` | 8 | **Signed** | 0.01 | mm | **200 Hz** | no |
+> | `VCU_FastSpeedL` | 24 | Unsigned | 0.01 | km/h | **200 Hz** | no |
+> | `VCU_FastSpeedR` | 40 | Unsigned | 0.01 | km/h | **200 Hz** | no |
+> | `VCU_FastSteer` | 56 | **Signed** | 0.1 | deg | **200 Hz** | no |
+>
 > **Suspensión (0x490) en RaceStudio:**
 >
 > | Canal | Start Bit (RS) | Formato | Gain | Unidad | Frecuencia | Stepped |
 > |---|---|---|---|---|---|---|
-> | `VCU_SuspPos` | 8 | **Signed** | 0.01 | mm | **100 Hz** | no |
-> | `VCU_SuspRaw` | 24 | Unsigned | 1 | — | 10-100 Hz | no |
+> | `VCU_SuspPos` | 8 | **Signed** | 0.01 | mm | 10 Hz | no |
+> | `VCU_SuspRaw` | 24 | Unsigned | 1 | — | 10 Hz | no |
 > | `VCU_SuspState` | 40 | Unsigned | 1 (o encoding del DBC) | — | 10 Hz | **sí** |
 >
 > `SuspPos` como Unsigned saca ~655 mm al extenderse en vez del negativo.
@@ -1015,6 +1030,8 @@ Pierburg CWA y los 2 ventiladores Delta según temperatura del inversor
 - **2026-11-14** — dirección 0x489 a 50 Hz con cadencia propia (`STEER_TX_MS` en la VCU).
 - **2026-11-15** — velocidad de rueda: sensores en las DELANTERAS, medida por tiempo
   entre dientes y 0x48F a 50 Hz (`WHEEL_TX_MS`), para el deslizamiento frente a `INV_ERPM`.
+- **2026-11-15** — trama rápida **0x491** (`VCU_Fast*`) a 200 Hz con suspensión, ruedas y
+  volante; 0x489/0x48F/0x490 vuelven a 10 Hz (diagnóstico). Misma carga de bus.
 
 Si cambia alguna trama, actualiza primero `docs/BMS_MART.dbc` (y
 valídalo con `cantools`) y luego este doc — nunca al revés.
