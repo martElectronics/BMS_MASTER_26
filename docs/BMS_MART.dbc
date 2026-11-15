@@ -319,8 +319,8 @@ CM_ SG_ 1161 VCU_SteerAngle "Angulo del VOLANTE en grados, + = izquierda (ISO 88
 CM_ SG_ 1161 VCU_SteerRaw "Cuentas ADC crudas (sobremuestreo x4). Sirven para calibrar y para ver un sensor suelto sin depender de la calibracion.";
 CM_ SG_ 1164 Brake1_pct "Desde 2026-11-02 brake1 no se lee (su entrada CH4 es ahora la direccion, BO_ 1161): sale a 0.";
 CM_ SG_ 1164 Brake1_raw "Sale a 0 desde 2026-11-02, ver Brake1_pct.";
-CM_ BO_ 1165 "Velocidad de rueda (VCU_26, sensores Hall SNDH-H3L-G01, 22 dientes, ventana 100 ms). Pulsos = de la ultima ventana: sirven para ver un sensor muerto o con ruido.";
-CM_ BO_ 1167 "Velocidad del coche calculada por la VCU con WHEEL_DIAMETER_MM a partir de las RPM de rueda (ID 1165).";
+CM_ BO_ 1165 "Velocidad de rueda DELANTERA (VCU_26, sensores Hall SNDH-H3L-G01, 22 dientes). RPM por tiempo entre dientes. 100 ms. Pulsos = de la ultima ventana de 100 ms: sirven para ver un sensor muerto o con ruido.";
+CM_ BO_ 1167 "Velocidad de las ruedas DELANTERAS (no motrices) calculada por la VCU con WHEEL_DIAMETER_MM. 20 ms (50 Hz, WHEEL_TX_MS): poner VCU_SpeedL/R/Avg a 50 Hz en RaceStudio. Frente a INV_ERPM da el deslizamiento de las traseras.";
 CM_ BO_ 1168 "Recorrido de suspension (VCU_26, potenciometro lineal SLS130 al ADC interno). 100 Hz (SUSP_TX_MS = 10 ms): poner el canal a 100 Hz en RaceStudio.";
 CM_ SG_ 1168 VCU_SuspPos "Posicion en mm CON SIGNO. Con el cero de la opcion 27: 0 = altura de marcha, + = compresion, - = extension. Sin cero (VCU_SuspState >= 4): 0 = minimo/extendido (opcion 26) o extremo electrico del sensor.";
 CM_ SG_ 1168 VCU_SuspRaw "Cuentas ADC crudas (12 bit). Para calibrar y para ver un sensor suelto.";
