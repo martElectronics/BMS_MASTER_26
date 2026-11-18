@@ -68,27 +68,33 @@
 #define CHG_START_CURRENT_A  7.0f       ///< corriente DC al arrancar (la que ya sabes que funciona)
 #define CHG_MAX_CURRENT_A    14.0f       ///< ⚠ TOPE duro: el serial no puede pedir más (atado al límite AC/plomos)
 
-#define CELL_VMAX_HARD_V     4.195f    ///< corte DURO por celda (seguridad independiente de Vmax). 5 mV bajo el OV del BMS/balanceador (4,20 V): corta la carga antes de enclavar el OV
+#define CELL_VMAX_HARD_V     4.20f     ///< corte DURO por celda (seguridad independiente de Vmax) = máximo de carga de la Samsung 40T. El OV por hardware del BQ está en 4,3 V (OV_THRESH)
 
 // ── FINAL DE CARGA POR ESCALONES (CV "por celda") ──────────────────────────
 // La CV propia del OBC es a CHG_TERM_VOLT_V de PACK (4,20 V de media). Con las
-// celdas desigualadas la más alta llega antes al corte duro de 4,195 V y la
-// carga acababa como FALLO de OV. En su lugar: cuando vMax (cargando) se
-// mantiene ≥ TAPER_VMAX_V, la corriente se divide entre 2; al bajar la I baja
-// la caída I·R (~7 mV/A por paralelo, medido 12-11-2026) y vMax se separa del
-// umbral. Si el siguiente escalón quedaría < TAPER_END_A, la carga TERMINA
-// (parada normal, sin fallo). En la carga del 14-11-2026 el OBC NO dio corriente
-// por debajo de ~3 A (pidiendo 1,7 A el Hall cae a 0 en 1 min y las celdas
-// bajan), así que con 7 A queda 7 → 3,5 → fin. ⚠ PENDIENTE confirmarlo en otra
-// carga: otro día sí pareció cargar < 3 A. Si carga, bajar TAPER_END_A a ~1,0.
-// La celda más alta queda en reposo a ~4,18 V.
-// ⚠ Margen al corte duro: solo 5 mV. Si alguna carga acaba en FALLO de OV en
-// vez de en "FIN DE CARGA", bajar TAPER_VMAX_V a 4,185. No subirlo sin subir
-// también CELL_VMAX_HARD_V (atado al OV del BMS, 4,20 V).
-#define TAPER_VMAX_V         4.19f     ///< vMax que dispara el siguiente escalón (5 mV bajo el corte duro)
+// celdas desigualadas la más alta llega antes al corte duro y la carga acababa
+// como FALLO de OV. En su lugar: cuando vMax (cargando) se mantiene ≥
+// TAPER_VMAX_V, la corriente se divide entre 2; al bajar la I baja la caída I·R
+// (~7 mV/A por paralelo, medido 12-11-2026) y vMax se separa del umbral. Si el
+// siguiente escalón quedaría < TAPER_END_A, la carga TERMINA (parada normal, sin
+// fallo). Con 7 A: 7 → 3,5 → 1,75 → 0,875 → fin.
+//
+// ⚠ El OBC NO baja en marcha por debajo de ~3 A (14-11-2026: de 3,5 a 1,75 A el
+// Hall cayó a 0 en 1 min), pero SÍ carga si ARRANCA a esa corriente (18-11-2026:
+// 2 A vistos en el Hall y en el OBC). Por eso los escalones por debajo de
+// TAPER_RESTART_BELOW_A PARAN el OBC TAPER_PAUSE_MS y lo rearrancan a la nueva
+// corriente. Si aun así no llega corriente (Hall < la mitad de la pedida durante
+// TAPER_NOFLOW_MS), se da la carga por terminada en vez de quedarse esperando.
+//
+// ⚠ Margen al corte duro (CELL_VMAX_HARD_V = 4,20): 5 mV. Si alguna carga acaba
+// en FALLO de OV en vez de en "FIN DE CARGA", bajar TAPER_VMAX_V a 4,19.
+#define TAPER_VMAX_V         4.195f    ///< vMax que dispara el siguiente escalón (5 mV bajo el corte duro)
 #define TAPER_HOLD_MS        3000UL    ///< vMax debe mantenerse ≥ umbral este tiempo (filtra ruido)
 #define TAPER_SETTLE_MS      15000UL   ///< mínimo entre escalones (rampa del OBC + asentamiento de V)
-#define TAPER_END_A          3.0f      ///< si el siguiente escalón queda por debajo → fin de carga (mínimo real del OBC)
+#define TAPER_END_A          0.8f      ///< si el siguiente escalón queda por debajo → fin de carga
+#define TAPER_RESTART_BELOW_A 3.0f     ///< por debajo, el escalón PARA y REARRANCA el OBC (no baja en marcha)
+#define TAPER_PAUSE_MS       4000UL    ///< parada antes de rearrancar (≥ 2 Message 1 con control=1)
+#define TAPER_NOFLOW_MS      60000UL   ///< tras rearrancar, sin corriente (< mitad de la pedida) este tiempo → fin
 // Corte DURO por celda BAJA. Mismo umbral que main.cpp (CELL_UV_V) y que el
 // registro UV_THRESH del BQ (0x53 = 2.8 V). Cubre dos escenarios:
 //   · celda realmente descargada → no se carga a 3 A un pack por debajo de UV;
@@ -259,10 +265,26 @@ static bool          taperOn         = true;   ///< 'k' lo activa/desactiva
 static float         taperA          = CHG_MAX_CURRENT_A;  ///< tope actual de los escalones
 static uint8_t       taperSteps      = 0;      ///< escalones dados en esta carga
 static bool          chargeDone      = false;  ///< la carga terminó por escalones (no por fallo)
+static bool          taperPaused     = false;  ///< OBC parado para rearrancar a un escalón < 3 A
+static unsigned long taperPauseUntil = 0;      ///< fin de esa parada (millis)
+static bool          taperLowStep    = false;  ///< escalón actual rearrancado por debajo de 3 A (vigilar que llegue corriente)
+static unsigned long tTaperRestart   = 0;      ///< cuándo se rearrancó (millis)
 
 // Corriente que se manda de verdad al OBC: la del usuario capada por el escalón.
 static float chgCmdA() { return taperOn ? fminf(chgCurrentA, taperA) : chgCurrentA; }
-static void  taperReset() { taperA = CHG_MAX_CURRENT_A; taperSteps = 0; chargeDone = false; }
+static void  taperReset() {
+    taperA = CHG_MAX_CURRENT_A; taperSteps = 0; chargeDone = false;
+    taperPaused = false; taperLowStep = false;
+}
+// Parada del rearranque: el OBC recibe control=1 hasta taperPauseUntil.
+static bool taperPausing(unsigned long now) {
+    if (taperPaused && (long)(now - taperPauseUntil) >= 0) {
+        taperPaused = false;
+        tTaperRestart = now;
+        Serial.printf("[CHG] Rearranque a %.2f A.\n", chgCmdA());
+    }
+    return taperPaused;
+}
 void   updateTaper(unsigned long now);
 static unsigned long tLastChgRx      = 0;       ///< ms del último Message 2 recibido
 static uint8_t       chgStatus       = 0;       ///< último byte STATUS del cargador
@@ -401,7 +423,8 @@ void loop()
     if (millis() - tMsg1 >= MSG1_PERIOD_MS) {
         tMsg1 = millis();
 
-        bool allow = chargeRequested && bmsSafe && sdcTson;   // no cargar sin TSON armado
+        // no cargar sin TSON armado; ni durante la parada de un rearranque de escalón
+        bool allow = chargeRequested && bmsSafe && sdcTson && !taperPausing(millis());
         sendMessage1(allow);
         charging = allow;
 
@@ -793,6 +816,22 @@ void updateTaper(unsigned long now)
 
     if (!taperOn || !charging || !chargeRequested) { high = false; return; }
 
+    // Escalón rearrancado por debajo de 3 A: si el OBC no da corriente, terminar
+    // en vez de quedarse esperando a un vMax que, sin corriente, ya no sube.
+    if (taperLowStep) {
+        const float iChg = -hall.getCurrent();          // + = cargando
+        static unsigned long tFlowOk = 0;
+        if (iChg >= 0.5f * chgCmdA() || now - tTaperRestart < 5000UL) tFlowOk = now;
+        else if (now - tFlowOk >= TAPER_NOFLOW_MS) {
+            chargeRequested = false;
+            chargeDone = true;
+            taperLowStep = false;
+            Serial.printf("\n[CHG] FIN DE CARGA: el OBC no da %.2f A (Hall %.2f A durante %lu s). vMax=%.3f V. Parada normal, sin fallo.\n",
+                          chgCmdA(), iChg, TAPER_NOFLOW_MS / 1000UL, bms.getMaxVoltage());
+            return;
+        }
+    }
+
     if (bms.getMaxVoltage() < TAPER_VMAX_V) { high = false; return; }
     if (!high) { high = true; tHigh = now; }
     if (now - tHigh < TAPER_HOLD_MS) return;
@@ -811,8 +850,17 @@ void updateTaper(unsigned long now)
     }
     taperA = next;
     taperSteps++;
-    Serial.printf("\n[CHG] ESCALON %u: vMax=%.3f V >= %.3f V -> corriente %.2f A\n",
-                  taperSteps, bms.getMaxVoltage(), TAPER_VMAX_V, next);
+    if (next < TAPER_RESTART_BELOW_A) {
+        // El OBC no baja en marcha por debajo de ~3 A: pararlo y rearrancarlo.
+        taperPaused = true;
+        taperPauseUntil = now + TAPER_PAUSE_MS;
+        taperLowStep = true;
+        Serial.printf("\n[CHG] ESCALON %u: vMax=%.3f V >= %.3f V -> parada %lu s y rearranque a %.2f A\n",
+                      taperSteps, bms.getMaxVoltage(), TAPER_VMAX_V, TAPER_PAUSE_MS / 1000UL, next);
+    } else {
+        Serial.printf("\n[CHG] ESCALON %u: vMax=%.3f V >= %.3f V -> corriente %.2f A\n",
+                      taperSteps, bms.getMaxVoltage(), TAPER_VMAX_V, next);
+    }
 }
 
 // ============================================================================
