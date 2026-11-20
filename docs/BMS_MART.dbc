@@ -122,6 +122,8 @@ BO_ 17 BMS_Sticky: 8 BMS
 BO_ 18 BMS_PackPower: 8 BMS
  SG_ BMS_PackCurrent : 7|16@0- (0.1,0) [-500|500] "A" AIM
  SG_ BMS_PackVoltage : 23|16@0+ (0.1,0) [0|600] "V" AIM
+ SG_ BMS_AhUsed : 39|16@0- (0.01,0) [-327.68|327.67] "Ah" AIM
+ SG_ BMS_kWhUsed : 55|16@0- (0.001,0) [-32.768|32.767] "kWh" AIM
 
 BO_ 386 BMS_ModV1: 8 BMS
  SG_ Mod_IDmod_386 : 7|16@0+ (1,0) [0|65535] "" AIM
@@ -301,6 +303,8 @@ CM_ SG_ 15 Pin_SDC_3V3 "Short AiM: PSDC.";
 CM_ BO_ 18 "Corriente y tension del pack medidas por el BMS (ID 0x12, 100ms). Medida independiente del inversor para el balance de potencia.";
 CM_ SG_ 18 BMS_PackCurrent "Sensor Hall (DHAB) del BMS. + descarga, - carga.";
 CM_ SG_ 18 BMS_PackVoltage "Suma de las tensiones de todas las celdas leidas por los BQ.";
+CM_ SG_ 18 BMS_AhUsed "Ah gastados desde el arranque del BMS (vuelve a 0 al dar baja tension). Integral del Hall, neto: la regenerativa resta.";
+CM_ SG_ 18 BMS_kWhUsed "Energia gastada desde el arranque del BMS (vuelve a 0 al dar baja tension). Integral de corriente Hall x tension del pack, neto: la regenerativa resta.";
 
 VAL_ 15 FirstFault 0 "none" 1 "V" 2 "T" 3 "NTC" 4 "Comm" 5 "Hall" 6 "NoInit" ;
 

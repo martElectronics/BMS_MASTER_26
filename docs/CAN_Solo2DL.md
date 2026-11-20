@@ -156,7 +156,7 @@ El Start Bit no se repite en las tablas: lo trae el import (regla de conversión
 | **15** | **0x0F** | **8** | **100 ms** | **BMS_DEBUG — granularidad por bit** |
 | 16 | 0x10 | 6 | 100 ms | Contadores de fallo por causa (6×UINT8) — *forense* |
 | **17** | **0x11** | **8** | **100 ms** | **STICKY SDC/TSON (latcheado) + contador de vida y uptime** |
-| **18** | **0x12** | **4** | **100 ms** | **Corriente (Hall) y tensión del pack medidas por el BMS** |
+| **18** | **0x12** | **8** | **100 ms** | **Corriente (Hall) y tensión del pack medidas por el BMS + Ah y kWh gastados** |
 | 386 | 0x182 | 8 | 557 ms paginado | IDmod, V1, V2, V3 — *forense* |
 | 387 | 0x183 | 8 | 556 ms paginado | IDmod, V4, V5, V6 — *forense* |
 | 388 | 0x184 | 8 | 556 ms paginado | IDmod, V7, V8, V9 — *forense* |
@@ -526,7 +526,7 @@ del loop.
 
 ---
 
-## 10b. ID 18 (0x12) — Corriente y tensión del pack · 4 bytes · 100 ms
+## 10b. ID 18 (0x12) — Corriente, tensión del pack y energía gastada · 8 bytes · 100 ms
 
 La medida de batería **del propio BMS**, independiente del inversor. La
 corriente DC que manda el inversor (`INV DC Current`) es una estimación muy
@@ -538,17 +538,29 @@ BMS.
 ```
 Bytes 0-1: corriente del Hall (int16 BE, 0,1 A)  — + descarga, − carga
 Bytes 2-3: tensión del pack   (uint16 BE, 0,1 V) — suma de todas las celdas
+Bytes 4-5: Ah gastados        (int16 BE, 0,01 Ah) — desde el arranque del BMS
+Bytes 6-7: energía gastada   (int16 BE, 1 Wh = 0,001 kWh) — desde el arranque
 ```
 
 | Canal | Short | Byte | Formato | Gain | Ud. | Hz | Stepped | Descripción |
 |---|---|---|---|---|---|---|---|---|
 | BMS_PackCurrent | IPCK | 0-1 | S16 | 0.1 | A | 10 | no | corriente del pack medida por el sensor Hall del BMS (A, **signed**: positiva descargando, negativa cargando o regenerando) |
 | BMS_PackVoltage | VPCK | 2-3 | U16 | 0.1 | V | 10 | no | tensión del pack (V) = suma de las tensiones de celda que leen los BQ |
+| BMS_AhUsed | AHUS | 4-5 | S16 | 0.01 | Ah | 10 | no | Ah gastados desde el arranque del BMS |
+| BMS_kWhUsed | KWHU | 6-7 | S16 | 0.001 | kWh | 10 | no | energía gastada desde el arranque del BMS |
 
 > `BMS_PackVoltage` es la suma de celdas, no una medida entre bornes: no
 > incluye la caída en pletinas, conectores y fusible, así que bajo carga
 > saldrá algo por encima de `INV VinDC`. Esa diferencia es justo la caída en
 > el cableado de alta tensión.
+>
+> **`BMS_AhUsed` / `BMS_kWhUsed`:** integral de la corriente del Hall y de
+> corriente × tensión del pack, calculada en el BMS en cada vuelta del loop.
+> **Vuelven a 0 en cada arranque del BMS** (cada vez que se da baja tensión), así
+> que miden lo gastado en la sesión. Son netos: la regenerativa resta. No
+> integran mientras el Hall está en fallo. Referencia para endurance: con el
+> pack actual hay ~14,4 Ah útiles; en el cambio de piloto conviene haber gastado
+> ≤ 6,6 Ah. Por el puerto serie salen en el volcado de estado (`d`).
 
 ---
 
@@ -715,7 +727,7 @@ el DBC no los fija, tócalos en RaceStudio si colisionan con otro protocolo).
 | `R` | Reset / Read-error | RIWD, RBOR, RVCO, RVCR, RTER |
 | `S` | State / status | SADR, SINI, SCAN, SOC |
 | `P` | Precarga / Pin físico | PFAI, PSDC |
-| `I` / `V` | Pack completo (ID 18) | IPCK, VPCK |
+| `I` / `V` / `AH` / `KW` | Pack completo (ID 18) | IPCK, VPCK, AHUS, KWHU |
 | `M` | Módulo (paginados 386-391) | MV01..MV11, MVTT, MT01..MT09, MTMX/MTMN |
 | `IM` | IDmod (uno por ID paginado) | IM86..IM91 |
 | `FF` | First Fault (enum) | FFLT |
@@ -982,6 +994,7 @@ Pierburg CWA y los 2 ventiladores Delta según temperatura del inversor
   entre dientes y 0x48F a 50 Hz (`WHEEL_TX_MS`), para el deslizamiento frente a `INV_ERPM`.
 - **2026-11-15** — trama rápida **0x491** (`VCU_Fast*`) a 200 Hz con suspensión, ruedas y
   volante; 0x489/0x48F/0x490 vuelven a 10 Hz (diagnóstico). Misma carga de bus.
+- **2026-11-20** — ID 18: + `BMS_AhUsed` y `BMS_kWhUsed` (gastado desde el arranque del BMS), DLC 4 → 8.
 
 Si cambia alguna trama, actualiza primero `docs/BMS_MART.dbc` (y
 valídalo con `cantools`) y luego este doc — nunca al revés.
