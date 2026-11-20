@@ -107,6 +107,16 @@ static constexpr int NUM_MODULES = TOTALBOARDS / 2;
 static float modCellV(int m, int n);
 static float modCellT(int m, int k);
 
+// ── Ah y kWh gastados desde el arranque del BMS (ID 18 B4-7) ────────────────
+// Integra la corriente del Hall (+ descarga) y la potencia corriente × tensión
+// del pack (suma de celdas) en cada vuelta del loop. Neto: la regenerativa
+// resta. Vuelve a 0 en cada arranque (= cada vez que se da baja tensión).
+// No integra si el Hall falla; si la tensión no es fiable, usa la última buena.
+static double usedAs = 0.0;    ///< A·s gastados (neto)
+static double usedWs = 0.0;    ///< W·s gastados (neto)
+static float  packVoltage();
+static void   updateUsedEnergy(bool vReliable, bool iReliable);
+
 static const DashConfig dashCfg = {
     NUM_MODULES, 11, 9,
     modCellV, modCellT,
@@ -493,6 +503,7 @@ void loop()
     bool vReliable = bmsInitOk && (lastResV == BQResult::OK);
     bool iReliable = hall.isOK();   // no integrar corriente railada si el Hall falla
     soc.update(hall.getCurrent(), bms.getMinVoltage(), vReliable, iReliable, millis());   // coulomb + OCV
+    updateUsedEnergy(vReliable, iReliable);   // Ah y kWh gastados desde el arranque (ID 18)
     // Fail-safe de refrigeración: T no fresca/fiable (lectura T fallida,
     // comms o NTC abierto) → ventiladores 100 % (no fiarse de Tmax rancia).
     bool fanFS = (lastResT != BQResult::OK) || fComm.cond || fNtc.cond;
@@ -907,6 +918,36 @@ static bool modNtcIgnored(int m, int k)   // k = 1..9 → ver NTC_IGNORED
 static uint16_t mv16(float v) { return (v > 0.0f) ? (uint16_t)lroundf(v * 1000.0f) : 0; }
 static uint8_t  t8(float t)   { return (uint8_t)(int8_t)lroundf(t); }
 
+// Tensión del pack = suma de todas las celdas leídas por los BQ.
+static float packVoltage()
+{
+    float v = 0.0f;
+    for (int m = 0; m < NUM_MODULES; m++)
+        for (int n = 1; n <= 11; n++) v += modCellV(m, n);
+    return v;
+}
+
+// Ah y kWh gastados (ver usedAs/usedWs). dt por micros(): exacto aunque el loop
+// varíe; un hueco > 1 s (reInit bloqueante, menú) no se integra para no meter un
+// escalón falso con una corriente vieja.
+static void updateUsedEnergy(bool vReliable, bool iReliable)
+{
+    static uint32_t tPrev = 0;
+    static float    vLast = 0.0f;
+    const uint32_t now = micros();
+    const uint32_t dtUs = now - tPrev;
+    tPrev = now;
+    if (vReliable) {
+        const float v = packVoltage();
+        if (v > 50.0f) vLast = v;          // una lectura a 0 no es una tensión
+    }
+    if (!iReliable || dtUs == 0 || dtUs > 1000000UL) return;
+    const double dt = dtUs * 1e-6;
+    const double i  = hall.getCurrent();   // + descarga
+    usedAs += i * dt;
+    usedWs += i * vLast * dt;
+}
+
 // Códigos de la telemetría empaquetada (393-396). Mantener igual que
 // tools/registro_pruebas/aim_a_modulos.py.
 //   T: 6 bits, 1 °C, 0..62 °C (recorta); 63 = NTC abierto/inválido.
@@ -1236,17 +1277,23 @@ void updateCanTx()
     // ruidosa): permite el balance de potencia batería ↔ motor.
     //   B0-1 corriente Hall, int16 BE, 0,1 A (+ descarga, − carga)
     //   B2-3 suma de todas las celdas, uint16 BE, 0,1 V
+    //   B4-5 Ah gastados desde el arranque, int16 BE, 0,01 Ah (neto: la regen resta)
+    //   B6-7 energía gastada desde el arranque, int16 BE, 1 Wh (= 0,001 kWh)
     long iDa = lroundf(hall.getCurrent() * 10.0f);
     if (iDa >  32767) iDa =  32767;
     if (iDa < -32768) iDa = -32768;
-    float packV = 0.0f;
-    for (int m = 0; m < NUM_MODULES; m++)
-        for (int n = 1; n <= 11; n++) packV += modCellV(m, n);
-    long vDv = lroundf(packV * 10.0f);
+    long vDv = lroundf(packVoltage() * 10.0f);
     if (vDv > 65535) vDv = 65535;
     if (vDv < 0)     vDv = 0;
-    uint16_t d18[2] = { (uint16_t)(int16_t)iDa, (uint16_t)vDv };
-    gCan->setPacket((uint32_t)18, d18, 2);
+    auto sat16 = [](double x) -> int16_t {
+        long r = lround(x);
+        return (int16_t)(r > 32767 ? 32767 : (r < -32768 ? -32768 : r));
+    };
+    const int16_t ahC = sat16(usedAs / 3600.0 * 100.0);   // 0,01 Ah
+    const int16_t wh  = sat16(usedWs / 3600.0);           // 1 Wh
+    uint16_t d18[4] = { (uint16_t)(int16_t)iDa, (uint16_t)vDv,
+                        (uint16_t)ahC, (uint16_t)wh };
+    gCan->setPacket((uint32_t)18, d18, 4);
 
     // ── ID 392 (0x188) — SOC (UINT8, %) ────────────────────────────────────
     uint8_t socv = soc.soc();
@@ -1581,6 +1628,8 @@ void printStatus()
                   hall.isOK() ? "OK" : "FALLO");
     Serial.printf("SOC: %u%% (%.1f)  [aprox: tabla OCV generica]\n",
                   soc.soc(), soc.socF());
+    Serial.printf("Gastado desde el arranque: %.2f Ah  %.3f kWh\n",
+                  usedAs / 3600.0, usedWs / 3.6e6);
     Serial.printf("FAN: %u%% (%s)\n", fan.duty(), fan.isOn() ? "ON" : "off");
     Serial.printf("Fallos: V=%d T=%d NTC=%d COMM=%d HALL=%d\n",
                   fV.confirmed(millis(), FAULT_V_MS),
