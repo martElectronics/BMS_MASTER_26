@@ -249,7 +249,7 @@ BO_ 1163 VCU_Apps: 8 VCU
 
 BO_ 1164 VCU_Brake: 8 VCU
  SG_ Brake1_pct : 7|16@0+ (0.1,0) [0|100] "%" AIM
- SG_ Brake2_pct : 23|16@0+ (0.1,0) [0|100] "%" AIM
+ SG_ Brake2_bar : 23|16@0- (0.01,0) [-327.68|327.67] "bar" AIM
  SG_ Brake1_raw : 39|16@0+ (1,0) [0|65535] "ADC" AIM
  SG_ Brake2_raw : 55|16@0+ (1,0) [0|65535] "ADC" AIM
 
@@ -329,6 +329,8 @@ CM_ SG_ 1161 VCU_SteerAngle "Angulo del VOLANTE en grados, + = izquierda (ISO 88
 CM_ SG_ 1161 VCU_SteerRaw "Cuentas ADC crudas (sobremuestreo x4). Sirven para calibrar y para ver un sensor suelto sin depender de la calibracion.";
 CM_ SG_ 1164 Brake1_pct "Desde 2026-11-02 brake1 no se lee (su entrada CH4 es ahora la direccion, BO_ 1161): sale a 0.";
 CM_ SG_ 1164 Brake1_raw "Sale a 0 desde 2026-11-02, ver Brake1_pct.";
+CM_ SG_ 1164 Brake2_bar "Presion de freno (sensor Bosch 0 261 545 053, 0-140 bar, 0,5-4,5 V). 0 = reposo del auto-cero de la VCU. Divisor de entrada 5,6k serie / 11,3k a GND (k = 0,669, BRAKE_DIVIDER_K): 23,7 cuentas/bar, reposo ~415 cuentas. El R2D usa Brake2_raw, no esta senal.";
+CM_ SG_ 1164 Brake2_raw "Cuentas del ADC del freno 2: es la que usa el R2D (freno pisado si >= reposo + 150).";
 CM_ BO_ 1165 "Velocidad de rueda DELANTERA (VCU_26, sensores Hall SNDH-H3L-G01, 22 dientes). RPM por tiempo entre dientes. 100 ms. Pulsos = de la ultima ventana de 100 ms: sirven para ver un sensor muerto o con ruido.";
 CM_ BO_ 1167 "Velocidad de las ruedas DELANTERAS (no motrices) calculada por la VCU con WHEEL_DIAMETER_MM. 100 ms (10 Hz). Izq/der rapidas en VCU_FastSpeedL/R (ID 1169, 200 Hz). Frente a INV_ERPM da el deslizamiento de las traseras.";
 CM_ BO_ 1168 "Recorrido de suspension (VCU_26, potenciometro lineal SLS130 al ADC interno). 100 ms (10 Hz). La posicion rapida va en VCU_FastSusp (ID 1169, 200 Hz).";
