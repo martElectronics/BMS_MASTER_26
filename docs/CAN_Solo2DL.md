@@ -891,10 +891,10 @@ ya ve lo aplicado en el 0x301. Al inversor no le manda nada por CAN (§20).
 | 0x48B | APPS2_pct | 2-3 | U16 | 0.1 | % | 10 | no | sensor 2 del acelerador (%) — se compara con el 1 para detectar implausibilidad |
 | 0x48B | APPS1_raw | 4-5 | U16 | 1 | ADC | 10 | no | lectura cruda del ADC del sensor 1 |
 | 0x48B | APPS2_raw | 6-7 | U16 | 1 | ADC | 10 | no | lectura cruda del ADC del sensor 2 |
-| 0x48C (1164) | Brake1_pct | 0-1 | U16 | 0.1 | % | 10 | no | sensor 1 de freno (%, TODO: hoy siempre 0) |
-| 0x48C | Brake2_pct | 2-3 | U16 | 0.1 | % | 10 | no | sensor 2 de freno (%, TODO: hoy siempre 0) |
+| 0x48C (1164) | Brake1_pct | 0-1 | U16 | 0.1 | % | 10 | no | sensor 1 de freno: siempre 0 (su entrada es ahora la dirección) |
+| 0x48C | **Brake2_bar** | 2-3 | **S16** | 0.01 | **bar** | 10 | no | **presión de freno** (Bosch 0 261 545 053, 0–140 bar). 0 = reposo del auto-cero. Antes `Brake2_pct`, que salía siempre a 0 |
 | 0x48C | Brake1_raw | 4-5 | U16 | 1 | ADC | 10 | no | lectura cruda del ADC del sensor 1 |
-| 0x48C | Brake2_raw | 6-7 | U16 | 1 | ADC | 10 | no | lectura cruda del ADC del sensor 2 |
+| 0x48C | Brake2_raw | 6-7 | U16 | 1 | ADC | 10 | no | lectura cruda del ADC del sensor 2: **la que usa el R2D** (pisado si ≥ reposo + 150 cuentas, ~6–7 bar) |
 | 0x48E (1166) | VCU_Vbat | 0-1 | U16 | 1 | — | 10 | no | tensión de batería de baja (ADC crudo, TODO escalar a V) |
 | 0x48E | VCU_SDC | 2 | U8 | 1 | — | 10 | sí | SDC presente (visto por la VCU) |
 | 0x48E | VCU_Start | 3 | U8 | 1 | — | 10 | sí | pulsador Start |
@@ -1045,6 +1045,7 @@ Pierburg CWA y los 2 ventiladores Delta según temperatura del inversor
 - **2026-11-15** — trama rápida **0x491** (`VCU_Fast*`) a 200 Hz con suspensión, ruedas y
   volante; 0x489/0x48F/0x490 vuelven a 10 Hz (diagnóstico). Misma carga de bus.
 - **2026-11-20** — ID 18: + `BMS_AhUsed` y `BMS_kWhUsed` (gastado desde el arranque del BMS), DLC 4 → 8.
+- **2026-11-21** — 0x48C: `Brake2_pct` (siempre 0) → `Brake2_bar`, presión de freno en 0,01 bar con signo.
 
 Si cambia alguna trama, actualiza primero `docs/BMS_MART.dbc` (y
 valídalo con `cantools`) y luego este doc — nunca al revés.
