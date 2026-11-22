@@ -76,22 +76,24 @@
 // como FALLO de OV. En su lugar: cuando vMax (cargando) se mantiene ≥
 // TAPER_VMAX_V, la corriente se divide entre 2; al bajar la I baja la caída I·R
 // (~7 mV/A por paralelo, medido 12-11-2026) y vMax se separa del umbral. Si el
-// siguiente escalón quedaría < TAPER_END_A, la carga TERMINA (parada normal, sin
-// fallo). Con 7 A: 7 → 3,5 → 1,75 → 0,875 → fin.
+// siguiente escalón quedaría por debajo del mínimo del OBC, se usa el mínimo
+// (TAPER_END_A); si ya se está en el mínimo, la carga TERMINA (parada normal,
+// sin fallo). Con 7 A: 7 → 3,5 → 2,5 → fin.
 //
 // ⚠ El OBC NO baja en marcha por debajo de ~3 A (14-11-2026: de 3,5 a 1,75 A el
-// Hall cayó a 0 en 1 min), pero SÍ carga si ARRANCA a esa corriente (18-11-2026:
-// 2 A vistos en el Hall y en el OBC). Por eso los escalones por debajo de
-// TAPER_RESTART_BELOW_A PARAN el OBC TAPER_PAUSE_MS y lo rearrancan a la nueva
-// corriente. Si aun así no llega corriente (Hall < la mitad de la pedida durante
-// TAPER_NOFLOW_MS), se da la carga por terminada en vez de quedarse esperando.
+// Hall cayó a 0 en 1 min) y NO da menos de 2,5 A aunque arranque a esa corriente
+// (comprobado el 22-11-2026: a 2 A no carga, a 2,5 A sí). Por eso los escalones
+// por debajo de TAPER_RESTART_BELOW_A PARAN el OBC TAPER_PAUSE_MS y lo rearrancan
+// a la nueva corriente, nunca por debajo de TAPER_END_A. Si aun así no llega
+// corriente (Hall < la mitad de la pedida durante TAPER_NOFLOW_MS), se da la carga
+// por terminada en vez de quedarse esperando.
 //
 // ⚠ Margen al corte duro (CELL_VMAX_HARD_V = 4,20): 5 mV. Si alguna carga acaba
 // en FALLO de OV en vez de en "FIN DE CARGA", bajar TAPER_VMAX_V a 4,19.
 #define TAPER_VMAX_V         4.195f    ///< vMax que dispara el siguiente escalón (5 mV bajo el corte duro)
 #define TAPER_HOLD_MS        3000UL    ///< vMax debe mantenerse ≥ umbral este tiempo (filtra ruido)
 #define TAPER_SETTLE_MS      15000UL   ///< mínimo entre escalones (rampa del OBC + asentamiento de V)
-#define TAPER_END_A          0.8f      ///< si el siguiente escalón queda por debajo → fin de carga
+#define TAPER_END_A          2.5f      ///< corriente mínima que da el OBC: último escalón (por debajo no carga)
 #define TAPER_RESTART_BELOW_A 3.0f     ///< por debajo, el escalón PARA y REARRANCA el OBC (no baja en marcha)
 #define TAPER_PAUSE_MS       4000UL    ///< parada antes de rearrancar (≥ 2 Message 1 con control=1)
 #define TAPER_NOFLOW_MS      60000UL   ///< tras rearrancar, sin corriente (< mitad de la pedida) este tiempo → fin
@@ -837,10 +839,13 @@ void updateTaper(unsigned long now)
     if (now - tHigh < TAPER_HOLD_MS) return;
     if (taperSteps > 0 && now - tStep < TAPER_SETTLE_MS) return;
 
-    const float next = chgCmdA() * 0.5f;
+    // La mitad, pero nunca por debajo del mínimo del OBC; si ya se está en el
+    // mínimo (o la corriente pedida es menor), no hay más escalones: fin.
+    const float cur  = chgCmdA();
+    const float next = fmaxf(cur * 0.5f, TAPER_END_A);
     tStep = now;
     high = false;
-    if (next < TAPER_END_A) {
+    if (cur <= TAPER_END_A + 0.05f) {
         chargeRequested = false;
         chargeDone = true;
         Serial.printf("\n[CHG] FIN DE CARGA: vMax=%.3f V con %.2f A (%u escalones). Parada normal, sin fallo.\n",
@@ -957,7 +962,7 @@ void printChgStatus()
                   chargeRequested ? "SI" : "NO", chgCmdA(), chgCurrentA,
                   charging ? "SI" : "NO", charging ? 0 : 1);
     if (taperOn)
-        Serial.printf("Escalones: %u (umbral vMax %.3f V, fin < %.1f A)%s\n",
+        Serial.printf("Escalones: %u (umbral vMax %.3f V, ultimo escalon %.1f A)%s\n",
                       taperSteps, TAPER_VMAX_V, TAPER_END_A,
                       chargeDone ? "  -> CARGA TERMINADA" : "");
     else
