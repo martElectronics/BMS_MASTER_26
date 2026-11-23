@@ -107,6 +107,23 @@ static double usedWs = 0.0;    ///< W·s gastados (neto)
 static float  packVoltage();
 static void   updateUsedEnergy(bool vReliable, bool iReliable);
 
+// ── Margen de energía para el piloto (ID 19) ────────────────────────────────
+// Distancia desde el arranque con la velocidad de las ruedas DELANTERAS que manda
+// la VCU (0x491 a 200 Hz o, si no llega, 0x48F a 10 Hz) y
+//   margen [Ah] = objetivo [Ah/km] × km recorridos − Ah gastados
+// Positivo = le sobra energía para el ritmo previsto; negativo = aflojar.
+// Objetivo por defecto para terminar 22 km con el pack actual (~12,8 Ah útiles
+// partiendo de ~4,12 V la celda más baja); se cambia por serie con 'e<valor>'.
+#define AH_TARGET_PER_KM_DEFAULT  0.58f
+#define VCU_SPEED_STALE_MS        2000UL   ///< sin velocidad de la VCU este tiempo → se asume parado
+static float    ahTargetPerKm = AH_TARGET_PER_KM_DEFAULT;
+static double   distM         = 0.0;       ///< metros desde el arranque
+static float    vcuSpeedKmh   = 0.0f;      ///< última velocidad recibida (media delanteras)
+static uint32_t tVcuSpeed     = 0;         ///< millis() de esa recepción (0 = nunca)
+static void     canRxSetupVcuSpeed();
+static void     updateDistance();
+static float    ahMargin()  { return (float)(ahTargetPerKm * distM / 1000.0 - usedAs / 3600.0); }
+
 static const DashConfig dashCfg = {
     NUM_MODULES, 11, 9,
     modCellV, modCellT,
@@ -407,7 +424,11 @@ void setup()
         gCan->setPacketTimer(13, 500);             // ID 13 diagnóstico
         gCan->setPacketTimer(14, 500);             // ID 14 tiempos/contadores de comms
         gCan->setPacketTimer(15, 100);             // ID 15 BMS_DEBUG: 100 ms (a 500 un episodio corto cae entre tramas)
-        Serial.println(F("[CAN] FDCAN listo (125k, IDs 11-18, 386-392)."));
+        // ID 19 margen de energía: SIN timer explícito send() lo emitiría cada loop
+        // (ver la trampa de arriba). 100 ms como el 18.
+        gCan->setPacketTimer(19, 100);
+        canRxSetupVcuSpeed();                      // RX: solo la velocidad de la VCU (0x491/0x48F)
+        Serial.println(F("[CAN] FDCAN listo (125k, IDs 11-19, 386-392; RX 0x48F/0x491)."));
     }
 
     printHelp();
@@ -438,6 +459,7 @@ void loop()
     bool iReliable = hall.isOK();   // no integrar corriente railada si el Hall falla
     soc.update(hall.getCurrent(), bms.getMinVoltage(), vReliable, iReliable, millis());   // coulomb + OCV
     updateUsedEnergy(vReliable, iReliable);   // Ah y kWh gastados desde el arranque (ID 18)
+    updateDistance();                         // km con la velocidad de la VCU → margen (ID 19)
     // Fail-safe de refrigeración: T no fresca/fiable (lectura T fallida,
     // comms o NTC abierto) → ventiladores 100 % (no fiarse de Tmax rancia).
     bool fanFS = (lastResT != BQResult::OK) || fComm.cond || fNtc.cond;
@@ -872,6 +894,65 @@ static void updateUsedEnergy(bool vReliable, bool iReliable)
     usedWs += i * vLast * dt;
 }
 
+// Filtro por HARDWARE del FDCAN: solo entran las dos tramas de velocidad de la
+// VCU. El BMS no necesita nada más del bus, y con el filtro abierto (acepta todo)
+// la FIFO de RX (3 huecos) se llenaría con las ~600 tramas/s del resto mientras
+// el loop está leyendo los BQ, y la de la VCU se perdería casi siempre.
+// La recuperación de bus-off (rebootBusFromError) no toca los filtros.
+static void canRxSetupVcuSpeed()
+{
+#if defined(STM32G4xx)
+    FDCAN_HandleTypeDef* h = &gCan->hfdcan;
+    HAL_FDCAN_Stop(h);
+    FDCAN_FilterTypeDef f = {};
+    f.IdType       = FDCAN_STANDARD_ID;
+    f.FilterIndex  = 0;
+    f.FilterType   = FDCAN_FILTER_DUAL;        // acepta FilterID1 O FilterID2
+    f.FilterConfig = FDCAN_FILTER_TO_RXFIFO0;
+    f.FilterID1    = 0x491;                    // VCU rápida: susp + ruedas + volante (200 Hz)
+    f.FilterID2    = 0x48F;                    // VCU velocidad izq/der/media (10 Hz)
+    HAL_FDCAN_ConfigFilter(h, &f);
+    HAL_FDCAN_ConfigGlobalFilter(h, FDCAN_REJECT, FDCAN_REJECT,
+                                 FDCAN_REJECT_REMOTE, FDCAN_REJECT_REMOTE);
+    HAL_FDCAN_Start(h);
+#endif
+    const unsigned long ids[] = {0x48F, 0x491};
+    gCan->setFilters(ids, 2);                  // y en software, por si acaso
+}
+
+// Vacía la FIFO de RX, toma la velocidad más reciente de la VCU e integra la
+// distancia. Sin velocidad de la VCU durante VCU_SPEED_STALE_MS se asume 0 (VCU
+// apagada o cable suelto): mejor quedarse corto de km que inventarlos.
+static void updateDistance()
+{
+    static uint32_t tPrev = 0;
+    const uint32_t now = millis();
+    if (gCanOk) {
+#if defined(STM32G4xx)
+        for (uint8_t k = 0; k < 8 && HAL_FDCAN_GetRxFifoFillLevel(&gCan->hfdcan, FDCAN_RX_FIFO0) > 0; ++k)
+            gCan->receive();
+#endif
+        // Se leen (y consumen) las dos siempre, para no usar luego una vieja.
+        uint8_t f[8], s[8];
+        const bool gotFast = gCan->getPacket(0x491, f, 8, false);   // b2-3 izq, b4-5 der (km/h x100)
+        const bool gotSlow = gCan->getPacket(0x48F, s, 8, false);   // b4-5 media (km/h x100)
+        if (gotFast) {
+            const float l = ((uint16_t)f[2] << 8 | f[3]) * 0.01f;
+            const float r = ((uint16_t)f[4] << 8 | f[5]) * 0.01f;
+            vcuSpeedKmh = 0.5f * (l + r);
+            tVcuSpeed = now ? now : 1;
+        } else if (gotSlow) {
+            vcuSpeedKmh = ((uint16_t)s[4] << 8 | s[5]) * 0.01f;
+            tVcuSpeed = now ? now : 1;
+        }
+    }
+    const bool fresh = tVcuSpeed != 0 && (now - tVcuSpeed) < VCU_SPEED_STALE_MS;
+    const uint32_t dtMs = now - tPrev;
+    tPrev = now;
+    if (fresh && dtMs > 0 && dtMs < 1000)
+        distM += (double)vcuSpeedKmh / 3.6 * dtMs * 1e-3;
+}
+
 // ============================================================================
 //  Flags de debug del CAN ID 15
 // ============================================================================
@@ -1137,6 +1218,20 @@ void updateCanTx()
                         (uint16_t)ahC, (uint16_t)wh };
     gCan->setPacket((uint32_t)18, d18, 4);
 
+    // ── ID 19 (0x13) — margen de energía para el piloto ─────────────────────
+    //   B0-1 margen, int16 BE, 0,01 Ah (+ sobra / − aflojar) = objetivo × km − Ah
+    //   B2-3 distancia desde el arranque, uint16 BE, 0,001 km (hasta 65,5 km)
+    //   B4-5 consumo medio, uint16 BE, 0,001 Ah/km (0 hasta 100 m recorridos)
+    //   B6-7 objetivo, uint16 BE, 0,001 Ah/km
+    {
+        const double km = distM / 1000.0;
+        auto u16 = [](double x) -> uint16_t { long r = lround(x); return (uint16_t)(r < 0 ? 0 : (r > 65535 ? 65535 : r)); };
+        const double ahPerKm = (km > 0.1) ? (usedAs / 3600.0) / km : 0.0;
+        uint16_t d19[4] = { (uint16_t)sat16(ahMargin() * 100.0),
+                            u16(km * 1000.0), u16(ahPerKm * 1000.0), u16(ahTargetPerKm * 1000.0) };
+        gCan->setPacket((uint32_t)19, d19, 4);
+    }
+
     // ── ID 392 (0x188) — SOC (UINT8, %) ────────────────────────────────────
     uint8_t socv = soc.soc();
     gCan->setPacket((uint32_t)392, &socv, 1);
@@ -1229,6 +1324,24 @@ void handleSerial()
 {
     if (!Serial.available()) return;
     char cmd = Serial.read();
+
+    // 'e'            → muestra el margen de energía
+    // 'e0.58' / 'e,0.58' → fija el objetivo de consumo (Ah/km) del margen (ID 19)
+    if (cmd == 'e') {
+        delay(20);                                  // que llegue el resto de la línea
+        String s;                                   // sin readStringUntil: podría bloquear 1 s
+        while (Serial.available() && s.length() < 16) s += (char)Serial.read();
+        while (Serial.available()) Serial.read();
+        s.replace(",", ""); s.trim();
+        if (s.length()) {
+            const float v = s.toFloat();
+            if (v >= 0.1f && v <= 2.0f) ahTargetPerKm = v;
+            else Serial.println(F("[E] objetivo fuera de 0,1..2,0 Ah/km: no se cambia"));
+        }
+        Serial.printf("[E] %.3f km, %.2f Ah gastados, objetivo %.3f Ah/km -> MARGEN %+.2f Ah\n",
+                      distM / 1000.0, usedAs / 3600.0, ahTargetPerKm, ahMargin());
+        return;
+    }
     while (Serial.available()) Serial.read();
 
     switch (cmd) {
@@ -1383,6 +1496,7 @@ void printHelp()
     Serial.println(F("  t      temperaturas de todos los NTC por placa"));
     Serial.println(F("  g      CSV por modulo (registro de modulos -> Google Sheet)"));
     Serial.println(F("  a      estado del Hall (corriente por canal, offsets)"));
+    Serial.println(F("  e      margen de energia (ID 19); e0.58 fija el objetivo en Ah/km"));
     Serial.println(F("  f      registros de fallo de los BQ (solo placas con fallo)"));
     Serial.println(F("  c      limpiar los fallos de los BQ"));
     Serial.println(F("  i      re-inicializar la cadena de BQ"));
@@ -1429,6 +1543,10 @@ void printStatus()
                   soc.soc(), soc.socF());
     Serial.printf("Gastado desde el arranque: %.2f Ah  %.3f kWh\n",
                   usedAs / 3600.0, usedWs / 3.6e6);
+    Serial.printf("Distancia %.3f km (VCU %.1f km/h, %s)  objetivo %.3f Ah/km  MARGEN %+.2f Ah\n",
+                  distM / 1000.0, vcuSpeedKmh,
+                  (tVcuSpeed && millis() - tVcuSpeed < VCU_SPEED_STALE_MS) ? "recibiendo" : "SIN DATO",
+                  ahTargetPerKm, ahMargin());
     Serial.printf("FAN: %u%% (%s)\n", fan.duty(), fan.isOn() ? "ON" : "off");
     Serial.printf("Fallos: V=%d T=%d NTC=%d COMM=%d HALL=%d\n",
                   fV.confirmed(millis(), FAULT_V_MS),

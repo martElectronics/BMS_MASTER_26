@@ -125,6 +125,12 @@ BO_ 18 BMS_PackPower: 8 BMS
  SG_ BMS_AhUsed : 39|16@0- (0.01,0) [-327.68|327.67] "Ah" AIM
  SG_ BMS_kWhUsed : 55|16@0- (0.001,0) [-32.768|32.767] "kWh" AIM
 
+BO_ 19 BMS_Energy: 8 BMS
+ SG_ BMS_AhMargin : 7|16@0- (0.01,0) [-327.68|327.67] "Ah" AIM
+ SG_ BMS_DistKm : 23|16@0+ (0.001,0) [0|65.535] "km" AIM
+ SG_ BMS_AhPerKm : 39|16@0+ (0.001,0) [0|65.535] "Ah/km" AIM
+ SG_ BMS_AhTarget : 55|16@0+ (0.001,0) [0|65.535] "Ah/km" AIM
+
 BO_ 386 BMS_ModV1: 8 BMS
  SG_ Mod_IDmod_386 : 7|16@0+ (1,0) [0|65535] "" AIM
  SG_ Mod_V1 : 23|16@0+ (0.001,0) [0|65.535] "V" AIM
@@ -300,6 +306,11 @@ CM_ SG_ 15 BMS_Fault "Short AiM: BFLT. OR global de fallo confirmado (no-latchin
 CM_ SG_ 15 FirstFault "Short AiM: FFLT. Enum: 0=none 1=V 2=T 3=NTC 4=Comm 5=Hall 6=NoInit.";
 CM_ SG_ 15 Pin_SDC_3V3 "Short AiM: PSDC.";
 
+CM_ BO_ 19 "Margen de energia para el piloto (ID 0x13, 100 ms). Distancia desde el arranque del BMS con la velocidad de las ruedas delanteras de la VCU (0x491 o 0x48F). Margen = objetivo x km - Ah gastados: + sobra, - aflojar. Objetivo ajustable por serie (e0.58).";
+CM_ SG_ 19 BMS_AhMargin "Ah que sobran (+) o faltan (-) para el ritmo objetivo. Ponerlo en el dash.";
+CM_ SG_ 19 BMS_DistKm "Km desde el arranque del BMS (vuelve a 0 al dar baja tension). Sin velocidad de la VCU 2 s se asume parado.";
+CM_ SG_ 19 BMS_AhPerKm "Consumo medio desde el arranque (0 hasta 100 m).";
+CM_ SG_ 19 BMS_AhTarget "Objetivo de consumo con el que se calcula el margen.";
 CM_ BO_ 18 "Corriente y tension del pack medidas por el BMS (ID 0x12, 100ms). Medida independiente del inversor para el balance de potencia.";
 CM_ SG_ 18 BMS_PackCurrent "Sensor Hall (DHAB) del BMS. + descarga, - carga.";
 CM_ SG_ 18 BMS_PackVoltage "Suma de las tensiones de todas las celdas leidas por los BQ.";
