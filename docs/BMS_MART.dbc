@@ -242,6 +242,7 @@ BO_ 1160 VCU_Diag: 8 VCU
  SG_ VCU_FaultCause : 7|8@0+ (1,0) [0|7] "" AIM
  SG_ VCU_ResetCause : 15|8@0+ (1,0) [0|6] "" AIM
  SG_ VCU_Heartbeat : 23|16@0+ (1,0) [0|65535] "" AIM
+ SG_ VCU_BusOffCnt : 39|16@0+ (1,0) [0|65535] "" AIM
 
 BO_ 1161 VCU_Steering: 8 VCU
  SG_ VCU_SteerAngle : 7|16@0- (0.1,0) [-90|90] "deg" AIM
@@ -357,6 +358,7 @@ CM_ SG_ 1166 VCU_R2D "Logica positiva (1=R2D activo) aunque el pin de salida rea
 CM_ SG_ 1166 VCU_AppsSt "0=NORMAL 1=IMPL 2=PENDING.";
 CM_ SG_ 1166 VCU_Bypass "Ver comentario del mensaje BO_ 1166.";
 
+CM_ SG_ 1160 VCU_BusOffCnt "Episodios de bus-off de la VCU desde el arranque. La VCU vuelve al bus en milisegundos (comprueba cada 5 ms). Si sube con el motor tirando de corriente, es interferencia en el CAN de la VCU.";
 VAL_ 1160 VCU_FaultCause 0 "OK" 1 "WaitStartBrake" 2 "SDCopen" 3 "AppsImplausible" 6 "BrakeFault" 7 "BYPASS_BANCO" ;
 VAL_ 1160 VCU_ResetCause 0 "unknown" 1 "PowerBOR" 2 "NRST" 3 "SW" 4 "IWDG" 5 "WWDG" 6 "lowpower" ;
 VAL_ 1166 VCU_AppsSt 0 "NORMAL" 1 "IMPL" 2 "PENDING" ;

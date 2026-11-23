@@ -877,6 +877,7 @@ ya ve lo aplicado en el 0x301. Al inversor no le manda nada por CAN (§20).
 | 0x488 (1160) | VCU_FaultCause | 0 | U8 | 1 | — | 10 | sí + enc. | causa de no-R2D, ver tabla |
 | 0x488 | VCU_ResetCause | 1 | U8 | 1 | — | 10 | sí + enc. | 0=desconocido 1=power/BOR 2=NRST 3=SW 4=IWDG 5=WWDG 6=lowpwr |
 | 0x488 | VCU_Heartbeat | 2-3 | U16 | 1 | — | 10 | sí | cuenta de loop; **se congela si el firmware se cuelga** |
+| 0x488 | VCU_BusOffCnt | 4-5 | U16 | 1 | — | 10 | sí | episodios de bus-off de la VCU desde el arranque. Si sube con el motor tirando de corriente = interferencia en su CAN. Vuelve al bus en ms (comprueba cada 5 ms) |
 | 0x489 (1161) | VCU_SteerAngle | 0-1 | S16 | 0.1 | deg | 10 | no | ángulo del volante (el de 200 Hz es `VCU_FastSteer`), + = izquierda; depende de la calibración de 3 puntos (opción 24) |
 | 0x489 | VCU_SteerRaw | 2-3 | U16 | 1 | ADC | 10 | no | cuentas ADC crudas del sensor de dirección |
 | 0x48B (1163) | APPS1_pct | 0-1 | U16 | 0.1 | % | 10 | no | sensor 1 del acelerador (%) |
@@ -1037,6 +1038,7 @@ Pierburg CWA y los 2 ventiladores Delta según temperatura del inversor
 - **2026-11-20** — ID 18: + `BMS_AhUsed` y `BMS_kWhUsed` (gastado desde el arranque del BMS), DLC 4 → 8.
 - **2026-11-21** — 0x48C: `Brake2_pct` (siempre 0) → `Brake2_bar`, presión de freno en 0,01 bar con signo.
 - **2026-11-23** — nuevo ID 19 (0x13): margen de energía para el piloto (§10c). El BMS recibe 0x48F/0x491 de la VCU.
+- **2026-11-23** — 0x488 b4-5: `VCU_BusOffCnt`. La VCU comprueba el bus-off cada 5 ms (antes 1 s).
 
 Si cambia alguna trama, actualiza primero `docs/BMS_MART.dbc` (y
 valídalo con `cantools`) y luego este doc — nunca al revés.
