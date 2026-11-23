@@ -157,6 +157,7 @@ El Start Bit no se repite en las tablas: lo trae el import (regla de conversión
 | 16 | 0x10 | 6 | 100 ms | Contadores de fallo por causa (6×UINT8) — *forense* |
 | **17** | **0x11** | **8** | **100 ms** | **STICKY SDC/TSON (latcheado) + contador de vida y uptime** |
 | **18** | **0x12** | **8** | **100 ms** | **Corriente (Hall) y tensión del pack medidas por el BMS + Ah y kWh gastados** |
+| **19** | **0x13** | **8** | **100 ms** | **Margen de energía para el piloto, km recorridos, consumo medio y objetivo** |
 | 386 | 0x182 | 8 | 557 ms paginado | IDmod, V1, V2, V3 — *forense* |
 | 387 | 0x183 | 8 | 556 ms paginado | IDmod, V4, V5, V6 — *forense* |
 | 388 | 0x184 | 8 | 556 ms paginado | IDmod, V7, V8, V9 — *forense* |
@@ -561,6 +562,45 @@ Bytes 6-7: energía gastada   (int16 BE, 1 Wh = 0,001 kWh) — desde el arranque
 > integran mientras el Hall está en fallo. Referencia para endurance: con el
 > pack actual hay ~14,4 Ah útiles; en el cambio de piloto conviene haber gastado
 > ≤ 6,6 Ah. Por el puerto serie salen en el volcado de estado (`d`).
+
+---
+
+## 10c. ID 19 (0x13) — Margen de energía para el piloto · 8 bytes · 100 ms
+
+Para que el piloto sepa en endurance si tiene que aflojar. El BMS suma la
+**distancia desde su arranque** con la velocidad de las ruedas delanteras que
+manda la VCU (0x491 a 200 Hz; si no llega, 0x48F a 10 Hz) y calcula:
+
+```latex
+	ext{margen [Ah]} = 	ext{objetivo [Ah/km]} 	imes 	ext{km} - 	ext{Ah gastados}
+```
+
+**Positivo = va bien (le sobra); negativo = aflojar.** El objetivo por defecto es
+**0,58 Ah/km** (terminar 22 km con ~12,8 Ah útiles, pack actual) y se cambia por
+el puerto serie del BMS con `e0.58` (`e` solo muestra el estado). Todo vuelve a 0
+en cada arranque del BMS, como `BMS_AhUsed`.
+
+```
+Bytes 0-1: margen          (int16 BE, 0,01 Ah)   — + sobra / − aflojar
+Bytes 2-3: distancia       (uint16 BE, 0,001 km) — desde el arranque (hasta 65,5 km)
+Bytes 4-5: consumo medio   (uint16 BE, 0,001 Ah/km) — 0 hasta 100 m
+Bytes 6-7: objetivo        (uint16 BE, 0,001 Ah/km)
+```
+
+| Canal | Short | Byte | Formato | Gain | Ud. | Hz | Stepped | Descripción |
+|---|---|---|---|---|---|---|---|---|
+| BMS_AhMargin | AHMG | 0-1 | S16 | 0.01 | Ah | 10 | no | **margen para el dash**: + va bien, − aflojar |
+| BMS_DistKm | DIST | 2-3 | U16 | 0.001 | km | 10 | no | km desde el arranque del BMS |
+| BMS_AhPerKm | AHKM | 4-5 | U16 | 0.001 | Ah/km | 10 | no | consumo medio desde el arranque |
+| BMS_AhTarget | AHTG | 6-7 | U16 | 0.001 | Ah/km | 10 | no | objetivo con el que se calcula el margen |
+
+> Para recibir la velocidad, el BMS configura el filtro por hardware del FDCAN
+> para aceptar **solo** 0x48F y 0x491 (con el filtro abierto, su FIFO de 3
+> huecos se llenaría con el resto del bus mientras lee los BQ). Si la VCU deja de
+> mandar velocidad más de 2 s, se asume parado: la distancia se queda corta,
+> nunca inventada. Con corriente alta la VCU pierde tramas (EMI), pero el BMS
+> mantiene la última velocidad, así que el error es pequeño. Comprobar en la
+> primera salida que `BMS_DistKm` coincide con la distancia del GPS.
 
 ---
 
@@ -1046,6 +1086,7 @@ Pierburg CWA y los 2 ventiladores Delta según temperatura del inversor
   volante; 0x489/0x48F/0x490 vuelven a 10 Hz (diagnóstico). Misma carga de bus.
 - **2026-11-20** — ID 18: + `BMS_AhUsed` y `BMS_kWhUsed` (gastado desde el arranque del BMS), DLC 4 → 8.
 - **2026-11-21** — 0x48C: `Brake2_pct` (siempre 0) → `Brake2_bar`, presión de freno en 0,01 bar con signo.
+- **2026-11-23** — nuevo ID 19 (0x13): margen de energía para el piloto (§10c). El BMS recibe 0x48F/0x491 de la VCU.
 
 Si cambia alguna trama, actualiza primero `docs/BMS_MART.dbc` (y
 valídalo con `cantools`) y luego este doc — nunca al revés.
