@@ -97,13 +97,15 @@
 #define TAPER_RESTART_BELOW_A 3.0f     ///< por debajo, el escalón PARA y REARRANCA el OBC (no baja en marcha)
 #define TAPER_PAUSE_MS       4000UL    ///< parada antes de rearrancar (≥ 2 Message 1 con control=1)
 #define TAPER_NOFLOW_MS      60000UL   ///< tras rearrancar, sin corriente (< mitad de la pedida) este tiempo → fin
-// Corte DURO por celda BAJA. Mismo umbral que main.cpp (CELL_UV_V) y que el
-// registro UV_THRESH del BQ (0x53 = 2.8 V). Cubre dos escenarios:
+// Corte DURO por celda BAJA: el mínimo del fabricante (2.5 V), por DEBAJO del UV
+// de carrera de main.cpp (2.6 V con carga) para poder cargar un pack que ha
+// terminado una endurance a fondo (en reposo la celda sube). El registro
+// UV_THRESH del BQ está en 2.6 V (0x4B) y solo se usa para diagnóstico. Cubre:
 //   · celda realmente descargada → no se carga a 3 A un pack por debajo de UV;
 //   · cable de sense abierto / conector suelto → el canal lee ~0 V o NEGATIVO,
 //     así que la medida de esa celda es falsa y no se puede garantizar su OV.
 // Sin este chequeo, un Vmin de -0.889 V dejaba BMS_OK en HIGH indefinidamente.
-#define CELL_VMIN_HARD_V     2.8f       ///< ⚠ corte DURO por celda baja / sense abierto
+#define CELL_VMIN_HARD_V     2.5f       ///< ⚠ corte DURO por celda baja / sense abierto (mín. del fabricante)
 #define CELL_TMAX_CHG_C      45.0f      ///< ⚠ T máx para cargar (el FW antiguo usaba 40)
 #define CELL_TMIN_CHG_C      0.0f       ///< ⚠ T mín para cargar (Li-ion NO carga en frío)
 

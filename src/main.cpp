@@ -135,15 +135,18 @@ static TelemetryDashboard dash(Serial, bms, hall, soc, fan, dashCfg);
 //  UMBRALES Y TIEMPOS
 // ============================================================================
 // ✓ Confirmado contra datasheet Samsung INR21700-40T (rev. 2026-05-20):
-//   UV 2.80 V — margen sobre el 2.50 V mín. del datasheet (preserva vida útil
-//             y deja reserva para el debounce de 500 ms).
+//   UV 2.60 V — (antes 2.80) 100 mV sobre el 2.50 V mín. del datasheet. El
+//             corte mira la tensión CON CARGA: con 2.80 V un acelerón al final
+//             (caída I·R ~0,3 V a 45 A en el paralelo débil) paraba el coche con
+//             la celda aún a ~3,1 V en reposo. Los 100 mV cubren el error del
+//             BQ y lo que baje durante el debounce. (2026-11-27)
 //   OV 4.20 V — estricto al máx. del datasheet (decisión del equipo:
 //             priorizar conservadurismo frente a falsos OV al final de carga).
 //   UT -20 °C — mín. descarga del datasheet; en pista funciona también como
 //             detector de NTC roto/desconectado (lectura espuria muy baja).
 //   OT  60 °C — coincide con FS EV5.8.4 y máx. del datasheet. Fans saturan
 //             al 100 % a 50 °C → 10 °C de margen real antes del trip.
-#define CELL_UV_V      2.8f     ///< Undervoltage (V)
+#define CELL_UV_V      2.6f     ///< Undervoltage (V), con carga. Fabricante: 2.5 V
 #define CELL_OV_V      4.2f     ///< Overvoltage (V)
 #define CELL_UT_C    -20.0f     ///< Undertemperature (°C)
 #define CELL_OT_C     60.0f     ///< Overtemperature (°C) — EV5.8.4: ≤60
