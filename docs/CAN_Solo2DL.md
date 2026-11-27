@@ -389,7 +389,7 @@ B7: causa del último reset
 | Hall_Noisy | HNOI | 1 | bit | 1 | — | 10 | sí | EMI / ΔI extremo |
 | Hall_OverI | HOVI | 1 | bit | 1 | — | 10 | sí | Sobre-I FS (>500 A desc / <−500 A carga; con estos umbrales en la práctica no salta nunca) |
 | Hall_AdcSat | HSAT | 1 | bit | 1 | — | 10 | sí | ADC saturado |
-| V_UV_now | NUV_ | 2 | bit | 1 | — | 10 | sí | minV < 2.80 V (snapshot, sin debounce) |
+| V_UV_now | NUV_ | 2 | bit | 1 | — | 10 | sí | minV < 2.60 V (snapshot, sin debounce; antes 2.80) |
 | V_OV_now | NOV_ | 2 | bit | 1 | — | 10 | sí | maxV > 4.20 V (snapshot, sin debounce) |
 | T_UT_now | NUT_ | 2 | bit | 1 | — | 10 | sí | minT < −20 °C (snapshot, sin debounce) |
 | T_OT_now | NOT_ | 2 | bit | 1 | — | 10 | sí | maxT > 60 °C (snapshot, sin debounce) |

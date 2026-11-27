@@ -275,7 +275,7 @@ struct BQSafetyLimits {
 
 // ── Protección hardware de celda (comparadores analógicos) ───────────────────
 #define OVUV_CTRL               0x0029  ///< Habilita los comparadores OV/UV por celda (bits 0-5)
-#define UV_THRESH               0x002A  ///< Umbral de undervoltage (0x53 = 2.8V)
+#define UV_THRESH               0x002A  ///< Umbral de undervoltage (0x4B = 2.6V; 0,7 V + 25 mV × (código+1))
 #define OV_THRESH               0x002B  ///< Umbral de overvoltage (0x5B = 4.3V)
 #define OTUT_CTRL               0x002C  ///< Habilita los comparadores OT/UT por GPIO
 #define OTUT_THRESH             0x002D  ///< Umbral de OT/UT en porcentaje de TSREF
@@ -580,7 +580,7 @@ public:
      *   4. Si autoadressing OK, llama a _initDevices():
      *      - Enmascara todos los fallos residuales
      *      - Configura ADC de celda y GPIO
-     *      - Configura umbrales UV (2.8V) y OV (4.3V)
+     *      - Configura umbrales UV (2.6V) y OV (4.3V)
      *      - Inicializa registros de balanceo (CB_CONFIG=0xDC, timers=0)
      *
      * @param keepBmsOk  false (default, arranque en FRÍO): fuerza BMS_OK a LOW

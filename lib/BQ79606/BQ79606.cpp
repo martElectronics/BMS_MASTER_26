@@ -1046,7 +1046,9 @@ void BQ79606::_initDevices()
     // ADC de celdas
     writeReg(0, CELL_ADC_CTRL,  0x3F, 1, FRMWRT_ALL_NR);
     writeReg(0, OVUV_CTRL,      0x3F, 1, FRMWRT_ALL_NR);
-    writeReg(0, UV_THRESH,      0x53, 1, FRMWRT_ALL_NR); // 2.8V
+    // UV = 0,7 V + 25 mV × (código + 1) (datasheet 8.6.1.44; 0x53 = 2.8 V, 0x5B en
+    // OV con base 2,0 V = 4.3 V). 0x4B = 2.6 V = CELL_UV_V de main.cpp. Solo diagnóstico.
+    writeReg(0, UV_THRESH,      0x4B, 1, FRMWRT_ALL_NR); // 2.6V
     writeReg(0, OV_THRESH,      0x5B, 1, FRMWRT_ALL_NR); // 4.3V
     writeReg(0, GPIO_ADC_CONF,  0x00, 1, FRMWRT_ALL_NR);
 
