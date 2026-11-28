@@ -124,6 +124,10 @@ inline bool bqNtcIgnored(uint8_t board, uint8_t ntc)
 static constexpr float BQ_NTC_OPEN_C = -1000.0f;  ///< Centinela: NTC configurado pero abierto/inválido (distinto de -99 = no poblado)
 static constexpr float BQ_NTC_TMIN_C =   -40.0f;  ///< Mínimo físico plausible (°C)
 static constexpr float BQ_NTC_TMAX_C =   125.0f;  ///< Máximo físico plausible (°C)
+static constexpr float BQ_NTC_PULLUP_OHM   =   9760.0f; ///< R21: pull-up del divisor NTC a TSREF (2,5 V)
+static constexpr float BQ_NTC_PARALLEL_OHM = 200000.0f; ///< R32: en paralelo con el NTC
+static constexpr float BQ_NTC_R25_OHM      =  10000.0f; ///< NTC a 25 C (NRBG103F3950B1F)
+static constexpr float BQ_NTC_BETA_K       =   3950.0f; ///< Beta del NTC (25/50)
 
 
 // ============================================================================
@@ -1104,7 +1108,7 @@ private:
     BQResult _readBoardRetry(byte board, uint16_t addr, byte* buf, size_t bufSize, byte len, uint16_t* commRetriesOut = nullptr, uint16_t* crcRetriesOut = nullptr); ///< single-read de un board con reintentos ante COMM/CRC (ruido); deja frame válido en buf. Si se pasan, acumula reintentos consumidos SEPARADOS por causa (§3.1/§3.3)
     uint16_t _crc16(byte* buf, int len);            ///< Calcula CRC-16 ITU-T (tabla de 256 entradas)
     float    _complement(uint16_t raw, float mult); ///< Convierte valor ADC raw (complemento a 2) a voltios
-    float    _voltToTemp(float voltage);            ///< Convierte voltaje de NTC a temperatura en °C (curva del PCB)
+    float    _voltToTemp(float voltage);            ///< Convierte voltaje de NTC a temperatura en °C (ecuacion Beta, NTC 10k B3950)
 
     void     _updateVoltageStats(); ///< Recalcula _vMin y _vMax tras readVoltages()
     void     _updateTempStats();    ///< Recalcula _tMin y _tMax tras readTemperatures()
