@@ -24,6 +24,7 @@
  * Los 2 bytes de CRC van al final de la trama en little-endian (L primero, H después).
  */
 
+#include <math.h>
 #include "BQ79606.h"
 #include <HardwareSerial.h>
 
@@ -1234,31 +1235,40 @@ float BQ79606::_complement(uint16_t raw, float multiplier)
 /**
  * Convierte el voltaje de salida de un NTC a temperatura en grados Celsius.
  *
- * El NTC está en un divisor de tensión alimentado por TSREF (2.5V).
- * La resistencia del NTC se calcula a partir del voltaje medido en el GPIO,
- * y luego se aplica una curva polinómica de tercer orden calibrada para
- * el NTC específico del PCB.
+ * Circuito (esquematico "TERMISTOR NTC"): TSREF (2,5 V) -- R21 9,76 k -- nodo;
+ * nodo -- R32 200 k -- GND, y el NTC (conector Molex) del nodo a GND, es decir
+ * NTC || 200 k. El nodo va al GPIO por R20 1 k + C28 1 uF (filtro RC).
+ *   Rpar  = Rp * v / (TSREF - v)
+ *   R_ntc = Rx * Rpar / (Rx - Rpar) = Rp*Rx*v / (Rx*(TSREF - v) - Rp*v)
+ * NTC 10 kOhm a 25 C, B = 3950 (NRBG103F3950B1F). Ecuacion Beta:
+ *   1/T = 1/T25 + ln(R/R25)/B      (T en K)
  *
- * Curva: T = a·R³ + b·R² + c·R + d  (R en kΩ)
- *   a = -7.388512707e-02
- *   b =  1.987401122e+00
- *   c = -1.975941021e+01
- *   d =  9.894631155e+01
+ * Antes habia un polinomio cubico en R ajustado solo en ~20-60 C (encaja con
+ * 10 k / B3950 a 0,7 C en ese rango). Por debajo de ~17 C divergia (15 C real
+ * -> -9 C, 10 C -> -97 C = "abierto"): temperaturas negativas en frio, falso
+ * fallo de UT/NTC y el cargador no arrancaba (< 0 C). La Beta vale en todo el
+ * rango (-40..125 C).
  *
- * ⚠ Si se cambia el NTC del PCB, hay que recalibrar estos coeficientes.
+ * NTC abierto: v -> TSREF*Rx/(Rp+Rx) = 2,384 V (denominador -> 0).
+ * Si se cambia el NTC o las resistencias, cambiar las constantes.
  */
 float BQ79606::_voltToTemp(float v)
 {
-    // Blindaje: con NTC abierto/lectura inválida el divisor puede acercarse a 0
-    // (v≈2.38V) y R explotar a ±1e9 → temperatura no física que falsearía la
-    // seguridad. Detectarlo y devolver el centinela de "NTC abierto".
-    float den = 200000.0f * (2.5f - v) - 9760.0f * v;
-    if (den < 1.0f && den > -1.0f) return BQ_NTC_OPEN_C;   // divisor ~0
-    float R = (1.952e9f * v) / den;
-    if (R <= 0.0f) return BQ_NTC_OPEN_C;                    // resistencia no física
-    float Rk = R / 1000.0f;
-    return -7.388512707e-02f * Rk * Rk * Rk
-           + 1.987401122e+00f * Rk * Rk
-           - 1.975941021e+01f * Rk
-           + 9.894631155e+01f;
+    constexpr float TSREF_V  = 2.5f;
+    constexpr float RP_OHM   = BQ_NTC_PULLUP_OHM;    // R21
+    constexpr float RX_OHM   = BQ_NTC_PARALLEL_OHM;  // R32, en paralelo con el NTC
+    constexpr float R25_OHM  = BQ_NTC_R25_OHM;
+    constexpr float BETA_K   = BQ_NTC_BETA_K;
+    constexpr float T25_K    = 298.15f;
+
+    // Blindaje: NTC abierto (v -> 2,384 V), en corto (v -> 0) o lectura
+    // invalida (NaN) => centinela de "NTC abierto".
+    if (!(v > 0.001f)) return BQ_NTC_OPEN_C;
+    float den = RX_OHM * (TSREF_V - v) - RP_OHM * v;
+    if (!(den > 1.0f)) return BQ_NTC_OPEN_C;
+    float R = (RP_OHM * RX_OHM * v) / den;
+    if (!(R > 0.0f)) return BQ_NTC_OPEN_C;
+    float invT = 1.0f / T25_K + logf(R / R25_OHM) / BETA_K;
+    if (!(invT > 0.0f)) return BQ_NTC_OPEN_C;
+    return 1.0f / invT - 273.15f;
 }
